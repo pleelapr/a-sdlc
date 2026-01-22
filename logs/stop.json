@@ -1,0 +1,106 @@
+[
+  {
+    "session_id": "0cba6ef2-9919-459b-8e8c-0e7318e77dfa",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/0cba6ef2-9919-459b-8e8c-0e7318e77dfa.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "18f0e115-6e11-4596-8917-66a8e7776ad9",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/18f0e115-6e11-4596-8917-66a8e7776ad9.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7910a4a5-f38e-4c26-bea1-be10bb4fe307",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7910a4a5-f38e-4c26-bea1-be10bb4fe307.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7910a4a5-f38e-4c26-bea1-be10bb4fe307",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7910a4a5-f38e-4c26-bea1-be10bb4fe307.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "plan",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7910a4a5-f38e-4c26-bea1-be10bb4fe307",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7910a4a5-f38e-4c26-bea1-be10bb4fe307.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "plan",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7910a4a5-f38e-4c26-bea1-be10bb4fe307",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7910a4a5-f38e-4c26-bea1-be10bb4fe307.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "plan",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7910a4a5-f38e-4c26-bea1-be10bb4fe307",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7910a4a5-f38e-4c26-bea1-be10bb4fe307.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "plan",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7910a4a5-f38e-4c26-bea1-be10bb4fe307",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7910a4a5-f38e-4c26-bea1-be10bb4fe307.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "plan",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "21011d43-c0cc-4ce8-9fc2-5e94f6d6a876",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/21011d43-c0cc-4ce8-9fc2-5e94f6d6a876.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "21011d43-c0cc-4ce8-9fc2-5e94f6d6a876",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/21011d43-c0cc-4ce8-9fc2-5e94f6d6a876.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "plan",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "7951fa7b-2c0c-45aa-8666-3aae9a957311",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/7951fa7b-2c0c-45aa-8666-3aae9a957311.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "d3d73f77-82ab-43fb-b31f-ea6f2640a2d4",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/d3d73f77-82ab-43fb-b31f-ea6f2640a2d4.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "e1046e23-ba96-43fb-a69d-aa1a14fb1819",
+    "transcript_path": "/Users/pleelaprachakul/.claude/projects/-Users-pleelaprachakul-Documents-Github-personal-a-sdlc/e1046e23-ba96-43fb-a69d-aa1a14fb1819.jsonl",
+    "cwd": "/Users/pleelaprachakul/Documents/Github/personal/a-sdlc",
+    "permission_mode": "bypassPermissions",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  }
+]
