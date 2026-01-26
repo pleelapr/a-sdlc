@@ -52,6 +52,12 @@ dev = [
 linear = [
     "httpx>=0.25.0",
 ]
+atlassian = [
+    "httpx>=0.25.0",
+]
+all = [
+    "a-sdlc[dev,linear,atlassian]",
+]
 
 [project.scripts]
 a-sdlc = "a_sdlc.cli:main"
@@ -59,6 +65,11 @@ a-sdlc = "a_sdlc.cli:main"
 [project.entry-points."a_sdlc.plugins"]
 local = "a_sdlc.plugins.local:LocalPlugin"
 linear = "a_sdlc.plugins.linear:LinearPlugin"
+jira = "a_sdlc.plugins.jira:JiraPlugin"
+
+[project.entry-points."a_sdlc.artifacts"]
+local = "a_sdlc.artifacts.local:LocalArtifactPlugin"
+confluence = "a_sdlc.artifacts.confluence:ConfluencePlugin"
 
 [project.urls]
 Homepage = "https://github.com/a-sdlc/a-sdlc"

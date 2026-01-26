@@ -9,6 +9,7 @@ Provides commands for:
 """
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -17,6 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from a_sdlc import __version__
+from a_sdlc.artifacts import get_artifact_plugin_manager
 from a_sdlc.installer import Installer
 from a_sdlc.mcp_setup import (
     setup_serena,
@@ -334,46 +336,117 @@ def plugins() -> None:
 def plugins_list() -> None:
     """List available plugins."""
     pm = get_plugin_manager()
-    available = pm.list_plugins()
+    apm = get_artifact_plugin_manager()
 
-    table = Table(title="Available Plugins")
-    table.add_column("Plugin", style="cyan")
-    table.add_column("Status")
-    table.add_column("Description", style="dim")
+    # Task plugins table
+    task_table = Table(title="Task Plugins")
+    task_table.add_column("Plugin", style="cyan")
+    task_table.add_column("Status")
+    task_table.add_column("Description", style="dim")
 
-    descriptions = {
+    task_descriptions = {
         "local": "File-based task storage in .sdlc/tasks/",
         "linear": "Sync tasks with Linear issue tracker",
+        "jira": "Sync tasks with Jira Cloud issue tracker",
     }
 
-    enabled = pm.get_enabled_plugin()
+    enabled_task = pm.get_enabled_plugin()
 
-    for plugin in available:
-        is_enabled = plugin == enabled
+    for plugin in pm.list_plugins():
+        is_enabled = plugin == enabled_task
         status = "[green]Enabled[/green]" if is_enabled else "[dim]Available[/dim]"
-        table.add_row(plugin, status, descriptions.get(plugin, ""))
+        task_table.add_row(plugin, status, task_descriptions.get(plugin, ""))
 
-    console.print(table)
+    console.print(task_table)
+    console.print()
+
+    # Artifact plugins table
+    artifact_table = Table(title="Artifact Plugins")
+    artifact_table.add_column("Plugin", style="cyan")
+    artifact_table.add_column("Status")
+    artifact_table.add_column("Description", style="dim")
+
+    artifact_descriptions = {
+        "local": "File-based artifact storage in .sdlc/artifacts/",
+        "confluence": "Publish artifacts to Confluence Cloud wiki pages",
+    }
+
+    enabled_artifact = apm.get_enabled_plugin()
+
+    for plugin in apm.list_plugins():
+        is_enabled = plugin == enabled_artifact
+        status = "[green]Enabled[/green]" if is_enabled else "[dim]Available[/dim]"
+        artifact_table.add_row(plugin, status, artifact_descriptions.get(plugin, ""))
+
+    console.print(artifact_table)
 
 
 @plugins.command("enable")
 @click.argument("plugin_name")
-def plugins_enable(plugin_name: str) -> None:
+@click.option(
+    "--type", "-t",
+    "plugin_type",
+    type=click.Choice(["task", "artifact"]),
+    default=None,
+    help="Plugin type (task or artifact). Auto-detected if not specified."
+)
+@click.option(
+    "--global", "-g",
+    "save_global",
+    is_flag=True,
+    help="Save to global config (~/.config/a-sdlc/) instead of project config (.sdlc/)"
+)
+def plugins_enable(plugin_name: str, plugin_type: str | None, save_global: bool) -> None:
     """Enable a specific plugin.
 
-    PLUGIN_NAME: Name of the plugin to enable (e.g., 'linear')
+    PLUGIN_NAME: Name of the plugin to enable (e.g., 'jira', 'confluence')
+
+    By default, saves to project config (.sdlc/config.yaml).
+    Use --global to save to user-wide config (~/.config/a-sdlc/config.yaml).
     """
     pm = get_plugin_manager()
+    apm = get_artifact_plugin_manager()
+    target = "global" if save_global else "project"
+
+    # Auto-detect plugin type if not specified
+    if plugin_type is None:
+        if plugin_name in pm.list_plugins():
+            plugin_type = "task"
+        elif plugin_name in apm.list_plugins():
+            plugin_type = "artifact"
+        else:
+            console.print(f"[red]Unknown plugin: {plugin_name}[/red]")
+            console.print(f"Task plugins: {', '.join(pm.list_plugins())}")
+            console.print(f"Artifact plugins: {', '.join(apm.list_plugins())}")
+            sys.exit(1)
 
     try:
-        pm.enable_plugin(plugin_name)
-        console.print(f"[green]Plugin '{plugin_name}' enabled successfully.[/green]")
+        location = "global config" if save_global else "project config"
 
-        if plugin_name == "linear":
-            console.print()
-            console.print("Next steps:")
-            console.print("  1. Run [cyan]a-sdlc plugins configure linear[/cyan]")
-            console.print("  2. Set your Linear API key and team settings")
+        if plugin_type == "task":
+            pm.enable_plugin(plugin_name, target=target)
+            console.print(f"[green]Task plugin '{plugin_name}' enabled in {location}.[/green]")
+
+            if plugin_name == "linear":
+                console.print()
+                console.print("Next steps:")
+                console.print("  1. Run [cyan]a-sdlc plugins configure linear[/cyan]")
+                console.print("  2. Set your Linear API key and team settings")
+            elif plugin_name == "jira":
+                console.print()
+                console.print("Next steps:")
+                console.print("  1. Run [cyan]a-sdlc plugins configure jira[/cyan]")
+                console.print("  2. Set your Atlassian site URL, credentials, and project key")
+        else:
+            apm.enable_plugin(plugin_name, target=target)
+            console.print(f"[green]Artifact plugin '{plugin_name}' enabled in {location}.[/green]")
+
+            if plugin_name == "confluence":
+                console.print()
+                console.print("Next steps:")
+                console.print("  1. Run [cyan]a-sdlc plugins configure confluence[/cyan]")
+                console.print("  2. Set your Atlassian site URL, credentials, and space key")
+
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
@@ -381,32 +454,60 @@ def plugins_enable(plugin_name: str) -> None:
 
 @plugins.command("configure")
 @click.argument("plugin_name")
-def plugins_configure(plugin_name: str) -> None:
+@click.option(
+    "--global", "-g",
+    "save_global",
+    is_flag=True,
+    help="Save to global config (~/.config/a-sdlc/) instead of project config (.sdlc/)"
+)
+def plugins_configure(plugin_name: str, save_global: bool) -> None:
     """Configure a plugin interactively.
 
-    PLUGIN_NAME: Name of the plugin to configure
+    PLUGIN_NAME: Name of the plugin to configure (task plugins: local, linear, jira; artifact plugins: confluence)
+
+    By default, saves to project config (.sdlc/config.yaml).
+    Use --global to save to user-wide config (~/.config/a-sdlc/config.yaml).
     """
     pm = get_plugin_manager()
+    apm = get_artifact_plugin_manager()
+    target = "global" if save_global else "project"
 
-    if plugin_name not in pm.list_plugins():
-        console.print(f"[red]Unknown plugin: {plugin_name}[/red]")
-        sys.exit(1)
+    # Check if it's a task plugin
+    if plugin_name in pm.list_plugins():
+        if plugin_name == "local":
+            console.print("[dim]Local plugin has no configuration options.[/dim]")
+            return
 
-    if plugin_name == "local":
-        console.print("[dim]Local plugin has no configuration options.[/dim]")
-        return
+        if plugin_name == "linear":
+            _configure_linear_plugin(pm, target=target)
+            return
 
-    if plugin_name == "linear":
-        _configure_linear_plugin(pm)
-        return
+        if plugin_name == "jira":
+            _configure_jira_plugin(pm, target=target)
+            return
 
-    console.print(f"[yellow]No configuration available for '{plugin_name}'.[/yellow]")
+    # Check if it's an artifact plugin
+    if plugin_name in apm.list_plugins():
+        if plugin_name == "local":
+            console.print("[dim]Local artifact plugin has no configuration options.[/dim]")
+            return
+
+        if plugin_name == "confluence":
+            _configure_confluence_plugin(apm, target=target)
+            return
+
+    console.print(f"[red]Unknown plugin: {plugin_name}[/red]")
+    console.print(f"Task plugins: {', '.join(pm.list_plugins())}")
+    console.print(f"Artifact plugins: {', '.join(apm.list_plugins())}")
+    sys.exit(1)
 
 
-def _configure_linear_plugin(pm: object) -> None:
+def _configure_linear_plugin(pm: object, target: str = "project") -> None:
     """Interactive configuration for Linear plugin."""
+    location = "global config" if target == "global" else "project config"
     console.print(Panel(
-        "[bold]Linear Plugin Configuration[/bold]\n\n"
+        f"[bold]Linear Plugin Configuration[/bold]\n\n"
+        f"Saving to: {location}\n\n"
         "You'll need:\n"
         "  - Linear API key (from Settings > API)\n"
         "  - Team ID (visible in team URL)",
@@ -425,8 +526,1292 @@ def _configure_linear_plugin(pm: object) -> None:
         "sync_on_complete": True,
     }
 
-    pm.configure_plugin("linear", config)
-    console.print("[green]Linear plugin configured successfully![/green]")
+    pm.configure_plugin("linear", config, target=target)
+    console.print(f"[green]Linear plugin configured in {location}![/green]")
+
+
+def _configure_jira_plugin(pm: object, target: str = "project") -> None:
+    """Interactive configuration for Jira plugin."""
+    location = "global config" if target == "global" else "project config"
+    console.print(Panel(
+        f"[bold]Jira Cloud Plugin Configuration[/bold]\n\n"
+        f"Saving to: {location}\n\n"
+        "You'll need:\n"
+        "  - Atlassian site URL (e.g., https://company.atlassian.net)\n"
+        "  - Atlassian account email\n"
+        "  - API token (from https://id.atlassian.com/manage-profile/security/api-tokens)\n"
+        "  - Jira project key (e.g., 'PROJ')",
+        border_style="blue"
+    ))
+
+    base_url = click.prompt("Atlassian Site URL (e.g., https://company.atlassian.net)")
+    email = click.prompt("Atlassian Email")
+    api_token = click.prompt("API Token", hide_input=True)
+    project_key = click.prompt("Jira Project Key (e.g., 'PROJ')")
+    issue_type = click.prompt("Default Issue Type", default="Task")
+
+    config = {
+        "base_url": base_url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "project_key": project_key,
+        "issue_type": issue_type,
+        "sync_on_create": True,
+        "sync_on_complete": True,
+    }
+
+    pm.configure_plugin("jira", config, target=target)
+    console.print(f"[green]Jira plugin configured in {location}![/green]")
+
+
+def _configure_confluence_plugin(apm: object, target: str = "project") -> None:
+    """Interactive configuration for Confluence plugin."""
+    location = "global config" if target == "global" else "project config"
+    console.print(Panel(
+        f"[bold]Confluence Cloud Plugin Configuration[/bold]\n\n"
+        f"Saving to: {location}\n\n"
+        "You'll need:\n"
+        "  - Atlassian site URL (e.g., https://company.atlassian.net)\n"
+        "  - Atlassian account email\n"
+        "  - API token (from https://id.atlassian.com/manage-profile/security/api-tokens)\n"
+        "  - Confluence space key (e.g., 'PROJ')\n"
+        "  - Optional: Parent page ID for SDLC documentation",
+        border_style="blue"
+    ))
+
+    base_url = click.prompt("Atlassian Site URL (e.g., https://company.atlassian.net)")
+    email = click.prompt("Atlassian Email")
+    api_token = click.prompt("API Token", hide_input=True)
+    space_key = click.prompt("Confluence Space Key (e.g., 'PROJ')")
+    parent_page_id = click.prompt("Parent Page ID (optional, press Enter to skip)", default="")
+    page_title_prefix = click.prompt("Page Title Prefix", default="[SDLC]")
+
+    config = {
+        "base_url": base_url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "space_key": space_key,
+        "parent_page_id": parent_page_id or None,
+        "page_title_prefix": page_title_prefix,
+    }
+
+    apm.configure_plugin("confluence", config, target=target)
+    console.print(f"[green]Confluence plugin configured in {location}![/green]")
+
+
+# =============================================================================
+# Artifacts Commands (sync with Confluence)
+# =============================================================================
+
+
+@main.group()
+def artifacts() -> None:
+    """Manage and sync documentation artifacts.
+
+    Artifacts are generated by /sdlc:scan and stored in .sdlc/artifacts/.
+    Use these commands to sync with Confluence:
+
+    \b
+      a-sdlc artifacts status   Show sync status
+      a-sdlc artifacts push     Push local → Confluence
+      a-sdlc artifacts pull     Pull Confluence → local
+    """
+    pass
+
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Convert datetime to naive UTC for safe comparison."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+@artifacts.command("status")
+def artifacts_status() -> None:
+    """Show sync status of artifacts.
+
+    Compares local artifacts with Confluence to show what needs syncing.
+    """
+    from a_sdlc.artifacts.local import LocalArtifactPlugin
+    from a_sdlc.artifacts.base import Artifact
+
+    artifacts_dir = Path.cwd() / ".sdlc" / "artifacts"
+
+    if not artifacts_dir.exists():
+        console.print("[yellow]No artifacts found. Run /sdlc:scan first.[/yellow]")
+        return
+
+    local = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+    local_artifacts = local.list_artifacts()
+
+    if not local_artifacts:
+        console.print("[yellow]No artifacts found in .sdlc/artifacts/[/yellow]")
+        return
+
+    # Try to get Confluence data for comparison
+    remote_artifacts_map: dict[str, Artifact] = {}
+    confluence_available = False
+
+    try:
+        apm = get_artifact_plugin_manager()
+        confluence = apm.get_plugin("confluence")
+        remote_list = confluence.list_artifacts()
+        remote_artifacts_map = {a.id: a for a in remote_list}
+        confluence_available = True
+    except Exception:
+        # Confluence not configured or unavailable - show local-only status
+        pass
+
+    # Build comparison table
+    table = Table(title="Artifact Sync Status")
+    table.add_column("Artifact", style="cyan")
+    table.add_column("Local", style="dim")
+    if confluence_available:
+        table.add_column("Remote", style="dim")
+    table.add_column("Status")
+    if confluence_available:
+        table.add_column("URL", style="dim", max_width=40)
+
+    for artifact in local_artifacts:
+        local_time = artifact.updated_at.strftime("%Y-%m-%d %H:%M")
+        remote = remote_artifacts_map.get(artifact.id)
+
+        if not confluence_available:
+            # Fallback: show local-only status
+            if artifact.external_id:
+                status = "[green]✓ Published[/green]"
+            else:
+                status = "[yellow]○ Not published[/yellow]"
+            table.add_row(artifact.id, local_time, status)
+        elif remote:
+            remote_time = remote.updated_at.strftime("%Y-%m-%d %H:%M")
+            # Compare timestamps (with 60-second tolerance)
+            time_diff = (_to_naive_utc(artifact.updated_at) - _to_naive_utc(remote.updated_at)).total_seconds()
+
+            if abs(time_diff) < 60:
+                status = "[green]✓ In sync[/green]"
+            elif time_diff > 0:
+                status = "[yellow]⬆ Local newer[/yellow]"
+            else:
+                status = "[cyan]⬇ Remote newer[/cyan]"
+
+            url = remote.external_url or "-"
+            # Truncate URL for display
+            if len(url) > 40:
+                url = url[:37] + "..."
+            table.add_row(artifact.id, local_time, remote_time, status, url)
+        else:
+            # Local has external_id but not found in remote
+            if artifact.external_id:
+                status = "[red]✗ Missing remote[/red]"
+            else:
+                status = "[yellow]○ Not published[/yellow]"
+            table.add_row(artifact.id, local_time, "-", status, "-")
+
+    console.print(table)
+
+    # Check for remote-only artifacts
+    if confluence_available:
+        local_ids = {a.id for a in local_artifacts}
+        remote_only = [a for a in remote_artifacts_map.values() if a.id not in local_ids]
+
+        if remote_only:
+            console.print()
+            console.print("[cyan]Remote-only artifacts (not in local):[/cyan]")
+            for artifact in remote_only:
+                console.print(f"  • {artifact.id}")
+
+    # Summary
+    console.print()
+    if confluence_available:
+        in_sync = sum(
+            1
+            for a in local_artifacts
+            if a.id in remote_artifacts_map
+            and abs((_to_naive_utc(a.updated_at) - _to_naive_utc(remote_artifacts_map[a.id].updated_at)).total_seconds()) < 60
+        )
+        local_newer = sum(
+            1
+            for a in local_artifacts
+            if a.id in remote_artifacts_map
+            and (_to_naive_utc(a.updated_at) - _to_naive_utc(remote_artifacts_map[a.id].updated_at)).total_seconds() >= 60
+        )
+        not_published = sum(
+            1 for a in local_artifacts if a.id not in remote_artifacts_map and not a.external_id
+        )
+
+        console.print(f"In sync: {in_sync} | Local newer: {local_newer} | Not published: {not_published}")
+
+        if local_newer > 0:
+            console.print()
+            console.print("Run [cyan]a-sdlc artifacts push[/cyan] to sync local changes to Confluence.")
+    else:
+        published = sum(1 for a in local_artifacts if a.external_id)
+        console.print(f"Published: {published}/{len(local_artifacts)} artifacts")
+        console.print("[dim](Confluence not configured - showing local status only)[/dim]")
+
+
+@artifacts.command("push")
+@click.argument("artifact_name", required=False)
+@click.option("--force", "-f", is_flag=True, help="Force republish all artifacts")
+@click.option("--dry-run", is_flag=True, help="Show what would be published without actually publishing")
+def artifacts_push(artifact_name: str | None, force: bool, dry_run: bool) -> None:
+    """Push local artifacts to Confluence.
+
+    Similar to 'git push' - uploads local artifacts to Confluence.
+
+    \b
+    Examples:
+      a-sdlc artifacts push              Push unpublished artifacts
+      a-sdlc artifacts push architecture Push specific artifact
+      a-sdlc artifacts push --force      Republish all artifacts
+      a-sdlc artifacts push --dry-run    Preview what would be published
+    """
+    from a_sdlc.artifacts.local import LocalArtifactPlugin
+
+    artifacts_dir = Path.cwd() / ".sdlc" / "artifacts"
+
+    if not artifacts_dir.exists():
+        console.print("[red]No artifacts found. Run /sdlc:scan first.[/red]")
+        sys.exit(1)
+
+    # Get local artifacts
+    local = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+    local_artifacts = local.list_artifacts()
+
+    if not local_artifacts:
+        console.print("[yellow]No artifacts found in .sdlc/artifacts/[/yellow]")
+        return
+
+    # Filter by name if specified
+    if artifact_name:
+        local_artifacts = [a for a in local_artifacts if a.id == artifact_name or a.id == artifact_name.replace(".md", "")]
+        if not local_artifacts:
+            console.print(f"[red]Artifact not found: {artifact_name}[/red]")
+            sys.exit(1)
+
+    # Filter to unpublished unless --force
+    if not force:
+        to_publish = [a for a in local_artifacts if not a.external_id]
+        if not to_publish and not artifact_name:
+            console.print("[green]All artifacts already published.[/green]")
+            console.print("Use [cyan]--force[/cyan] to republish.")
+            return
+        if artifact_name:
+            to_publish = local_artifacts  # Republish specific artifact
+    else:
+        to_publish = local_artifacts
+
+    if dry_run:
+        console.print("[bold]Dry run - would publish:[/bold]")
+        for artifact in to_publish:
+            action = "Update" if artifact.external_id else "Create"
+            console.print(f"  {action}: {artifact.id} ({artifact.title})")
+        return
+
+    # Get Confluence plugin
+    apm = get_artifact_plugin_manager()
+    try:
+        confluence = apm.get_plugin("confluence")
+    except Exception as e:
+        console.print(f"[red]Failed to initialize Confluence plugin: {e}[/red]")
+        console.print("Run [cyan]a-sdlc plugins configure confluence[/cyan] first.")
+        sys.exit(1)
+
+    # Publish artifacts
+    console.print(f"[bold]Publishing {len(to_publish)} artifact(s) to Confluence...[/bold]")
+    console.print()
+
+    success = 0
+    failed = 0
+
+    for artifact in to_publish:
+        try:
+            action = "Updating" if artifact.external_id else "Creating"
+            console.print(f"  {action} {artifact.id}...", end=" ")
+
+            confluence.store_artifact(artifact)
+
+            # Update local metadata with external link
+            local.update_external_link(
+                artifact.id,
+                artifact.external_id or "",
+                artifact.external_url or "",
+            )
+
+            console.print("[green]✓[/green]")
+            if artifact.external_url:
+                console.print(f"    [dim]{artifact.external_url}[/dim]")
+            success += 1
+
+        except Exception as e:
+            console.print(f"[red]✗ {e}[/red]")
+            failed += 1
+
+    console.print()
+    console.print(f"[bold]Done:[/bold] {success} published, {failed} failed")
+
+
+@artifacts.command("pull")
+@click.argument("artifact_name", required=False)
+@click.option("--force", "-f", is_flag=True, help="Overwrite local artifacts")
+@click.option("--dry-run", is_flag=True, help="Show what would be pulled without actually pulling")
+def artifacts_pull(artifact_name: str | None, force: bool, dry_run: bool) -> None:
+    """Pull artifacts from Confluence to local.
+
+    Similar to 'git pull' - downloads artifacts from Confluence.
+
+    Note: This overwrites local .sdlc/artifacts/ files with Confluence content.
+    The content format may differ slightly due to markdown/ADF conversion.
+
+    \b
+    Examples:
+      a-sdlc artifacts pull              Pull all artifacts
+      a-sdlc artifacts pull architecture Pull specific artifact
+      a-sdlc artifacts pull --dry-run    Preview what would be pulled
+    """
+    from a_sdlc.artifacts.local import LocalArtifactPlugin
+
+    artifacts_dir = Path.cwd() / ".sdlc" / "artifacts"
+
+    # Get Confluence plugin
+    apm = get_artifact_plugin_manager()
+    try:
+        confluence = apm.get_plugin("confluence")
+    except Exception as e:
+        console.print(f"[red]Failed to initialize Confluence plugin: {e}[/red]")
+        console.print("Run [cyan]a-sdlc plugins configure confluence[/cyan] first.")
+        sys.exit(1)
+
+    # Get artifacts from Confluence
+    console.print("Fetching artifacts from Confluence...")
+    try:
+        remote_artifacts = confluence.list_artifacts()
+    except Exception as e:
+        console.print(f"[red]Failed to fetch from Confluence: {e}[/red]")
+        sys.exit(1)
+
+    if not remote_artifacts:
+        console.print("[yellow]No SDLC artifacts found in Confluence.[/yellow]")
+        return
+
+    # Filter by name if specified
+    if artifact_name:
+        remote_artifacts = [a for a in remote_artifacts if a.id == artifact_name or a.id == artifact_name.replace(".md", "")]
+        if not remote_artifacts:
+            console.print(f"[red]Artifact not found in Confluence: {artifact_name}[/red]")
+            sys.exit(1)
+
+    if dry_run:
+        console.print("[bold]Dry run - would pull:[/bold]")
+        for artifact in remote_artifacts:
+            console.print(f"  {artifact.id} ({artifact.title})")
+            if artifact.external_url:
+                console.print(f"    [dim]{artifact.external_url}[/dim]")
+        return
+
+    # Check for local artifacts that would be overwritten
+    local = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+    local_artifacts = {a.id: a for a in local.list_artifacts()}
+
+    if not force:
+        conflicts = [a for a in remote_artifacts if a.id in local_artifacts]
+        if conflicts:
+            console.print("[yellow]Warning: The following local artifacts will be overwritten:[/yellow]")
+            for artifact in conflicts:
+                console.print(f"  - {artifact.id}")
+            console.print()
+            if not click.confirm("Continue?"):
+                console.print("Aborted.")
+                return
+
+    # Pull artifacts
+    console.print(f"[bold]Pulling {len(remote_artifacts)} artifact(s) from Confluence...[/bold]")
+    console.print()
+
+    success = 0
+    failed = 0
+
+    for artifact in remote_artifacts:
+        try:
+            console.print(f"  Pulling {artifact.id}...", end=" ")
+
+            # Store locally
+            local.store_artifact(artifact)
+
+            console.print("[green]✓[/green]")
+            success += 1
+
+        except Exception as e:
+            console.print(f"[red]✗ {e}[/red]")
+            failed += 1
+
+    console.print()
+    console.print(f"[bold]Done:[/bold] {success} pulled, {failed} failed")
+
+
+# =============================================================================
+# PRD Commands (Product Requirements Documents)
+# =============================================================================
+
+
+@main.group()
+def prd() -> None:
+    """Manage Product Requirements Documents (PRDs).
+
+    PRDs are stored locally in .sdlc/prds/ and can be synced with Confluence.
+    Each project can have multiple PRDs for different features.
+
+    \b
+      a-sdlc prd list           List available PRDs (local and Confluence)
+      a-sdlc prd show <id>      Display PRD content
+      a-sdlc prd pull <title>   Pull specific PRD from Confluence
+      a-sdlc prd push <file>    Push local PRD to Confluence
+    """
+    pass
+
+
+@prd.command("list")
+@click.option("--local", "-l", "local_only", is_flag=True, help="Show only local PRDs")
+@click.option("--remote", "-r", "remote_only", is_flag=True, help="Show only Confluence PRDs")
+def prd_list(local_only: bool, remote_only: bool) -> None:
+    """List PRDs (local and Confluence).
+
+    Shows all PRDs available locally and in Confluence,
+    with sync status indicators.
+    """
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+
+    # Get local PRDs
+    local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+    local_prds = local.list_prds() if not remote_only else []
+
+    # Get Confluence PRDs
+    remote_prds: list[dict] = []
+    confluence_available = False
+
+    if not local_only:
+        apm = get_artifact_plugin_manager()
+        try:
+            confluence = apm.get_plugin("confluence")
+            remote_prds = confluence.list_prds()
+            confluence_available = True
+        except Exception:
+            if remote_only:
+                console.print("[red]Confluence not configured.[/red]")
+                console.print("Run [cyan]a-sdlc plugins configure confluence[/cyan] first.")
+                sys.exit(1)
+
+    # Build combined view
+    table = Table(title="Product Requirements Documents")
+    table.add_column("ID", style="cyan")
+    table.add_column("Title")
+    table.add_column("Local", justify="center")
+    table.add_column("Confluence", justify="center")
+
+    # Track seen PRDs
+    seen_ids: set[str] = set()
+
+    # Add local PRDs
+    for prd_obj in local_prds:
+        seen_ids.add(prd_obj.id)
+
+        local_status = "[green]✓[/green]"
+        remote_status = "[green]✓[/green]" if prd_obj.external_id else "[dim]-[/dim]"
+
+        table.add_row(prd_obj.id, prd_obj.title, local_status, remote_status)
+
+    # Add remote PRDs not in local
+    from a_sdlc.artifacts.prd import _slugify
+
+    for remote_prd in remote_prds:
+        prd_id = _slugify(remote_prd["title"])
+        if prd_id not in seen_ids:
+            table.add_row(
+                prd_id,
+                remote_prd["title"],
+                "[dim]-[/dim]",
+                "[green]✓[/green]",
+            )
+
+    console.print(table)
+
+    # Summary
+    console.print()
+    console.print(f"Local: {len(local_prds)} PRD(s)")
+
+    if confluence_available:
+        console.print(f"Confluence: {len(remote_prds)} PRD(s)")
+    else:
+        console.print("[dim]Confluence: Not configured[/dim]")
+
+
+@prd.command("show")
+@click.argument("prd_id")
+def prd_show(prd_id: str) -> None:
+    """Display PRD content.
+
+    PRD_ID: The ID (slug) of the PRD to display.
+
+    \b
+    Examples:
+      a-sdlc prd show feature-auth
+      a-sdlc prd show payment-system
+    """
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+    local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+
+    prd_obj = local.get_prd(prd_id)
+
+    if not prd_obj:
+        console.print(f"[red]PRD not found: {prd_id}[/red]")
+        console.print()
+        console.print("Available PRDs:")
+        for p in local.list_prds():
+            console.print(f"  - {p.id}")
+        sys.exit(1)
+
+    # Display PRD info
+    console.print(Panel(
+        f"[bold]{prd_obj.title}[/bold]\n\n"
+        f"ID: {prd_obj.id}\n"
+        f"Version: {prd_obj.version}\n"
+        f"Updated: {prd_obj.updated_at.strftime('%Y-%m-%d %H:%M')}\n"
+        f"Confluence: {prd_obj.external_url or 'Not synced'}",
+        title="PRD Info",
+        border_style="blue",
+    ))
+
+    console.print()
+    console.print(prd_obj.content)
+
+
+@prd.command("pull")
+@click.argument("title")
+@click.option("--force", "-f", is_flag=True, help="Overwrite local PRD if exists")
+def prd_pull(title: str, force: bool) -> None:
+    """Pull specific PRD from Confluence.
+
+    TITLE: The title of the PRD in Confluence.
+
+    Downloads a PRD from Confluence and saves it locally in .sdlc/prds/.
+    The PRD content is converted from Confluence storage format to Markdown.
+
+    \b
+    Examples:
+      a-sdlc prd pull "Feature Auth"
+      a-sdlc prd pull "Payment System" --force
+    """
+    from a_sdlc.artifacts.prd import _slugify
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+
+    # Get Confluence plugin
+    apm = get_artifact_plugin_manager()
+    try:
+        confluence = apm.get_plugin("confluence")
+    except Exception as e:
+        console.print(f"[red]Failed to initialize Confluence plugin: {e}[/red]")
+        console.print("Run [cyan]a-sdlc plugins configure confluence[/cyan] first.")
+        sys.exit(1)
+
+    # Check if local PRD exists
+    local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+    prd_id = _slugify(title)
+
+    if local.exists(prd_id) and not force:
+        console.print(f"[yellow]Local PRD already exists: {prd_id}[/yellow]")
+        console.print("Use [cyan]--force[/cyan] to overwrite.")
+        sys.exit(1)
+
+    # Pull from Confluence
+    console.print(f"Pulling PRD: {title}...")
+
+    try:
+        prd_obj = confluence.pull_prd(title)
+    except KeyError:
+        console.print(f"[red]PRD not found in Confluence: {title}[/red]")
+        console.print()
+        console.print("Available PRDs in Confluence:")
+        for remote_prd in confluence.list_prds():
+            console.print(f"  - {remote_prd['title']}")
+        sys.exit(1)
+    except RuntimeError as e:
+        console.print(f"[red]Failed to pull PRD: {e}[/red]")
+        sys.exit(1)
+
+    # Save locally
+    local.store_prd(prd_obj)
+
+    console.print(f"[green]PRD saved to: .sdlc/prds/{prd_obj.id}.md[/green]")
+
+    if prd_obj.external_url:
+        console.print(f"[dim]Source: {prd_obj.external_url}[/dim]")
+
+
+@prd.command("push")
+@click.argument("prd_id_or_file")
+@click.option("--force", "-f", is_flag=True, help="Update existing Confluence page")
+def prd_push(prd_id_or_file: str, force: bool) -> None:
+    """Push local PRD to Confluence.
+
+    PRD_ID_OR_FILE: Either a PRD ID (slug) or a file path.
+
+    Uploads a local PRD to Confluence under the PRDs folder.
+    Creates a new page or updates an existing one.
+
+    \b
+    Examples:
+      a-sdlc prd push feature-auth
+      a-sdlc prd push .sdlc/prds/payment-system.md
+      a-sdlc prd push feature-auth --force
+    """
+    from a_sdlc.artifacts.prd import PRD
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+
+    # Determine if it's a file path or PRD ID
+    if Path(prd_id_or_file).exists():
+        # It's a file path
+        filepath = Path(prd_id_or_file)
+        content = filepath.read_text()
+        prd_obj = PRD.from_file(str(filepath), content)
+
+        # Store in local storage first
+        local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+        local.store_prd(prd_obj)
+    else:
+        # It's a PRD ID
+        local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+        prd_obj = local.get_prd(prd_id_or_file)
+
+        if not prd_obj:
+            console.print(f"[red]PRD not found: {prd_id_or_file}[/red]")
+            console.print()
+            console.print("Available PRDs:")
+            for p in local.list_prds():
+                console.print(f"  - {p.id}")
+            sys.exit(1)
+
+    # Get Confluence plugin
+    apm = get_artifact_plugin_manager()
+    try:
+        confluence = apm.get_plugin("confluence")
+    except Exception as e:
+        console.print(f"[red]Failed to initialize Confluence plugin: {e}[/red]")
+        console.print("Run [cyan]a-sdlc plugins configure confluence[/cyan] first.")
+        sys.exit(1)
+
+    # Check if page exists in Confluence
+    existing = confluence.get_prd_page(prd_obj.title)
+    if existing and not force:
+        console.print(f"[yellow]PRD already exists in Confluence: {prd_obj.title}[/yellow]")
+        console.print("Use [cyan]--force[/cyan] to update.")
+        sys.exit(1)
+
+    # Push to Confluence
+    action = "Updating" if existing else "Creating"
+    console.print(f"{action} PRD in Confluence: {prd_obj.title}...")
+
+    try:
+        page_id = confluence.push_prd(prd_obj)
+    except RuntimeError as e:
+        console.print(f"[red]Failed to push PRD: {e}[/red]")
+        sys.exit(1)
+
+    # Update local metadata with external link
+    local.update_external_link(
+        prd_obj.id,
+        prd_obj.external_id or page_id,
+        prd_obj.external_url or "",
+    )
+
+    console.print("[green]PRD pushed successfully![/green]")
+
+    if prd_obj.external_url:
+        console.print(f"URL: {prd_obj.external_url}")
+
+
+@prd.command("delete")
+@click.argument("prd_id")
+@click.option("--local", "-l", "local_only", is_flag=True, help="Delete only local PRD")
+@click.option("--remote", "-r", "remote_only", is_flag=True, help="Delete only from Confluence")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+def prd_delete(prd_id: str, local_only: bool, remote_only: bool, yes: bool) -> None:
+    """Delete a PRD.
+
+    PRD_ID: The ID (slug) of the PRD to delete.
+
+    By default, deletes from both local and Confluence.
+    Use --local or --remote to delete from only one location.
+
+    \b
+    Examples:
+      a-sdlc prd delete feature-auth
+      a-sdlc prd delete feature-auth --local
+      a-sdlc prd delete feature-auth --remote
+    """
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+    local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+
+    # Confirm deletion
+    if not yes:
+        locations = []
+        if not remote_only:
+            locations.append("local")
+        if not local_only:
+            locations.append("Confluence")
+        location_str = " and ".join(locations)
+
+        if not click.confirm(f"Delete PRD '{prd_id}' from {location_str}?"):
+            console.print("Aborted.")
+            return
+
+    # Delete from local
+    if not remote_only:
+        try:
+            local.delete_prd(prd_id)
+            console.print(f"[green]Deleted local PRD: {prd_id}[/green]")
+        except KeyError:
+            if local_only:
+                console.print(f"[red]Local PRD not found: {prd_id}[/red]")
+                sys.exit(1)
+            else:
+                console.print(f"[dim]Local PRD not found: {prd_id}[/dim]")
+
+    # Delete from Confluence
+    if not local_only:
+        apm = get_artifact_plugin_manager()
+        try:
+            confluence = apm.get_plugin("confluence")
+
+            # Find PRD in Confluence
+            prd_obj = local.get_prd(prd_id)
+            title = prd_obj.title if prd_obj else prd_id.replace("-", " ").title()
+
+            confluence.delete_prd(title)
+            console.print(f"[green]Deleted from Confluence: {title}[/green]")
+
+        except KeyError:
+            if remote_only:
+                console.print(f"[red]PRD not found in Confluence: {prd_id}[/red]")
+                sys.exit(1)
+            else:
+                console.print(f"[dim]PRD not found in Confluence: {prd_id}[/dim]")
+        except Exception as e:
+            console.print(f"[red]Failed to delete from Confluence: {e}[/red]")
+            if remote_only:
+                sys.exit(1)
+
+
+@prd.command("update")
+@click.argument("prd_id")
+@click.option("--section", "-s", help="Update specific section only")
+@click.option(
+    "--version",
+    "-v",
+    type=click.Choice(["patch", "minor", "major"]),
+    help="Version bump type (auto-detect if not specified)",
+)
+@click.option("--fix", is_flag=True, help="Quick fix mode for typos and formatting")
+@click.option("--push", is_flag=True, help="Push to Confluence after update")
+def prd_update(
+    prd_id: str, section: str | None, version: str | None, fix: bool, push: bool
+) -> None:
+    """Update an existing PRD interactively.
+
+    PRD_ID: The ID (slug) of the PRD to update.
+
+    Opens an interactive session to update PRD sections with AI-assisted suggestions.
+
+    \b
+    Examples:
+      a-sdlc prd update feature-auth
+      a-sdlc prd update feature-auth -s Goals
+      a-sdlc prd update feature-auth --fix
+      a-sdlc prd update feature-auth --push
+    """
+    from a_sdlc.artifacts.prd import bump_version, detect_change_type
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+    local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+
+    # Load PRD
+    prd_obj = local.get_prd(prd_id)
+    if not prd_obj:
+        console.print(f"[red]PRD not found: {prd_id}[/red]")
+        available = local.list_prds()
+        if available:
+            console.print("\n[dim]Available PRDs:[/dim]")
+            for p in available:
+                console.print(f"  - {p.id}")
+        console.print("\nRun: [cyan]a-sdlc prd list[/cyan]")
+        sys.exit(1)
+
+    console.print(f"[bold]Updating PRD:[/bold] {prd_obj.title}")
+    console.print(f"[dim]Current version: {prd_obj.version}[/dim]\n")
+
+    # Store original content for change detection
+    original_content = prd_obj.content
+
+    # Get sections
+    sections = prd_obj.get_sections()
+    if not sections:
+        console.print("[yellow]No sections found in PRD[/yellow]")
+        sys.exit(1)
+
+    # Filter to specific section if requested
+    if section:
+        if section not in sections:
+            console.print(f"[red]Section not found: {section}[/red]")
+            console.print("\n[dim]Available sections:[/dim]")
+            for s in sections.keys():
+                console.print(f"  - {s}")
+            sys.exit(1)
+        sections_to_update = {section: sections[section]}
+    else:
+        sections_to_update = sections
+
+    # Quick fix mode
+    if fix:
+        console.print("[cyan]Quick fix mode: Auto-detecting issues...[/cyan]\n")
+        # For MVP, just prompt once for changes
+        console.print("Enter your fixes (or press Enter to skip):")
+        user_input = click.prompt("Changes", default="", show_default=False)
+
+        if user_input.strip():
+            # Simple approach: append changes as note
+            prd_obj.content += f"\n\n---\n**Update Notes**: {user_input}\n"
+            change_type = "patch"
+        else:
+            console.print("No changes made.")
+            sys.exit(0)
+    else:
+        # Section-by-section review
+        sections_modified = []
+
+        for section_name, content in sections_to_update.items():
+            console.print(f"[bold cyan]━━━ Section: {section_name} ━━━[/bold cyan]")
+            console.print(f"\n[dim]Current content:[/dim]")
+            # Show first 200 chars
+            preview = content[:200] + ("..." if len(content) > 200 else "")
+            console.print(preview)
+            console.print()
+
+            action = click.prompt(
+                "Action",
+                type=click.Choice(["keep", "edit", "skip"]),
+                default="keep",
+                show_default=True,
+            )
+
+            if action == "edit":
+                console.print(
+                    "\n[dim]Enter new content (press Ctrl+D or Ctrl+Z when done):[/dim]"
+                )
+                try:
+                    new_content = click.edit(content)
+                    if new_content and new_content.strip() != content.strip():
+                        prd_obj.update_section_content(section_name, new_content.strip())
+                        sections_modified.append(section_name)
+                        console.print(f"[green]✓ Updated {section_name}[/green]\n")
+                    else:
+                        console.print("[dim]No changes made to section[/dim]\n")
+                except Exception as e:
+                    console.print(f"[red]Failed to edit section: {e}[/red]\n")
+            elif action == "skip":
+                console.print("[dim]Skipped[/dim]\n")
+            else:  # keep
+                console.print("[dim]Kept unchanged[/dim]\n")
+
+        if not sections_modified:
+            console.print("[yellow]No sections were modified[/yellow]")
+            sys.exit(0)
+
+        # Detect change type
+        change_type = detect_change_type(original_content, prd_obj.content)
+
+    # Version bump
+    old_version = prd_obj.version
+
+    if version:
+        # User specified version bump
+        bump_type = version
+    else:
+        # Auto-suggest based on change type
+        if change_type == "structural":
+            suggested = "major"
+        elif change_type == "content":
+            suggested = "minor"
+        else:
+            suggested = "patch"
+
+        console.print(f"\n[bold]🔢 Version Bump[/bold]")
+        console.print(f"Current: {old_version}")
+        console.print(f"Suggested: {suggested.upper()} → {bump_version(old_version, suggested)}")
+
+        bump_type = click.prompt(
+            "Confirm bump type",
+            type=click.Choice(["patch", "minor", "major"]),
+            default=suggested,
+            show_default=True,
+        )
+
+    # Apply version bump
+    prd_obj.bump_version_auto(bump_type)
+
+    # Save PRD
+    local.store_prd(prd_obj)
+
+    # Track update history
+    if fix:
+        sections_modified = ["Quick fix"]
+        summary = "Quick fixes and formatting"
+    else:
+        summary = click.prompt(
+            "\nBrief summary of changes",
+            default=f"Updated {len(sections_modified)} section(s)",
+            show_default=True,
+        )
+
+    local.add_update_history(
+        prd_id=prd_id,
+        version=prd_obj.version,
+        change_type=bump_type,
+        sections_modified=sections_modified,
+        summary=summary,
+    )
+
+    # Display summary
+    console.print(f"\n[green]✅ PRD updated: .sdlc/prds/{prd_id}.md[/green]")
+    console.print(f"\n[bold]📊 Changes:[/bold]")
+    console.print(f"  - Version: {old_version} → {prd_obj.version}")
+    if not fix:
+        console.print(f"  - Sections modified: {len(sections_modified)}")
+    console.print(f"  - Change type: {bump_type.title()}")
+
+    console.print(f"\n[bold]🔗 Next steps:[/bold]")
+    console.print(f"  - View: [cyan]a-sdlc prd show {prd_id}[/cyan]")
+
+    # Optional Confluence push
+    if push:
+        try:
+            apm = get_artifact_plugin_manager()
+            confluence = apm.get_plugin("confluence")
+
+            console.print(f"\n[cyan]Pushing to Confluence...[/cyan]")
+            page_id = confluence.push_prd(prd_obj)
+
+            local.update_external_link(
+                prd_obj.id,
+                prd_obj.external_id or page_id,
+                prd_obj.external_url or "",
+            )
+
+            console.print("[green]✓ Pushed to Confluence[/green]")
+            if prd_obj.external_url:
+                console.print(f"  URL: {prd_obj.external_url}")
+        except Exception as e:
+            console.print(f"\n[yellow]Confluence push failed: {e}[/yellow]")
+            console.print("PRD updated locally. Push manually with:")
+            console.print(f"  [cyan]a-sdlc prd push {prd_id}[/cyan]")
+    else:
+        console.print(f"  - Push: [cyan]a-sdlc prd push {prd_id}[/cyan]")
+
+
+@prd.command("split")
+@click.argument("prd_id")
+@click.option(
+    "--granularity",
+    "-g",
+    type=click.Choice(["coarse", "medium", "fine"]),
+    default="medium",
+    help="Task detail level",
+)
+@click.option("--sync", is_flag=True, help="Auto-sync to configured task system")
+@click.option(
+    "--format",
+    "-f",
+    type=click.Choice(["interactive", "json", "markdown"]),
+    default="interactive",
+    help="Output format",
+)
+def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
+    """Split PRD into actionable tasks with dependencies.
+
+    PRD_ID: The ID (slug) of the PRD to split.
+
+    Analyzes PRD requirements and generates user stories with granular tasks.
+    Cross-references with project artifacts (architecture, data model, workflows).
+
+    \b
+    Examples:
+      a-sdlc prd split feature-auth
+      a-sdlc prd split feature-auth --granularity fine
+      a-sdlc prd split feature-auth --sync
+      a-sdlc prd split feature-auth --format json > tasks.json
+    """
+    from a_sdlc.artifacts.prd_local import LocalPRDPlugin
+    from a_sdlc.artifacts.task_generator import parse_requirements_from_prd
+    from a_sdlc.plugins.local import LocalPlugin
+
+    # Load PRD
+    prds_dir = Path.cwd() / ".sdlc" / "prds"
+    prd_plugin = LocalPRDPlugin({"prds_dir": str(prds_dir)})
+
+    prd_obj = prd_plugin.get_prd(prd_id)
+    if not prd_obj:
+        console.print(f"[red]PRD not found: {prd_id}[/red]")
+        available = prd_plugin.list_prds()
+        if available:
+            console.print("\n[dim]Available PRDs:[/dim]")
+            for p in available:
+                console.print(f"  - {p.id}")
+        sys.exit(1)
+
+    console.print(f"[bold]Splitting PRD:[/bold] {prd_obj.title}")
+    console.print(f"[dim]Version: {prd_obj.version}[/dim]\n")
+
+    # Load artifacts for context
+    artifacts_dir = Path.cwd() / ".sdlc" / "artifacts"
+    context = {}
+
+    console.print("[cyan]📂 Loading project artifacts...[/cyan]")
+    for artifact_name in [
+        "architecture",
+        "data-model",
+        "key-workflows",
+        "codebase-summary",
+    ]:
+        artifact_path = artifacts_dir / f"{artifact_name}.md"
+        if artifact_path.exists():
+            context[artifact_name] = artifact_path.read_text()
+            console.print(f"   [green]✓[/green] {artifact_name}")
+        else:
+            console.print(
+                f"   [yellow]⚠[/yellow] {artifact_name} not found (run /sdlc:scan)"
+            )
+
+    console.print()
+
+    # Parse PRD sections
+    sections = prd_obj.get_sections()
+
+    # Extract requirements
+    requirements = parse_requirements_from_prd(sections)
+    console.print(f"[cyan]📋 Found {len(requirements)} requirements[/cyan]")
+
+    if not requirements:
+        console.print(
+            "[yellow]No requirements found in PRD. Add Functional Requirements or Non-Functional Requirements section.[/yellow]"
+        )
+        sys.exit(1)
+
+    # Ask clarifying questions (if interactive)
+    answers = {"granularity": granularity}
+    if format == "interactive":
+        answers = _ask_clarification_questions(prd_obj, requirements, granularity)
+
+    # Generate tasks
+    console.print("\n[cyan]🤖 Generating tasks...[/cyan]")
+    tasks = _generate_tasks_from_prd(prd_obj, context, requirements, answers)
+
+    console.print(f"[green]✓[/green] Generated {len(tasks)} tasks\n")
+
+    # Display tasks
+    if format == "json":
+        import json
+
+        print(json.dumps([task.to_dict() for task in tasks], indent=2))
+        return
+    elif format == "markdown":
+        for task in tasks:
+            print(f"## {task.id}: {task.title}\n")
+            print(f"**Component**: {task.component}")
+            print(f"**Priority**: {task.priority.value}")
+            deps = ", ".join(task.dependencies) if task.dependencies else "None"
+            print(f"**Dependencies**: {deps}")
+            print(f"\n{task.description}\n")
+        return
+
+    # Interactive review
+    _display_task_summary(tasks)
+
+    if not click.confirm("\nAccept tasks?", default=True):
+        console.print("[yellow]Task generation cancelled[/yellow]")
+        return
+
+    # Save tasks locally
+    pm = get_plugin_manager()
+    local = LocalPlugin({"path": ".sdlc/tasks"})
+
+    saved_ids = []
+    for task in tasks:
+        task_id = local.create_task(task)
+        saved_ids.append(task_id)
+
+    console.print(
+        f"\n[green]✓ Saved {len(saved_ids)} tasks to .sdlc/tasks/active/[/green]"
+    )
+
+    # Optional sync
+    provider = pm.get_enabled_plugin()
+    should_sync = sync or (
+        provider in ["jira", "linear"]
+        and click.confirm(f"\nSync to {provider.title()}?", default=False)
+    )
+
+    if should_sync:
+        _sync_tasks_to_external(pm, tasks, saved_ids)
+
+    # Display summary
+    console.print(f"\n[bold green]✅ Task splitting complete[/bold green]")
+    console.print(f"\n[bold]📊 Summary:[/bold]")
+    console.print(f"  - PRD: {prd_id}")
+    console.print(f"  - Tasks created: {len(tasks)}")
+    components = set(t.component for t in tasks if t.component)
+    console.print(f"  - Components: {len(components)}")
+    console.print(f"\n[bold]🔗 Next steps:[/bold]")
+    console.print(f"  - View tasks: [cyan]a-sdlc task list[/cyan]")
+    if saved_ids:
+        console.print(f"  - Start work: [cyan]a-sdlc task start {saved_ids[0]}[/cyan]")
+
+
+def _ask_clarification_questions(prd_obj, requirements, granularity):
+    """Ask user clarifying questions about task generation."""
+    console.print("[bold cyan]🤔 Clarification Questions[/bold cyan]\n")
+
+    answers = {}
+
+    # Question 1: Confirm granularity
+    answers["granularity"] = click.prompt(
+        "Task granularity",
+        type=click.Choice(["coarse", "medium", "fine"]),
+        default=granularity,
+        show_default=True,
+    )
+
+    # Question 2: Priority strategy
+    console.print("\nPriority assignment:")
+    console.print("  - uniform: All tasks same priority")
+    console.print("  - dependency: Earlier tasks higher priority")
+    console.print("  - manual: Review each task priority")
+    answers["priority_strategy"] = click.prompt(
+        "Strategy",
+        type=click.Choice(["uniform", "dependency", "manual"]),
+        default="dependency",
+        show_default=True,
+    )
+
+    return answers
+
+
+def _generate_tasks_from_prd(prd_obj, context, requirements, answers):
+    """Generate tasks from PRD (MVP: simple template-based generation)."""
+    from a_sdlc.plugins.base import Task, TaskPriority, TaskStatus
+
+    tasks = []
+    task_counter = 1
+
+    # For MVP Phase 1: Create one task per requirement
+    for req_id, req_desc in requirements:
+        # Determine priority based on strategy
+        if answers.get("priority_strategy") == "uniform":
+            priority = TaskPriority.MEDIUM
+        elif answers.get("priority_strategy") == "dependency":
+            # Earlier tasks get higher priority
+            priority = (
+                TaskPriority.HIGH if task_counter <= 3 else TaskPriority.MEDIUM
+            )
+        else:
+            priority = TaskPriority.MEDIUM
+
+        task = Task(
+            id=f"TASK-{task_counter:03d}",
+            title=f"Implement {req_id}: {req_desc[:50]}",
+            description=req_desc,
+            status=TaskStatus.PENDING,
+            priority=priority,
+            requirement_id=req_id,
+            component="TBD",  # Will be enhanced in Phase 2 with AI
+            dependencies=[],
+            files_to_modify=[],
+            implementation_steps=[
+                "Review requirement details",
+                "Design implementation approach",
+                "Implement functionality",
+                "Write tests",
+                "Document changes",
+            ],
+            success_criteria=[
+                f"{req_id} requirements met",
+                "Tests passing",
+                "Code reviewed",
+            ],
+        )
+        tasks.append(task)
+        task_counter += 1
+
+    return tasks
+
+
+def _display_task_summary(tasks):
+    """Display generated tasks in organized format."""
+    table = Table(title="Generated Tasks")
+    table.add_column("ID", style="cyan")
+    table.add_column("Title", style="white")
+    table.add_column("Component", style="yellow")
+    table.add_column("Priority", style="magenta")
+    table.add_column("Dependencies", style="dim")
+
+    for task in tasks:
+        deps = ", ".join(task.dependencies) if task.dependencies else "None"
+        table.add_row(
+            task.id,
+            task.title[:50],
+            task.component or "N/A",
+            task.priority.value,
+            deps,
+        )
+
+    console.print(table)
+
+
+def _sync_tasks_to_external(pm, tasks, task_ids):
+    """Sync tasks to Jira or Linear."""
+    provider = pm.get_enabled_plugin()
+
+    try:
+        if provider == "jira":
+            from a_sdlc.plugins.jira import JiraPlugin
+
+            plugin = pm.get_plugin("jira")
+
+            console.print(f"\n[cyan]Syncing {len(tasks)} tasks to Jira...[/cyan]")
+
+            for task in tasks:
+                external_id = plugin.create_task(task)
+                console.print(f"  ✓ {task.id} → {external_id}")
+
+            console.print(f"[green]✓ All tasks synced to Jira[/green]")
+
+        elif provider == "linear":
+            console.print("[yellow]Linear sync not yet implemented[/yellow]")
+            console.print("Use manual instructions from task output")
+
+    except Exception as e:
+        console.print(f"[red]Sync failed: {e}[/red]")
+        console.print("Tasks saved locally. Sync manually with:")
+        console.print(f"  [cyan]a-sdlc task sync[/cyan]")
 
 
 if __name__ == "__main__":

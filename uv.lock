@@ -14,6 +14,16 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "httpx" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+atlassian = [
+    { name = "httpx" },
+]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
@@ -26,7 +36,9 @@ linear = [
 
 [package.metadata]
 requires-dist = [
+    { name = "a-sdlc", extras = ["dev", "linear", "atlassian"], marker = "extra == 'all'" },
     { name = "click", specifier = ">=8.1.0" },
+    { name = "httpx", marker = "extra == 'atlassian'", specifier = ">=0.25.0" },
     { name = "httpx", marker = "extra == 'linear'", specifier = ">=0.25.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -36,7 +48,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
 ]
-provides-extras = ["dev", "linear"]
+provides-extras = ["dev", "linear", "atlassian", "all"]
 
 [[package]]
 name = "annotated-types"

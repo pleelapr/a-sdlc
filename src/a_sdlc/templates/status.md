@@ -91,7 +91,7 @@ Read requirements to show:
   Requirements: 8 functional, 3 non-functional
 
   PRD Inbox: 1 pending
-    - feature-dashboard.md (awaiting /sdlc:prd draft)
+    - feature-dashboard.md (awaiting /sdlc:prd-generate)
 
 📌 Tasks
 
@@ -116,9 +116,9 @@ Read requirements to show:
 │ Quick Actions                                             │
 │                                                           │
 │   /sdlc:update         - Refresh stale artifacts          │
-│   /sdlc:prd draft      - Process pending PRD              │
-│   /sdlc:task list      - View all tasks                   │
-│   /sdlc:task complete  - Complete current task            │
+│   /sdlc:prd-generate      - Process pending PRD              │
+│   /sdlc:task-list      - View all tasks                   │
+│   /sdlc:task-complete  - Complete current task            │
 ╰──────────────────────────────────────────────────────────╯
 ```
 
@@ -193,7 +193,7 @@ Recommendation: /sdlc:update
     "completed": 8
   },
   "prd_inbox": 1,
-  "recommendations": ["/sdlc:update", "/sdlc:prd draft"]
+  "recommendations": ["/sdlc:update", "/sdlc:prd-generate"]
 }
 ```
 

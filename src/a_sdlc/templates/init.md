@@ -28,9 +28,6 @@ Create the following directory structure:
 ├── tasks/                  # Task management
 │   ├── active/            # Current tasks
 │   └── completed/         # Archived tasks
-├── prd/                    # PRD ingestion
-│   ├── inbox/             # New PRDs
-│   └── processed/         # Processed PRDs
 ├── templates/              # Customizable templates
 └── .cache/                 # Scan cache for incremental updates
 ```
