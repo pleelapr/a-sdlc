@@ -3,11 +3,15 @@ Linear MCP integration plugin for task storage.
 
 Syncs tasks with Linear issue tracker, allowing bidirectional
 updates between local SDLC workflow and Linear projects.
+Supports cycle (sprint) synchronization via Linear's GraphQL API.
 """
 
 from datetime import datetime
 
-from a_sdlc.plugins.base import Task, TaskPlugin, TaskPriority, TaskStatus
+from a_sdlc.plugins.base import (
+    Task, TaskPlugin, TaskPriority, TaskStatus,
+    Sprint, SprintStatus, ExternalSprintMapping, SyncStatus
+)
 
 
 class LinearPlugin(TaskPlugin):
@@ -270,4 +274,307 @@ After creating the issue, update the task with the Linear issue ID:
 ```
 /sdlc:task link {task.id} <LINEAR-ISSUE-ID>
 ```
+"""
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Cycle (Sprint) Operations
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def list_cycles(self, status: str | None = None) -> list[dict]:
+        """List Linear cycles (sprints) for the team.
+
+        Args:
+            status: Filter by status ("active", "upcoming", "completed")
+
+        Returns:
+            List of cycle dictionaries with id, name, startsAt, endsAt, issues
+
+        Note:
+            This method provides instructions for Claude Code to execute
+            via Linear MCP or GraphQL API.
+        """
+        self._check_configured()
+
+        # Linear GraphQL query for cycles
+        query = """
+        query Cycles($teamId: String!, $filter: CycleFilter) {
+            team(id: $teamId) {
+                cycles(filter: $filter) {
+                    nodes {
+                        id
+                        name
+                        number
+                        startsAt
+                        endsAt
+                        progress
+                        issues {
+                            nodes {
+                                id
+                                identifier
+                                title
+                                state { name }
+                                priority
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        # NOTE: Actual implementation would use Linear MCP or GraphQL
+        # Return instruction for Claude Code
+        raise NotImplementedError(
+            f"List Linear cycles\n\n"
+            f"Team: {self.team_id}\n"
+            f"Status filter: {status or 'all'}\n\n"
+            f"To execute, use Linear MCP tools or the GraphQL API:\n"
+            f"```graphql\n{query}\n```"
+        )
+
+    def get_cycle(self, cycle_id: str) -> dict | None:
+        """Get a specific Linear cycle by ID.
+
+        Args:
+            cycle_id: Linear cycle ID
+
+        Returns:
+            Cycle dictionary with full details including issues
+        """
+        self._check_configured()
+
+        query = """
+        query Cycle($id: String!) {
+            cycle(id: $id) {
+                id
+                name
+                number
+                startsAt
+                endsAt
+                progress
+                issues {
+                    nodes {
+                        id
+                        identifier
+                        title
+                        description
+                        state { name }
+                        priority
+                        labels { nodes { name } }
+                    }
+                }
+            }
+        }
+        """
+
+        raise NotImplementedError(
+            f"Get Linear cycle: {cycle_id}\n\n"
+            f"Use Linear MCP tools or the GraphQL API:\n"
+            f"```graphql\n{query}\n```"
+        )
+
+    def import_cycle_as_sprint(self, cycle_id: str) -> tuple[Sprint, list[Task]]:
+        """Import a Linear cycle as a local sprint with tasks.
+
+        Args:
+            cycle_id: Linear cycle ID to import
+
+        Returns:
+            Tuple of (Sprint, list of Tasks)
+
+        Note:
+            This method provides instructions. The actual import is
+            performed by Claude Code using the returned data structure.
+        """
+        self._check_configured()
+
+        instructions = f"""## Import Linear Cycle as Sprint
+
+**Step 1: Fetch cycle data**
+Use Linear MCP to get cycle details:
+- Cycle ID: {cycle_id}
+- Team: {self.team_id}
+
+**Step 2: Create local sprint**
+```python
+sprint = Sprint(
+    id="",  # Will be generated
+    name="<cycle name>",
+    goal="<cycle description>",
+    start_date=<cycle.startsAt>,
+    end_date=<cycle.endsAt>,
+    external_id="{cycle_id}",
+    external_system="linear",
+    external_url="https://linear.app/team/{self.team_id}/cycle/<number>"
+)
+```
+
+**Step 3: Import issues as tasks**
+For each issue in the cycle:
+```python
+task = Task(
+    id="",  # Will be generated
+    title="<issue.title>",
+    description="<issue.description>",
+    status=<map from issue.state>,
+    priority=<map from issue.priority>,
+    external_id="<issue.id>",
+    external_url="<issue.url>"
+)
+```
+
+**Step 4: Link sprint to cycle**
+Save mapping in `.sdlc/sprints/mappings.json`
+"""
+
+        raise NotImplementedError(instructions)
+
+    def sync_sprint_to_cycle(self, sprint: Sprint, tasks: list[Task]) -> dict:
+        """Push local sprint status to Linear cycle.
+
+        Args:
+            sprint: Local sprint to sync
+            tasks: Tasks in the sprint
+
+        Returns:
+            Sync result with changes made
+        """
+        self._check_configured()
+
+        if not sprint.external_id:
+            raise ValueError(f"Sprint {sprint.id} is not linked to a Linear cycle")
+
+        # Build sync operations
+        operations = []
+
+        for task in tasks:
+            if task.external_id:
+                # Update existing issue
+                linear_state = self.STATUS_MAP.get(task.status, "Backlog")
+                operations.append({
+                    "type": "update_issue",
+                    "issue_id": task.external_id,
+                    "changes": {
+                        "state": linear_state,
+                        "priority": self.PRIORITY_MAP.get(task.priority, 3)
+                    }
+                })
+            else:
+                # Create new issue in cycle
+                operations.append({
+                    "type": "create_issue",
+                    "title": task.title,
+                    "description": self._format_description(task),
+                    "cycleId": sprint.external_id,
+                    "priority": self.PRIORITY_MAP.get(task.priority, 3)
+                })
+
+        instructions = f"""## Sync Sprint to Linear Cycle
+
+Sprint: {sprint.id} → Cycle: {sprint.external_id}
+
+**Operations to perform:**
+
+"""
+        for op in operations:
+            if op["type"] == "update_issue":
+                instructions += f"- Update issue {op['issue_id']}: state={op['changes']['state']}\n"
+            else:
+                instructions += f"- Create issue: {op['title']}\n"
+
+        instructions += f"""
+**Execute using Linear MCP tools:**
+1. For updates: Use `linear_update_issue` with issue ID and new state
+2. For creates: Use `linear_create_issue` with cycleId parameter
+
+Total operations: {len(operations)}
+"""
+
+        raise NotImplementedError(instructions)
+
+    def sync_cycle_to_sprint(self, sprint: Sprint) -> dict:
+        """Pull Linear cycle changes to local sprint.
+
+        Args:
+            sprint: Local sprint to update
+
+        Returns:
+            Dict with changes (new_tasks, updated_tasks, conflicts)
+        """
+        self._check_configured()
+
+        if not sprint.external_id:
+            raise ValueError(f"Sprint {sprint.id} is not linked to a Linear cycle")
+
+        instructions = f"""## Sync Linear Cycle to Sprint
+
+Cycle: {sprint.external_id} → Sprint: {sprint.id}
+
+**Step 1: Fetch current cycle state**
+Use Linear MCP to get all issues in cycle {sprint.external_id}
+
+**Step 2: Compare with local tasks**
+For each issue:
+- If external_id matches local task: check for updates
+- If no match: new issue added externally
+
+**Step 3: Apply changes**
+- Update task statuses from Linear states
+- Create new tasks for new issues
+- Flag conflicts (local changes vs Linear changes)
+
+**Step 4: Update sync timestamp**
+Record last_synced_at in mappings.json
+"""
+
+        raise NotImplementedError(instructions)
+
+    def get_cycle_sync_instructions(self, cycle_id: str, sprint_id: str) -> str:
+        """Generate complete sync instructions for a cycle-sprint pair.
+
+        Returns human-readable instructions for bidirectional sync.
+        """
+        return f"""## Linear Cycle ↔ SDLC Sprint Sync
+
+**Linked Resources:**
+- Linear Cycle: {cycle_id}
+- Local Sprint: {sprint_id}
+- Team: {self.team_id}
+
+### Pull Changes (Linear → Local)
+```
+/sdlc:sprint-sync-from {sprint_id}
+```
+This will:
+1. Fetch current cycle state from Linear
+2. Update local tasks with Linear status changes
+3. Import any new issues as tasks
+
+### Push Changes (Local → Linear)
+```
+/sdlc:sprint-sync-to {sprint_id}
+```
+This will:
+1. Update Linear issues with local status changes
+2. Create Linear issues for new local tasks
+3. Update cycle progress
+
+### Bidirectional Sync
+```
+/sdlc:sprint-sync {sprint_id}
+```
+This will:
+1. Pull changes from Linear first
+2. Resolve any conflicts (local wins by default)
+3. Push local changes to Linear
+
+### Status Mapping
+
+| SDLC Status | Linear State |
+|-------------|--------------|
+| pending | Backlog |
+| in_progress | In Progress |
+| blocked | Blocked |
+| completed | Done |
+| cancelled | Canceled |
 """

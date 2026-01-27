@@ -2,30 +2,72 @@
 
 ## Purpose
 
-Mark a task as in-progress and set it as the active task.
+Mark a task as in-progress and begin working on it.
+
+## Usage
+
+Use the MCP tool to start a task:
+
+```
+mcp__asdlc__start_task(task_id="TASK-001")
+```
+
+## Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `task_id` | Yes | ID of the task to start |
 
 ## Execution
 
-1. Validate task exists and is pending
-2. Check dependencies are completed
-3. Update task status to `in_progress`
-4. Store as active task in Serena memory: `sdlc_active_task`
+1. Validates task exists and is pending
+2. Updates task status to `in_progress`
+3. Sets `updated_at` timestamp
+4. Returns updated task details
 
 ## Output
 
+```json
+{
+  "status": "updated",
+  "message": "Task updated: TASK-001",
+  "task": {
+    "id": "TASK-001",
+    "title": "Implement authentication",
+    "status": "in_progress",
+    "description": "Add JWT-based auth...",
+    "priority": "high",
+    "component": "auth-service"
+  }
+}
 ```
-Task Started: TASK-001
 
-"Implement FR-001 in auth-service"
+## Display Format
 
-Files to modify:
-  - src/auth/handlers.py
-  - src/auth/models.py
+```
+Task Started: TASK-001 ⏳
 
-Implementation steps:
-  1. Add authentication middleware
-  2. Create user validation logic
-  3. Implement token generation
+"Implement authentication"
+
+Priority: High
+Component: auth-service
+Sprint: SPRINT-01
+
+Description:
+Add JWT-based authentication to the API endpoints.
 
 Good luck! Run /sdlc:task-complete TASK-001 when done.
 ```
+
+## Examples
+
+```
+/sdlc:task-start TASK-001
+/sdlc:task-start TASK-002
+```
+
+## Related Commands
+
+- `/sdlc:task-complete` - Mark task as completed
+- `/sdlc:task-list` - View all tasks
+- `/sdlc:task` - Get task details

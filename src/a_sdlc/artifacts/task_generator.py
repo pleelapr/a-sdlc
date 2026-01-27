@@ -78,6 +78,9 @@ def build_ai_prompt_for_task_generation(ctx: TaskGenerationContext) -> str:
     Returns:
         Formatted prompt string for AI.
     """
+    # Extract PRD filename for reference
+    prd_ref = ctx.prd_sections.get("_filename", "source-prd.md")
+
     prompt = f"""
 You are an expert technical project manager tasked with breaking down a Product Requirements Document (PRD) into actionable development tasks.
 
@@ -87,6 +90,7 @@ You are an expert technical project manager tasked with breaking down a Product 
 - Title: {ctx.prd_sections.get('Overview', 'Not specified')}
 - Requirements: {len(ctx.requirements)} functional/non-functional requirements
 - Granularity: {ctx.granularity}
+- PRD Reference: {prd_ref}
 
 ## Requirements List
 {_format_requirements_for_prompt(ctx.requirements)}
@@ -124,40 +128,82 @@ Generate developer-ready tasks following these rules:
    - If no suitable component exists, suggest "NEW: component-name"
 
 4. **Task Details:**
-   Each task MUST include:
+   Each task MUST include ALL of the following fields:
    - Unique sequential ID (TASK-001, TASK-002, etc.)
    - Clear, actionable title (verb + object, e.g., "Implement Google OAuth handler")
-   - Detailed description (2-3 sentences explaining what and why)
+   - Goal: Clear statement of what this task accomplishes (distinct from description)
+   - Description: Brief summary for list views (1-2 sentences)
    - Priority (HIGH for critical path, MEDIUM for parallel work, LOW for nice-to-have)
    - Requirement ID linkage (FR-001, NFR-002, etc.)
+   - PRD reference: "{prd_ref}"
    - Component assignment
    - Dependencies (list of TASK-XXX IDs)
    - Files to modify (3-5 specific file paths)
-   - Implementation steps (3-5 concrete steps)
+   - Key requirements (2-4 specific requirements from the PRD this task addresses)
+   - Technical notes (2-4 implementation hints, existing patterns to follow, etc.)
+   - Deliverables (2-4 concrete outputs this task will produce)
+   - Exclusions (2-3 things explicitly NOT in scope for this task)
+   - Implementation steps with rich structure (3-5 steps, each with title, description, optional code_hint and test_expectation)
    - Success criteria (2-4 testable acceptance criteria)
+   - Scope constraint: "Implement only the changes described above. Do not modify unrelated components."
 
 5. **Output Format:**
-   Return a JSON array of task objects matching this schema:
+   Return a JSON array of task objects matching this EXACT schema:
    {{
      "id": "TASK-001",
      "title": "Set up OAuth configuration",
-     "description": "Configure OAuth providers (Google, GitHub) with client IDs and secrets for authentication system",
+     "goal": "Configure OAuth 2.0 provider settings to enable third-party authentication",
+     "description": "Configure OAuth providers with client IDs and secrets for authentication system",
      "priority": "high",
      "requirement_id": "FR-001",
+     "prd_ref": "{prd_ref}",
      "component": "auth-service",
      "dependencies": [],
      "files_to_modify": ["src/auth/config.py", "config/oauth.yaml"],
+     "key_requirements": [
+       "Support Google and GitHub OAuth providers",
+       "Store client secrets securely in environment variables"
+     ],
+     "technical_notes": [
+       "Use existing ConfigLoader pattern from src/config/loader.py",
+       "OAuth callback URL format: /auth/callback/{{provider}}"
+     ],
+     "deliverables": [
+       "OAuth configuration dataclass in src/auth/config.py",
+       "Provider-specific configuration loading",
+       "Environment variable validation"
+     ],
+     "exclusions": [
+       "OAuth flow implementation (separate task)",
+       "UI login button changes (separate task)",
+       "Token refresh logic (separate task)"
+     ],
      "implementation_steps": [
-       "Create oauth.yaml config file with provider schemas",
-       "Add OAuth configuration loader to config.py",
-       "Add environment variable validation for secrets",
-       "Initialize OAuth config in auth service startup"
+       {{
+         "title": "Create OAuth config dataclass",
+         "description": "Define configuration structure for OAuth providers",
+         "code_hint": "@dataclass\\nclass OAuthConfig:\\n    provider: str\\n    client_id: str\\n    client_secret: str",
+         "test_expectation": "Config instantiates without errors"
+       }},
+       {{
+         "title": "Add config loader",
+         "description": "Load OAuth settings from environment variables",
+         "code_hint": "def load_oauth_config() -> OAuthConfig:\\n    return OAuthConfig(...)",
+         "test_expectation": "Missing env var raises ConfigError"
+       }},
+       {{
+         "title": "Initialize in service startup",
+         "description": "Call config loader during auth service initialization",
+         "test_expectation": "Service starts with valid config"
+       }}
      ],
      "success_criteria": [
-       "Config file loads without errors",
-       "All provider settings validated at startup",
-       "Environment variables properly sourced"
-     ]
+       "OAuth config loads for Google provider",
+       "OAuth config loads for GitHub provider",
+       "Missing client_secret raises clear ConfigError",
+       "All provider settings validated at startup"
+     ],
+     "scope_constraint": "Implement only the changes described above. Do not modify unrelated components."
    }}
 
 # PRD Content
@@ -167,6 +213,7 @@ Generate developer-ready tasks following these rules:
 # Output
 
 Generate tasks as a JSON array. Start with configuration and setup tasks, then implementation, then testing.
+IMPORTANT: Include ALL fields shown in the schema above for EVERY task.
 """
 
     return prompt
@@ -238,6 +285,9 @@ def validate_task_structure(task: Task) -> list[str]:
     if not task.description:
         errors.append("Task description is required")
 
+    if not task.goal:
+        errors.append("Task goal is required (distinct from description)")
+
     if not task.component:
         errors.append("Task must be assigned to a component")
 
@@ -249,5 +299,11 @@ def validate_task_structure(task: Task) -> list[str]:
 
     if not task.success_criteria:
         errors.append("Task must include success criteria")
+
+    if not task.deliverables:
+        errors.append("Task must include deliverables (what will be produced)")
+
+    if not task.exclusions:
+        errors.append("Task must include exclusions (what is NOT in scope)")
 
     return errors

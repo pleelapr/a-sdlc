@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}{{ task.id }} - {{ task.title }}{% endblock %}
+
+{% block content %}
+<div style="margin-top: 1rem;">
+    <a href="/tasks" style="color: var(--text-muted);">← Back to Tasks</a>
+</div>
+
+<div class="card" style="margin-top: 1rem;">
+    <div class="card-header">
+        <h1 style="margin: 0;">{{ task.id }}</h1>
+        <select id="status-select" onchange="updateStatus(this.value)" style="
+            padding: 0.4rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.875rem;
+            cursor: pointer;
+        ">
+            <option value="pending" {% if task.status == 'pending' %}selected{% endif %}>Pending</option>
+            <option value="in_progress" {% if task.status == 'in_progress' %}selected{% endif %}>In Progress</option>
+            <option value="completed" {% if task.status == 'completed' %}selected{% endif %}>Completed</option>
+            <option value="blocked" {% if task.status == 'blocked' %}selected{% endif %}>Blocked</option>
+        </select>
+    </div>
+
+    <h2 style="margin-bottom: 1rem;">{{ task.title }}</h2>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">Priority</div>
+            <div class="priority-{{ task.priority }}">{{ task.priority.title() }}</div>
+        </div>
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">Component</div>
+            <div>{{ task.component or '-' }}</div>
+        </div>
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">PRD</div>
+            <div>{% if task.prd_id %}<a href="/prds/{{ task.prd_id }}">{{ task.prd_id }}</a>{% else %}-{% endif %}</div>
+        </div>
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">Sprint (via PRD)</div>
+            <div>{% if task.sprint_id %}<a href="/sprints/{{ task.sprint_id }}">{{ task.sprint_id }}</a>{% else %}-{% endif %}</div>
+        </div>
+    </div>
+
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3 style="margin: 0;">Description</h3>
+        <div id="desc-actions">
+            <button id="edit-btn" class="btn" onclick="toggleEdit()">Edit</button>
+        </div>
+    </div>
+
+    <!-- View Mode: Rendered Markdown -->
+    <div id="desc-view" class="markdown" style="margin-top: 1rem;"></div>
+
+    <!-- Edit Mode: Textarea -->
+    <div id="desc-edit" style="display: none; margin-top: 1rem;">
+        <textarea id="desc-textarea" style="
+            width: 100%;
+            min-height: 300px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.875rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            resize: vertical;
+        ">{{ task.description or '' }}</textarea>
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="saveDescription()">Save</button>
+            <button class="btn" onclick="cancelEdit()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+{% if task.data %}
+<div class="card">
+    <h3>Additional Data</h3>
+    <pre style="margin-top: 1rem;">{{ task.data | tojson(indent=2) }}</pre>
+</div>
+{% endif %}
+
+<div class="card" style="color: var(--text-muted); font-size: 0.875rem;">
+    <div>Created: {{ task.created_at }}</div>
+    <div>Updated: {{ task.updated_at }}</div>
+    {% if task.completed_at %}<div>Completed: {{ task.completed_at }}</div>{% endif %}
+</div>
+
+<script>
+    // Store original description for cancel
+    let originalDescription = {{ task.description | tojson | safe if task.description else '""' }};
+    let isEditing = false;
+
+    async function updateStatus(status) {
+        try {
+            const response = await fetch('/tasks/{{ task.id }}/status?status=' + status, {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                alert('Failed to update status');
+            }
+        } catch (error) {
+            console.error('Update status error:', error);
+            alert('Failed to update status');
+        }
+    }
+
+    // Render markdown on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        renderMarkdown(originalDescription);
+    });
+
+    function renderMarkdown(content) {
+        const viewEl = document.getElementById('desc-view');
+        if (content) {
+            viewEl.innerHTML = marked.parse(content);
+        } else {
+            viewEl.innerHTML = '<p style="color: var(--text-muted);">No description yet. Click Edit to add a description.</p>';
+        }
+    }
+
+    function toggleEdit() {
+        isEditing = !isEditing;
+        document.getElementById('desc-view').style.display = isEditing ? 'none' : 'block';
+        document.getElementById('desc-edit').style.display = isEditing ? 'block' : 'none';
+        document.getElementById('edit-btn').textContent = isEditing ? 'View' : 'Edit';
+
+        if (isEditing) {
+            document.getElementById('desc-textarea').focus();
+        }
+    }
+
+    function cancelEdit() {
+        document.getElementById('desc-textarea').value = originalDescription;
+        toggleEdit();
+    }
+
+    async function saveDescription() {
+        const description = document.getElementById('desc-textarea').value;
+
+        try {
+            const response = await fetch('/tasks/{{ task.id }}/description', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: description })
+            });
+
+            if (response.ok) {
+                originalDescription = description;
+                renderMarkdown(description);
+                toggleEdit();
+            } else {
+                alert('Failed to save description');
+            }
+        } catch (error) {
+            console.error('Save error:', error);
+            alert('Failed to save description');
+        }
+    }
+</script>
+{% endblock %}

@@ -4,6 +4,18 @@
 
 Decompose requirements into actionable implementation tasks, automatically detecting dependencies and affected components.
 
+## Syntax
+
+```
+/sdlc:task-split [--sprint <sprint-id>]
+```
+
+## Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `--sprint` | No | Assign all generated tasks to sprint (e.g., SPRINT-001) |
+
 ## Execution Steps
 
 ### 1. Load Requirements
@@ -25,7 +37,7 @@ Read `.sdlc/artifacts/architecture.md` to understand:
 For each requirement:
 
 ```python
-def decompose_requirement(req, architecture):
+def decompose_requirement(req, architecture, sprint_id=None):
     tasks = []
 
     # Identify affected components
@@ -38,7 +50,8 @@ def decompose_requirement(req, architecture):
             requirement_id=req.id,
             component=component.name,
             files_to_modify=component.files,
-            priority=req.priority
+            priority=req.priority,
+            sprint_id=sprint_id  # Assign to sprint if provided
         ))
 
         # Create test task if testable
@@ -47,7 +60,8 @@ def decompose_requirement(req, architecture):
                 title=f"Test {req.id} - {component.name}",
                 requirement_id=req.id,
                 component=component.name,
-                dependencies=[tasks[-1].id]
+                dependencies=[tasks[-1].id],
+                sprint_id=sprint_id  # Assign to sprint if provided
             ))
 
     return tasks
@@ -127,6 +141,7 @@ Implement only the changes described above. Do not:
   "component": "auth-service",
   "dependencies": [],
   "files_to_modify": ["src/auth/handlers.py"],
+  "sprint_id": "SPRINT-001",
   "created_at": "2025-01-21T12:00:00Z"
 }
 ```

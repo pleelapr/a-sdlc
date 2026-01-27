@@ -38,11 +38,15 @@ class PRD:
     Represents a single PRD that can be stored locally or synced with
     Confluence. Each project can have multiple PRDs for different features.
 
+    PRDs can optionally be assigned to a sprint. When assigned, all tasks
+    under this PRD are considered part of that sprint.
+
     Attributes:
         id: Slug identifier (e.g., "feature-auth").
         title: Display title (e.g., "Feature Auth").
         content: Markdown content.
         version: Semantic version string.
+        sprint_id: Optional sprint assignment (None = backlog).
         created_at: Creation timestamp.
         updated_at: Last modification timestamp.
         external_id: Confluence page ID (if synced).
@@ -54,6 +58,7 @@ class PRD:
     title: str
     content: str
     version: str = "1.0.0"
+    sprint_id: str | None = None  # Sprint this PRD belongs to
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     external_id: str | None = None
@@ -71,6 +76,7 @@ class PRD:
             "title": self.title,
             "content": self.content,
             "version": self.version,
+            "sprint_id": self.sprint_id,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "external_id": self.external_id,
@@ -93,6 +99,7 @@ class PRD:
             title=data["title"],
             content=data["content"],
             version=data.get("version", "1.0.0"),
+            sprint_id=data.get("sprint_id"),
             created_at=datetime.fromisoformat(data["created_at"])
             if "created_at" in data
             else datetime.now(),

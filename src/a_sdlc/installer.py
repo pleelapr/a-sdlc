@@ -5,11 +5,77 @@ Handles:
 - Copying skill templates to ~/.claude/commands/sdlc/
 - Template versioning and updates
 - Integrity verification
+- MCP server configuration
 """
 
+import json
 import shutil
 from importlib import resources
 from pathlib import Path
+from typing import Any
+
+
+def get_claude_settings_path() -> Path:
+    """Get path to Claude Code settings file.
+
+    Returns:
+        Path to ~/.claude.json (where Claude CLI stores MCP servers)
+    """
+    return Path.home() / ".claude.json"
+
+
+def configure_mcp_server(force: bool = False) -> dict[str, Any]:
+    """Configure a-sdlc MCP server in Claude Code settings.
+
+    Args:
+        force: If True, overwrite existing configuration.
+
+    Returns:
+        Dict with status and message.
+    """
+    settings_path = get_claude_settings_path()
+
+    # Read existing settings or create empty
+    if settings_path.exists():
+        with open(settings_path) as f:
+            settings = json.load(f)
+    else:
+        # ~/.claude.json should exist if Claude CLI is installed
+        settings = {}
+
+    # Initialize mcpServers if needed
+    if "mcpServers" not in settings:
+        settings["mcpServers"] = {}
+
+    # Check if already configured (check both old and new names)
+    if "asdlc" in settings["mcpServers"] and not force:
+        return {
+            "status": "exists",
+            "message": "asdlc MCP server already configured",
+            "config": settings["mcpServers"]["asdlc"],
+        }
+
+    # Remove old a-sdlc config if present (migration)
+    if "a-sdlc" in settings["mcpServers"]:
+        del settings["mcpServers"]["a-sdlc"]
+
+    # Configure asdlc MCP server (matches Claude CLI format)
+    settings["mcpServers"]["asdlc"] = {
+        "type": "stdio",
+        "command": "uvx",
+        "args": ["a-sdlc", "serve"],
+        "env": {},
+    }
+
+    # Write settings
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+
+    return {
+        "status": "configured",
+        "message": "asdlc MCP server configured in Claude Code settings",
+        "settings_path": str(settings_path),
+    }
 
 
 class Installer:
@@ -25,11 +91,12 @@ class Installer:
         """
         self.target_dir = target_dir or self.DEFAULT_TARGET
 
-    def install(self, force: bool = False) -> list[str]:
+    def install(self, force: bool = False, configure_mcp: bool = True) -> list[str]:
         """Install all skill templates to target directory.
 
         Args:
             force: If True, overwrite existing templates.
+            configure_mcp: If True, also configure MCP server in Claude Code settings.
 
         Returns:
             List of installed template names.
@@ -54,6 +121,10 @@ class Installer:
 
             shutil.copy2(template_file, target_file)
             installed.append(template_file.stem)
+
+        # Configure MCP server
+        if configure_mcp:
+            configure_mcp_server(force=force)
 
         return installed
 

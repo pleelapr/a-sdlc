@@ -42,6 +42,45 @@ def main() -> None:
 
 @main.command()
 @click.option(
+    "--transport", "-t",
+    type=click.Choice(["stdio", "streamable-http"]),
+    default="stdio",
+    help="Transport type (default: stdio for Claude Code)"
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host for HTTP transport"
+)
+@click.option(
+    "--port",
+    default=8765,
+    type=int,
+    help="Port for HTTP transport"
+)
+def serve(transport: str, host: str, port: int) -> None:
+    """Start the a-sdlc MCP server.
+
+    Runs the MCP server that provides tools for managing
+    PRDs, tasks, and sprints through Claude Code.
+
+    Examples:
+
+        a-sdlc serve                    # Start with stdio (for Claude Code)
+        a-sdlc serve -t streamable-http # Start HTTP server for debugging
+    """
+    from a_sdlc.server import run_server
+
+    if transport == "stdio":
+        # Don't print anything for stdio - it would interfere with MCP protocol
+        run_server(transport="stdio")
+    else:
+        console.print(f"[cyan]Starting a-sdlc MCP server on http://{host}:{port}/mcp[/cyan]")
+        run_server(transport="streamable-http")
+
+
+@main.command()
+@click.option(
     "--list", "list_skills",
     is_flag=True,
     help="List all installed skill templates"
@@ -87,13 +126,15 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
         console.print()
         console.print(Panel(
             f"[green]Successfully installed {len(installed)} skill templates![/green]\n\n"
-            f"Location: [cyan]{installer.target_dir}[/cyan]\n\n"
+            f"Skills location: [cyan]{installer.target_dir}[/cyan]\n"
+            f"MCP server: [cyan]Configured in ~/.claude.json[/cyan]\n\n"
             "Available commands:\n"
-            "  /sdlc:init   - Initialize .sdlc/ for a project\n"
+            "  /sdlc:init   - Initialize project for a-sdlc\n"
             "  /sdlc:scan   - Generate all artifacts\n"
             "  /sdlc:update - Incremental artifact updates\n"
-            "  /sdlc:prd    - PRD ingestion pipeline\n"
+            "  /sdlc:prd    - PRD management\n"
             "  /sdlc:task   - Task management\n"
+            "  /sdlc:sprint - Sprint management\n"
             "  /sdlc:status - Show artifact freshness\n"
             "  /sdlc:help   - List all commands",
             title="[bold]Installation Complete[/bold]",
@@ -1812,6 +1853,461 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
         console.print(f"[red]Sync failed: {e}[/red]")
         console.print("Tasks saved locally. Sync manually with:")
         console.print(f"  [cyan]a-sdlc task sync[/cyan]")
+
+
+# =============================================================================
+# Task CLI Commands (using SQLite database)
+# =============================================================================
+
+
+@main.command("tasks")
+@click.option("--status", "-s", type=click.Choice(["pending", "in_progress", "completed", "blocked"]), help="Filter by status")
+@click.option("--sprint", help="Filter by sprint ID")
+def tasks_list(status: str | None, sprint: str | None) -> None:
+    """List tasks for the current project.
+
+    Examples:
+
+        a-sdlc tasks                    # All tasks
+        a-sdlc tasks --status pending   # Pending tasks only
+        a-sdlc tasks --sprint SPRINT-01 # Tasks in sprint
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+
+    # Get current project
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        return
+
+    tasks = db.list_tasks(project["id"], status=status, sprint_id=sprint)
+
+    if not tasks:
+        console.print("[dim]No tasks found.[/dim]")
+        return
+
+    # Group by status
+    by_status: dict[str, list] = {}
+    for task in tasks:
+        s = task["status"]
+        if s not in by_status:
+            by_status[s] = []
+        by_status[s].append(task)
+
+    # Display
+    console.print(f"\n[bold]Tasks for {project['name']}[/bold]\n")
+
+    status_icons = {
+        "pending": "🔴",
+        "in_progress": "⏳",
+        "completed": "✅",
+        "blocked": "🚫",
+    }
+
+    priority_colors = {
+        "critical": "red bold",
+        "high": "red",
+        "medium": "yellow",
+        "low": "dim",
+    }
+
+    for s in ["in_progress", "pending", "blocked", "completed"]:
+        if s not in by_status:
+            continue
+
+        icon = status_icons.get(s, "○")
+        console.print(f"{icon} [bold]{s.replace('_', ' ').title()}[/bold] ({len(by_status[s])})")
+
+        for task in by_status[s]:
+            priority = task.get("priority", "medium")
+            color = priority_colors.get(priority, "")
+            sprint_info = f"[dim][{task['sprint_id']}][/dim]" if task.get("sprint_id") else ""
+
+            console.print(f"  [{color}]{task['id']}[/{color}]  {task['title'][:50]}  {sprint_info}")
+
+        console.print()
+
+
+@main.command("show")
+@click.argument("task_id")
+def show_task(task_id: str) -> None:
+    """Show task details.
+
+    TASK_ID: Task identifier (e.g., TASK-001)
+
+    Examples:
+
+        a-sdlc show TASK-001
+        a-sdlc show TASK-002
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    task = db.get_task(task_id)
+
+    if not task:
+        console.print(f"[red]Task not found: {task_id}[/red]")
+        sys.exit(1)
+
+    # Display task details
+    status_icons = {
+        "pending": "🔴 Pending",
+        "in_progress": "⏳ In Progress",
+        "completed": "✅ Completed",
+        "blocked": "🚫 Blocked",
+    }
+
+    console.print(Panel(
+        f"[bold]{task['title']}[/bold]\n\n"
+        f"Status: {status_icons.get(task['status'], task['status'])}\n"
+        f"Priority: {task.get('priority', 'medium').title()}\n"
+        f"Component: {task.get('component') or 'N/A'}\n"
+        f"Sprint: {task.get('sprint_id') or 'None'}\n"
+        f"PRD: {task.get('prd_id') or 'None'}\n"
+        f"Created: {task['created_at']}\n"
+        f"Updated: {task['updated_at']}",
+        title=f"[cyan]{task['id']}[/cyan]",
+        border_style="blue"
+    ))
+
+    if task.get("description"):
+        console.print("\n[bold]Description:[/bold]")
+        console.print(task["description"])
+
+    if task.get("data"):
+        console.print("\n[bold]Additional Data:[/bold]")
+        import json
+        console.print(json.dumps(task["data"], indent=2))
+
+
+@main.command("start")
+@click.argument("task_id")
+def start_task_cmd(task_id: str) -> None:
+    """Mark a task as in-progress.
+
+    TASK_ID: Task identifier (e.g., TASK-001)
+
+    Examples:
+
+        a-sdlc start TASK-001
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    task = db.update_task(task_id, status="in_progress")
+
+    if not task:
+        console.print(f"[red]Task not found: {task_id}[/red]")
+        sys.exit(1)
+
+    console.print(f"[green]Task started: {task_id}[/green]")
+    console.print(f"[dim]{task['title']}[/dim]")
+
+
+@main.command("ui")
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+@click.option("--port", "-p", default=3847, type=int, help="Port to bind to")
+def ui_cmd(host: str, port: int) -> None:
+    """Start the web UI dashboard.
+
+    Opens a browser-based dashboard for viewing and managing
+    PRDs, tasks, and sprints.
+
+    Examples:
+
+        a-sdlc ui                    # Start on http://localhost:3847
+        a-sdlc ui --port 8000        # Custom port
+    """
+    try:
+        from a_sdlc.ui import run_server
+    except ImportError:
+        console.print("[red]Web UI dependencies not installed.[/red]")
+        console.print("Install with: [cyan]pip install 'a-sdlc[ui]'[/cyan]")
+        sys.exit(1)
+
+    console.print(f"[green]Starting a-sdlc dashboard on http://{host}:{port}[/green]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
+    run_server(host=host, port=port)
+
+
+@main.command("complete")
+@click.argument("task_id")
+def complete_task_cmd(task_id: str) -> None:
+    """Mark a task as completed.
+
+    TASK_ID: Task identifier (e.g., TASK-001)
+
+    Examples:
+
+        a-sdlc complete TASK-001
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    task = db.update_task(task_id, status="completed")
+
+    if not task:
+        console.print(f"[red]Task not found: {task_id}[/red]")
+        sys.exit(1)
+
+    console.print(f"[green]Task completed: {task_id} ✅[/green]")
+    console.print(f"[dim]{task['title']}[/dim]")
+
+
+# =============================================================================
+# External Integration Commands
+# =============================================================================
+
+
+@main.group()
+def connect() -> None:
+    """Configure external system integrations.
+
+    Connect to Linear or Jira to sync sprints and tasks.
+
+    \b
+      a-sdlc connect linear    Configure Linear integration
+      a-sdlc connect jira      Configure Jira integration
+    """
+    pass
+
+
+@connect.command("linear")
+@click.option("--api-key", prompt="Linear API Key", hide_input=True, help="Linear API key")
+@click.option("--team-id", prompt="Team ID", help="Team identifier (e.g., 'ENG')")
+@click.option("--default-project", default=None, help="Optional default project name")
+def connect_linear(api_key: str, team_id: str, default_project: str | None) -> None:
+    """Configure Linear integration for the current project.
+
+    Linear API key can be generated from Settings > API in Linear.
+
+    Examples:
+
+        a-sdlc connect linear --api-key <key> --team-id ENG
+        a-sdlc connect linear  # Interactive prompts
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        sys.exit(1)
+
+    config = {
+        "api_key": api_key,
+        "team_id": team_id,
+        "default_project": default_project,
+    }
+
+    db.set_external_config(project["id"], "linear", config)
+
+    console.print(f"[green]✓ Linear integration configured for {project['name']}[/green]")
+    console.print(f"[dim]Team: {team_id}[/dim]")
+    console.print()
+    console.print("Next steps:")
+    console.print("  - Import a cycle: [cyan]/sdlc:sprint-import linear[/cyan]")
+    console.print("  - Or link a sprint: [cyan]/sdlc:sprint-link SPRINT-01 linear <cycle-id>[/cyan]")
+
+
+@connect.command("jira")
+@click.option("--url", prompt="Atlassian Site URL", help="e.g., https://company.atlassian.net")
+@click.option("--email", prompt="Atlassian Email", help="Your Atlassian account email")
+@click.option("--api-token", prompt="API Token", hide_input=True, help="Atlassian API token")
+@click.option("--project-key", prompt="Project Key", help="Jira project key (e.g., 'PROJ')")
+@click.option("--issue-type", default="Task", help="Default issue type")
+def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_type: str) -> None:
+    """Configure Jira integration for the current project.
+
+    API token can be generated from https://id.atlassian.com/manage-profile/security/api-tokens
+
+    Examples:
+
+        a-sdlc connect jira --url https://company.atlassian.net --email user@example.com --project-key PROJ
+        a-sdlc connect jira  # Interactive prompts
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        sys.exit(1)
+
+    config = {
+        "base_url": url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "project_key": project_key,
+        "issue_type": issue_type,
+    }
+
+    db.set_external_config(project["id"], "jira", config)
+
+    console.print(f"[green]✓ Jira integration configured for {project['name']}[/green]")
+    console.print(f"[dim]Project: {project_key} at {url}[/dim]")
+    console.print()
+    console.print("Next steps:")
+    console.print("  - Import a sprint: [cyan]/sdlc:sprint-import jira --board-id <id>[/cyan]")
+    console.print("  - Or link a sprint: [cyan]/sdlc:sprint-link SPRINT-01 jira <sprint-id>[/cyan]")
+
+
+@main.command("disconnect")
+@click.argument("system", type=click.Choice(["linear", "jira"]))
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+def disconnect(system: str, yes: bool) -> None:
+    """Remove an external system integration.
+
+    SYSTEM: The integration to remove ('linear' or 'jira')
+
+    Examples:
+
+        a-sdlc disconnect linear
+        a-sdlc disconnect jira -y
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        sys.exit(1)
+
+    # Check if configured
+    config = db.get_external_config(project["id"], system)
+    if not config:
+        console.print(f"[yellow]{system.title()} integration not configured.[/yellow]")
+        return
+
+    if not yes:
+        if not click.confirm(f"Remove {system.title()} integration from {project['name']}?"):
+            console.print("Aborted.")
+            return
+
+    db.delete_external_config(project["id"], system)
+    console.print(f"[green]✓ {system.title()} integration removed from {project['name']}[/green]")
+
+
+@main.command("integrations")
+def integrations() -> None:
+    """List configured external integrations for the current project.
+
+    Shows all connected external systems (Linear, Jira) with their configuration.
+
+    Examples:
+
+        a-sdlc integrations
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        return
+
+    configs = db.list_external_configs(project["id"])
+
+    console.print(f"\n[bold]Integrations for {project['name']}[/bold]\n")
+
+    if not configs:
+        console.print("[dim]No integrations configured.[/dim]")
+        console.print()
+        console.print("Configure integrations:")
+        console.print("  - [cyan]a-sdlc connect linear[/cyan]")
+        console.print("  - [cyan]a-sdlc connect jira[/cyan]")
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("System", style="cyan")
+    table.add_column("Configuration")
+    table.add_column("Last Updated", style="dim")
+
+    for config in configs:
+        cfg = config.get("config", {})
+
+        # Format config display (mask sensitive data)
+        if config["system"] == "linear":
+            config_display = f"Team: {cfg.get('team_id', 'N/A')}"
+        else:  # jira
+            config_display = f"Project: {cfg.get('project_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
+
+        table.add_row(
+            config["system"].title(),
+            config_display,
+            config.get("updated_at", "N/A")[:16],
+        )
+
+    console.print(table)
+    console.print()
+
+    # Show sync mappings summary
+    mappings = db.list_sync_mappings()
+    if mappings:
+        sprint_mappings = [m for m in mappings if m["entity_type"] == "sprint"]
+        task_mappings = [m for m in mappings if m["entity_type"] == "task"]
+        console.print(f"[dim]Linked: {len(sprint_mappings)} sprint(s), {len(task_mappings)} task(s)[/dim]")
+
+
+@main.command("init")
+@click.option("--name", "-n", default=None, help="Project name (defaults to folder name)")
+def init_project_cmd(name: str | None) -> None:
+    """Initialize a project for SDLC tracking.
+
+    Creates a project entry in the local database for the current directory.
+    This is required before using other SDLC commands.
+
+    Examples:
+
+        a-sdlc init                    # Use folder name
+        a-sdlc init --name "My Project"  # Custom name
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+
+    # Check if already exists
+    existing = db.get_project_by_path(cwd)
+    if existing:
+        console.print(f"[yellow]Project already initialized: {existing['name']}[/yellow]")
+        console.print(f"[dim]ID: {existing['id']}[/dim]")
+        return
+
+    # Generate project ID from folder name
+    folder_name = Path(cwd).name
+    project_id = folder_name.lower().replace(" ", "-").replace("_", "-")
+    project_name = name or folder_name
+
+    project = db.create_project(project_id, project_name, cwd)
+
+    console.print(Panel(
+        f"[green]Project '{project_name}' initialized![/green]\n\n"
+        f"ID: {project['id']}\n"
+        f"Path: {project['path']}\n\n"
+        "Next steps:\n"
+        "  [cyan]/sdlc:scan[/cyan]     - Generate documentation artifacts\n"
+        "  [cyan]/sdlc:prd[/cyan]      - Create a PRD\n"
+        "  [cyan]/sdlc:task[/cyan]     - Create tasks",
+        title="[bold]a-sdlc Initialized[/bold]",
+        border_style="green"
+    ))
 
 
 if __name__ == "__main__":

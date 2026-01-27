@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}{{ project.name }} - a-sdlc Dashboard{% endblock %}
+
+{% block content %}
+<h1 style="margin-top: 1rem;">{{ project.name }}</h1>
+<p style="color: var(--text-muted); margin-bottom: 2rem;">{{ project.path }}</p>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ tasks|length }}</div>
+        <div class="stat-label">Total Tasks</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value status-pending">{{ task_stats.pending }}</div>
+        <div class="stat-label">Pending</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value status-in_progress">{{ task_stats.in_progress }}</div>
+        <div class="stat-label">In Progress</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value status-completed">{{ task_stats.completed }}</div>
+        <div class="stat-label">Completed</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+    <div class="card">
+        <div class="card-header">
+            <h2>Active Sprint</h2>
+            <a href="/sprints" class="btn">View All</a>
+        </div>
+        {% if active_sprint %}
+        <div>
+            <h3><a href="/sprints/{{ active_sprint.id }}">{{ active_sprint.title }}</a></h3>
+            <p style="color: var(--text-muted);">{{ active_sprint.goal or 'No goal set' }}</p>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>No active sprint</p>
+        </div>
+        {% endif %}
+    </div>
+    
+    <div class="card">
+        <div class="card-header">
+            <h2>PRDs</h2>
+            <a href="/prds" class="btn">View All</a>
+        </div>
+        {% if prds %}
+        <ul style="list-style: none;">
+            {% for prd in prds[:5] %}
+            <li style="padding: 0.5rem 0; border-bottom: 1px solid var(--border);">
+                <a href="/prds/{{ prd.id }}">{{ prd.title }}</a>
+                <span class="badge badge-{% if prd.status == 'completed' %}success{% elif prd.status == 'ready' %}success{% elif prd.status == 'split' %}info{% else %}warning{% endif %}">
+                    {{ prd.status }}
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <div class="empty-state">
+            <p>No PRDs yet</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Recent Tasks</h2>
+        <a href="/tasks" class="btn">View All</a>
+    </div>
+    {% if tasks %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>PRD</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in tasks[:10] %}
+            <tr>
+                <td><a href="/tasks/{{ task.id }}">{{ task.id }}</a></td>
+                <td>{{ task.title[:50] }}{% if task.title|length > 50 %}...{% endif %}</td>
+                <td><span class="status-{{ task.status }}">{{ task.status.replace('_', ' ').title() }}</span></td>
+                <td><span class="priority-{{ task.priority }}">{{ task.priority.title() }}</span></td>
+                <td>{% if task.prd_id %}<a href="/prds/{{ task.prd_id }}">{{ task.prd_id }}</a>{% else %}-{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No tasks yet</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

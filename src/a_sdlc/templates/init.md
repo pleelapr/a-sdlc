@@ -1,164 +1,98 @@
 # /sdlc:init - Initialize SDLC for Project
 
-Initialize the `.sdlc/` directory structure for a project, setting up the foundation for automated documentation and workflow management.
+Initialize a-sdlc for the current project. This registers the project in the a-sdlc database and sets up the foundation for task, PRD, and sprint management.
 
-## Execution Steps
+## Quick Start
 
-### 1. Check for Existing .sdlc Directory
-
-First, check if `.sdlc/` already exists:
+Use the MCP tool to initialize:
 
 ```
-Check if .sdlc/ directory exists in the current project root
+mcp__asdlc__init_project()
 ```
 
-**If exists**: Ask user whether to:
-- Skip initialization (keep existing)
-- Reset and reinitialize (backup existing first)
+This will:
+1. Detect the project name from the current directory
+2. Register the project in the a-sdlc database
+3. Return the project context
 
-### 2. Create Directory Structure
+## Optional: Create Local Artifacts Directory
 
-Create the following directory structure:
-
-```
-.sdlc/
-├── artifacts/              # Living documentation (auto-updated)
-├── requirements/           # Requirements management
-│   └── versions/          # Version history
-├── tasks/                  # Task management
-│   ├── active/            # Current tasks
-│   └── completed/         # Archived tasks
-├── templates/              # Customizable templates
-└── .cache/                 # Scan cache for incremental updates
-```
-
-### 3. Detect Project Type
-
-Analyze the project to determine its type:
-
-1. Check for `pyproject.toml` or `setup.py` → Python project
-2. Check for `package.json` → Node.js/TypeScript project
-3. Check for `go.mod` → Go project
-4. Check for `Cargo.toml` → Rust project
-5. Check for `pom.xml` or `build.gradle` → Java project
-6. Default to "mixed" if multiple or unknown
-
-### 4. Create Configuration File
-
-Create `.sdlc/config.yaml` with detected settings:
-
-```yaml
-version: "1.0"
-project:
-  name: "<detected from package file or directory name>"
-  type: "<detected project type>"
-
-artifacts:
-  enabled:
-    - codebase-summary
-    - architecture
-    - data-model
-    - key-workflows
-    - directory-structure
-
-scanning:
-  include:
-    - "src/"
-    - "lib/"
-    - "app/"
-  exclude:
-    - "**/__pycache__/"
-    - "**/node_modules/"
-    - "**/.git/"
-    - "**/dist/"
-    - "**/build/"
-
-requirements:
-  id_prefix: "FR"
-  template: "bdd"
-
-tasks:
-  id_prefix: "TASK"
-  auto_dependencies: true
-
-plugins:
-  tasks:
-    provider: "local"
-    local:
-      path: ".sdlc/tasks"
-```
-
-### 5. Copy Artifact Templates
-
-Copy default artifact templates to `.sdlc/templates/`:
-
-- `codebase-summary.template.md`
-- `architecture.template.md`
-- `data-model.template.md`
-- `key-workflows.template.md`
-- `directory-structure.template.md`
-- `requirements.template.md`
-- `task.template.md`
-
-### 6. Create Task Index
-
-Create `.sdlc/tasks/index.json`:
-
-```json
-{
-  "tasks": {},
-  "counter": 0
-}
-```
-
-### 7. Update .gitignore (Optional)
-
-If a `.gitignore` exists, suggest adding:
+If you want to store codebase documentation artifacts (architecture, data-model, etc.) in the repo, create the `.sdlc/artifacts/` directory:
 
 ```
-# SDLC cache
-.sdlc/.cache/
+mkdir -p .sdlc/artifacts
 ```
 
-### 8. Output Summary
+Add to `.gitignore`:
+```
+# a-sdlc artifacts (optional - keep if you want to track documentation)
+# .sdlc/artifacts/
+```
 
-Print initialization summary:
+## MCP Tools Available
+
+After initialization, the following MCP tools are available:
+
+### Context & Navigation
+- `mcp__asdlc__get_context()` - Get current project summary
+- `mcp__asdlc__list_projects()` - List all known projects
+- `mcp__asdlc__switch_project(project_id)` - Change active project
+
+### PRD Management
+- `mcp__asdlc__list_prds()` - List PRDs
+- `mcp__asdlc__get_prd(prd_id)` - Get full PRD content
+- `mcp__asdlc__create_prd(title, content)` - Create new PRD
+- `mcp__asdlc__update_prd(prd_id, ...)` - Update PRD
+- `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
+
+### Task Management
+- `mcp__asdlc__list_tasks()` - List tasks (filterable)
+- `mcp__asdlc__get_task(task_id)` - Get task details
+- `mcp__asdlc__create_task(title, description, ...)` - Create task
+- `mcp__asdlc__update_task(task_id, ...)` - Update task
+- `mcp__asdlc__start_task(task_id)` - Mark as in_progress
+- `mcp__asdlc__complete_task(task_id)` - Mark as completed
+- `mcp__asdlc__block_task(task_id, reason)` - Mark as blocked
+- `mcp__asdlc__delete_task(task_id)` - Delete task
+
+### Sprint Management
+- `mcp__asdlc__list_sprints()` - List sprints
+- `mcp__asdlc__get_sprint(sprint_id)` - Get sprint with tasks
+- `mcp__asdlc__create_sprint(title, goal)` - Create sprint
+- `mcp__asdlc__start_sprint(sprint_id)` - Activate sprint
+- `mcp__asdlc__complete_sprint(sprint_id)` - Complete sprint
+- `mcp__asdlc__add_tasks_to_sprint(sprint_id, task_ids)` - Add tasks
+- `mcp__asdlc__remove_tasks_from_sprint(sprint_id, task_ids)` - Remove tasks
+
+## Output
 
 ```
-SDLC Initialized Successfully!
+Project initialized: my-project
 
-Project: <project_name>
-Type: <project_type>
-Location: .sdlc/
+Project ID: my-project
+Path: /path/to/my-project
 
 Next steps:
-1. Run /sdlc:scan to generate initial artifacts
-2. Review .sdlc/config.yaml to customize settings
-3. Add artifact references to your CLAUDE.md:
-
-   # SDLC Context
-   @.sdlc/artifacts/codebase-summary.md
-   @.sdlc/artifacts/architecture.md
-   @.sdlc/requirements/current.md
+1. Create a PRD: /sdlc:prd-generate "Feature description"
+2. Create a sprint: /sdlc:sprint-create "Sprint 1"
+3. View tasks: /sdlc:task-list
 ```
 
 ## Arguments
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--reset` | Clear existing .sdlc and reinitialize | false |
-| `--minimal` | Create minimal structure (no templates) | false |
+| `name` | Optional project name | Folder name |
 
 ## Examples
 
 ```
-/sdlc:init                    # Standard initialization
-/sdlc:init --reset            # Reset and reinitialize
-/sdlc:init --minimal          # Minimal structure only
+/sdlc:init                    # Initialize with default name
+/sdlc:init "My App"          # Initialize with custom name
 ```
 
 ## Notes
 
-- This command only creates the structure; it does not scan the codebase
-- Run `/sdlc:scan` after initialization to generate artifacts
-- Templates can be customized in `.sdlc/templates/` after init
+- All data is stored in user-level SQLite database (`~/.a-sdlc/data.db`)
+- No files are created in the repository (except optional artifacts)
+- Data persists across Claude Code sessions

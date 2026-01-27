@@ -2,35 +2,42 @@
 
 ## Purpose
 
-AI-assisted revision of existing PRDs through section-by-section review with intelligent suggestions.
+Update an existing Product Requirements Document through section-by-section review.
 
 ## Arguments
 
 - **prd_id**: ID (slug) of PRD to update (e.g., "feature-auth")
 - **--section, -s**: Focus on specific section only (optional)
-- **--fix**: Quick fix mode for typos and formatting (auto-patch bump)
-- **--version, -v**: Specify version bump type: patch, minor, or major (optional)
-- **--push**: Push to Confluence after update (optional)
+- **--status**: Update PRD status: draft, ready, split, completed (optional)
 
 ## Execution Steps
 
-### 1. Load PRD and Context
+### 1. Load PRD from Database
 
-- Read `.sdlc/prds/{prd_id}.md`
-- Load `.sdlc/prds/.metadata.json` for current version
-- Read project artifacts for context (if available):
-  - `.sdlc/artifacts/architecture.md`
-  - `.sdlc/artifacts/data-model.md`
-  - `.sdlc/artifacts/key-workflows.md`
+```
+mcp__asdlc__get_prd(prd_id="<prd_id>")
+```
 
-### 2. Parse PRD Sections
+Returns:
+```json
+{
+  "id": "feature-auth",
+  "title": "User Authentication System",
+  "content": "# User Authentication System\n\n## Overview\n...",
+  "status": "draft",
+  "sprint_id": null,
+  "created_at": "2025-01-20T10:00:00Z",
+  "updated_at": "2025-01-22T15:30:00Z"
+}
+```
 
-Extract sections from markdown:
+### 2. Display Current Content
+
+Parse and display the PRD content by sections:
 - Overview
 - Problem Statement
 - Goals
 - Affected Components
-- Data Model Changes
 - Functional Requirements
 - Non-Functional Requirements
 - User Stories
@@ -40,9 +47,8 @@ Extract sections from markdown:
 
 ### 3. Section-by-Section Review
 
-For each section (or --section if specified):
+For each section (or `--section` if specified):
 
-**Display current content:**
 ```
 ━━━ Section: Goals ━━━
 
@@ -50,69 +56,42 @@ Current content:
 - Enable OAuth authentication
 - Support Google and GitHub
 
-🤖 AI Analysis:
-⚠ Missing quantitative metrics
-⚠ No security requirements
-
 Action? [keep/edit/skip]
 ```
 
-**If edit selected:**
-- Opens text editor with current content
-- User makes changes
-- System tracks modified sections
+If edit selected:
+- Collect new content from user
+- Track modified sections
 
-**AI Suggestion Phase** (Phase 3 enhancement):
-```
-🤖 Suggested improvements:
-1. Add: "Login completes in <2 seconds"
-2. Add: "OAuth tokens encrypted at rest"
-3. Add: "99.9% uptime SLA"
-
-Apply AI suggestions? [yes/custom/no]
-```
-
-### 4. Version Bump Detection
-
-Analyze changes and suggest bump:
+### 4. Save Updates to Database
 
 ```
-🔢 Version Bump Recommendation
-
-Current: 1.0.0
-Change type: Content updates
-Suggested: MINOR → 1.1.0
-
-Confirm bump type? [patch/minor/major]
+mcp__asdlc__update_prd(
+    prd_id="<prd_id>",
+    content="<updated_markdown_content>"
+)
 ```
 
-**Version Bump Rules**:
-- **PATCH** (x.y.Z): Typo fixes, formatting, metadata updates
-- **MINOR** (x.Y.0): Content updates, requirement clarifications, added details
-- **MAJOR** (X.0.0): Structural changes, scope modifications, component additions/removals
+Or update status only:
+```
+mcp__asdlc__update_prd(
+    prd_id="<prd_id>",
+    status="ready"
+)
+```
 
-### 5. Save and Update Metadata
-
-- Update PRD content
-- Bump version
-- Update timestamp
-- Append to update_history
-- Save to `.sdlc/prds/{prd_id}.md`
-- Update `.sdlc/prds/.metadata.json`
-
-### 6. Display Summary
+### 5. Display Summary
 
 ```
-✅ PRD updated: .sdlc/prds/feature-auth.md
+✅ PRD updated: feature-auth
 
 📊 Changes:
-- Version: 1.0.0 → 1.1.0
 - Sections modified: 2
-- Change type: Minor update
+- Status: draft
 
 🔗 Next steps:
-- View: a-sdlc prd show feature-auth
-- Push to Confluence: a-sdlc prd push feature-auth
+- View PRD: /sdlc:prd-list
+- Split into tasks: /sdlc:prd-split "feature-auth"
 ```
 
 ## Output Examples
@@ -121,8 +100,7 @@ Confirm bump type? [patch/minor/major]
 ```
 User: /sdlc:prd-update "feature-auth"
 
-Updating PRD: User Authentication System
-Current version: 1.0.0
+Loading PRD: feature-auth...
 
 ━━━ Section: Goals ━━━
 Current content:
@@ -130,31 +108,21 @@ Current content:
 
 Action? [keep/edit/skip] edit
 
-[Opens editor for changes]
+Enter new content (end with empty line):
+> - Enable OAuth authentication
+> - Support Google and GitHub
+> - Login completes in <2 seconds
+>
 
 ✓ Updated Goals
 
 ━━━ Section: Requirements ━━━
 ...
 
-🔢 Version Bump Recommendation
-Current: 1.0.0
-Suggested: MINOR → 1.1.0
-
-Confirm bump type? [patch/minor/major] minor
-
-Brief summary of changes: Added quantitative goals and security requirements
-
-✅ PRD updated: .sdlc/prds/feature-auth.md
+✅ PRD updated: feature-auth
 
 📊 Changes:
-- Version: 1.0.0 → 1.1.0
 - Sections modified: 2
-- Change type: Minor
-
-🔗 Next steps:
-- View: a-sdlc prd show feature-auth
-- Push: a-sdlc prd push feature-auth
 ```
 
 **Update specific section:**
@@ -167,50 +135,31 @@ Only updating section: Goals
 [Section-specific update workflow]
 
 ✅ PRD updated
-Version: 1.0.0 → 1.0.1 (patch)
 ```
 
-**Quick fix mode:**
+**Update status only:**
 ```
-User: /sdlc:prd-update "feature-auth" --fix
+User: /sdlc:prd-update "feature-auth" --status ready
 
-Quick fix mode: Auto-detecting issues...
-
-Enter your fixes (or press Enter to skip):
-Changes: Fixed typos in Requirements section
-
-✅ PRD updated
-Version: 1.0.0 → 1.0.1 (patch)
-```
-
-**With Confluence push:**
-```
-User: /sdlc:prd-update "feature-auth" --push
-
-[Update workflow...]
-
-✅ PRD updated locally
-Pushing to Confluence...
-✓ Pushed to Confluence
-  URL: https://your-workspace.atlassian.net/wiki/spaces/...
+✅ PRD status updated: draft → ready
 ```
 
 ## Error Handling
 
 **PRD Not Found:**
 ```
-[red]PRD not found: feature-auth[/red]
+❌ PRD not found: feature-auth
 
 Available PRDs:
   - feature-dashboard
   - model-downgrade
 
-Run: a-sdlc prd list
+Run: /sdlc:prd-list
 ```
 
 **Section Not Found:**
 ```
-[red]Section not found: Invalid[/red]
+❌ Section not found: Invalid
 
 Available sections:
   - Overview
@@ -219,52 +168,26 @@ Available sections:
   ...
 ```
 
-**Confluence Not Configured:**
-```
-✅ PRD updated locally
+## MCP Tools Used
 
-[yellow]Confluence push failed: Plugin not configured[/yellow]
-PRD updated locally. Push manually with:
-  a-sdlc prd push feature-auth
-```
+| Tool | Purpose |
+|------|---------|
+| `mcp__asdlc__get_prd` | Load PRD content |
+| `mcp__asdlc__update_prd` | Save PRD updates |
+| `mcp__asdlc__list_prds` | Show available PRDs (for errors) |
+
+## PRD Status Values
+
+| Status | Description |
+|--------|-------------|
+| `draft` | Initial creation, still being refined |
+| `ready` | Approved and ready for task breakdown |
+| `split` | Tasks have been generated from this PRD |
+| `completed` | All tasks done, PRD fully implemented |
 
 ## Notes
 
-- Changes are local-first (not auto-pushed to Confluence)
-- Use `a-sdlc prd push {id}` or `--push` flag to sync after update
-- Version history tracked in `.metadata.json`
-- AI suggestions enhance but don't replace user judgment (Phase 3)
-- Quick fix mode is best for typos and formatting corrections
-- Section-specific updates allow focused revisions
-- Update history preserved for audit trail
-
-## Version History Format
-
-Update history is stored in `.sdlc/prds/.metadata.json`:
-
-```json
-{
-  "feature-auth": {
-    "title": "User Authentication System",
-    "version": "1.2.0",
-    "created_at": "2025-01-20T10:00:00",
-    "updated_at": "2025-01-22T15:30:00",
-    "update_history": [
-      {
-        "version": "1.1.0",
-        "timestamp": "2025-01-21T14:00:00",
-        "change_type": "minor",
-        "sections_modified": ["Goals", "Acceptance Criteria"],
-        "summary": "Added quantitative goals"
-      },
-      {
-        "version": "1.2.0",
-        "timestamp": "2025-01-22T15:30:00",
-        "change_type": "minor",
-        "sections_modified": ["Data Model Changes"],
-        "summary": "Added user roles table"
-      }
-    ]
-  }
-}
-```
+- PRD content is stored as markdown in the database
+- Updates preserve existing structure and metadata
+- Status transitions: draft → ready → split → completed
+- Use `/sdlc:prd-split` after marking PRD as ready

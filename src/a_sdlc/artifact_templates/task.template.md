@@ -5,6 +5,7 @@
 **Requirement:** {{REQUIREMENT_ID}}
 **Component:** {{COMPONENT}}
 **Dependencies:** {{DEPENDENCIES}}
+{{#PRD_REF}}**PRD Reference:** {{PRD_REF}}{{/PRD_REF}}
 
 ## Goal
 
@@ -68,10 +69,15 @@
 
 ## Scope Constraint
 
+{{#SCOPE_CONSTRAINT}}
+{{SCOPE_CONSTRAINT}}
+{{/SCOPE_CONSTRAINT}}
+{{^SCOPE_CONSTRAINT}}
 Implement only the changes described above. Do not:
 - Modify unrelated components
 - Add features not in requirements
 - Refactor existing code unless necessary
+{{/SCOPE_CONSTRAINT}}
 
 ---
 

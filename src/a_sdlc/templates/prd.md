@@ -25,19 +25,53 @@ Example:
 ## Quick Start
 
 1. **Create PRD**: `/sdlc:prd-generate "your feature description"`
-2. **View PRDs**: `/sdlc:prd-list`
-3. **Generate tasks**: `/sdlc:prd-split "<prd-id>"`
-4. **Update PRD**: `/sdlc:prd-update "<prd-id>"`
+2. **Assign to Sprint**: `mcp__asdlc__add_prd_to_sprint("SPRINT-01", "feature-auth")`
+3. **View PRDs**: `/sdlc:prd-list`
+4. **Generate tasks**: `/sdlc:prd-split "<prd-id>"`
+
+## Sprint Integration
+
+PRDs can optionally be assigned to a sprint:
+- **Backlog PRDs**: No sprint assigned (sprint_id = null)
+- **Sprint PRDs**: Assigned to a sprint for execution
+
+When a PRD is in a sprint, all its tasks are considered part of that sprint.
+
+### Managing Sprint Assignment
+
+```
+# Assign PRD to sprint
+mcp__asdlc__add_prd_to_sprint("SPRINT-01", "feature-auth")
+
+# Remove from sprint (move to backlog)
+mcp__asdlc__remove_prd_from_sprint("feature-auth")
+
+# List PRDs in a sprint
+mcp__asdlc__get_sprint_prds("SPRINT-01")
+
+# List backlog PRDs
+mcp__asdlc__list_prds(sprint_id="")
+```
+
+## Hierarchy
+
+```
+Sprint (optional)
+  └── PRD (can be backlog)
+        └── Task (inherits sprint from PRD)
+```
 
 ## Storage
 
-PRDs are stored in `.sdlc/prds/` directory:
-- `{slug}.md` - PRD content
-- `.metadata.json` - Version and history tracking
+PRDs are stored in the database with:
+- `id`: Slug identifier
+- `title`: Display name
+- `content`: Markdown content
+- `status`: draft, ready, split, completed
+- `sprint_id`: Optional sprint assignment
 
 ## Notes
 
-- PRDs are stored in `.sdlc/prds/` directory (auto-created when needed)
-- Metadata is tracked in `.sdlc/prds/.metadata.json`
-- Cross-referencing with artifacts requires artifacts to exist (run `/sdlc:scan` first)
-- PRD generation uses interactive questions to guide creation
+- PRDs can exist without a sprint (backlog)
+- Tasks inherit their sprint from their parent PRD
+- External imports (Linear/Jira) create PRDs, not tasks

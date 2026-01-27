@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Create a Product Requirements Document interactively from a brief description, using existing project artifacts for context and asking clarifying questions to guide PRD creation.
+Create a Product Requirements Document interactively from a brief description. Uses clarifying questions to build comprehensive requirements.
 
 ## Arguments
 
-- **description**: Brief statement of the proposed change or feature (e.g., "Add OAuth authentication", "Migrate to PostgreSQL", "Change default model from GPT-5 to GPT-4")
+- **description**: Brief statement of the proposed change or feature (e.g., "Add OAuth authentication", "Migrate to PostgreSQL")
 
 ## Execution Steps
 
@@ -14,35 +14,22 @@ Create a Product Requirements Document interactively from a brief description, u
 
 - Extract key entities and change type
 - Identify potential affected areas
+- Determine scope of the change
 
-### 2. Load Project Artifacts
-
-- Read `.sdlc/artifacts/architecture.md` (understand components)
-- Read `.sdlc/artifacts/data-model.md` (understand data dependencies)
-- Read `.sdlc/artifacts/key-workflows.md` (understand user flows)
-- Read `.sdlc/artifacts/codebase-summary.md` (understand tech stack)
-
-### 3. Analyze Context
-
-- Map description entities to components in architecture.md
-- Identify data model impacts from data-model.md
-- Find affected workflows in key-workflows.md
-- Determine technical constraints from codebase-summary.md
-
-### 4. Ask Clarifying Questions (Interactive)
+### 2. Ask Clarifying Questions (Interactive)
 
 **Problem Context:**
 - "What problem does this solve?"
 - "Why is this change needed now?"
 - "What's the impact if we don't make this change?"
 
-**Scope Questions (artifact-driven):**
-- "This affects [X components from architecture.md]. Should we change all or specific ones?"
-- "This impacts [Y workflows from key-workflows.md]. Which are in scope?"
-- "Will this require changes to [Z entities from data-model.md]?"
+**Scope Questions:**
+- "What components will be affected?"
+- "Which user workflows are impacted?"
+- "Will this require data model changes?"
 
 **Requirements Discovery:**
-- "What are the quantitative goals?" (cost reduction %, latency targets, uptime requirements)
+- "What are the quantitative goals?" (cost reduction %, latency targets, uptime)
 - "What quality standards must be met?"
 - "Is backward compatibility required?"
 - "What's the target timeline?"
@@ -53,19 +40,17 @@ Create a Product Requirements Document interactively from a brief description, u
 - "What's the rollback plan?"
 
 **Boundaries:**
-- "What's explicitly out of scope for this PRD?"
+- "What's explicitly out of scope?"
 - "What dependencies must be resolved first?"
 
-### 5. Generate PRD Document
+### 3. Generate PRD Content
 
-Create `.sdlc/prds/{slug}.md` with structure:
+Build markdown content with structure:
 
 ```markdown
 # {Title from description}
 
-**Version**: 1.0.0
-**Status**: Draft
-**Author**: {from git config}
+**Status**: draft
 **Created**: {timestamp}
 
 ## Overview
@@ -78,76 +63,74 @@ Create `.sdlc/prds/{slug}.md` with structure:
 {Derived from requirements discovery}
 
 ## Affected Components
-{Cross-referenced from architecture.md}
+{From scope questions}
 - Component A: {impact description}
 - Component B: {impact description}
-
-## Data Model Changes
-{Cross-referenced from data-model.md}
-- Entity X: {changes needed}
 
 ## Functional Requirements
 - FR-001: {requirement from answers}
 - FR-002: {requirement from answers}
-[Generated from question responses]
 
 ## Non-Functional Requirements
 - NFR-001: {requirement from answers}
 - NFR-002: {requirement from answers}
-[Performance, cost, reliability from quantitative goals]
 
 ## User Stories
-{Generated from affected workflows}
 - As a {user type}, I want {capability}, so that {benefit}
 
 ## Acceptance Criteria
 - AC-001: {criterion from answers}
 - AC-002: {criterion from answers}
-[From validation questions]
 
 ## Out of Scope
 {From boundaries questions}
 
 ## Open Questions
 {Unresolved items from interactive session}
-
-## References
-- Architecture: .sdlc/artifacts/architecture.md
-- Data Model: .sdlc/artifacts/data-model.md
-- Workflows: .sdlc/artifacts/key-workflows.md
 ```
 
-### 6. Update Metadata
+### 4. Save PRD to Database
 
-Add entry to `.sdlc/prds/.metadata.json`:
+```
+mcp__asdlc__create_prd(
+    prd_id="<slug>",
+    title="<title>",
+    content="<markdown_content>"
+)
+```
+
+The slug is generated from the title (lowercase, hyphens).
+
+Returns:
 ```json
 {
-  "id": "{slug}",
-  "title": "{title}",
-  "version": "1.0.0",
-  "created_at": "{timestamp}",
-  "updated_at": "{timestamp}",
-  "external_id": null,
-  "external_url": null
+  "status": "created",
+  "message": "PRD created: feature-auth",
+  "prd": {
+    "id": "feature-auth",
+    "title": "User Authentication System",
+    "status": "draft",
+    "sprint_id": null,
+    "created_at": "2025-01-26T12:00:00Z"
+  }
 }
 ```
 
-### 7. Display Summary
+### 5. Display Summary
 
 ```
-✅ PRD created: .sdlc/prds/{slug}.md
+✅ PRD created: feature-auth
 
 📊 Summary:
-- X functional requirements
-- Y non-functional requirements
-- Z acceptance criteria
-- N affected components (from architecture.md)
-- M workflow impacts (from key-workflows.md)
+- 4 functional requirements
+- 3 non-functional requirements
+- 3 acceptance criteria
+- 2 affected components
 
 🔗 Next steps:
-- List all PRDs: /sdlc:prd-list
-- View PRD: a-sdlc prd show {slug}
-- Push to Confluence: a-sdlc prd push {slug}.md
+- View PRD: /sdlc:prd-list
+- Mark ready: /sdlc:prd-update "feature-auth" --status ready
+- Split into tasks: /sdlc:prd-split "feature-auth"
 ```
 
 ## Example Session
@@ -159,17 +142,7 @@ Add entry to `.sdlc/prds/.metadata.json`:
 
 **Claude's Response:**
 ```
-📂 Loading project artifacts...
-   ✓ architecture.md (3 components found)
-   ✓ data-model.md (2 entities found)
-   ✓ key-workflows.md (1 workflow found)
-
-🔍 Analysis:
-   This change likely affects:
-   - inference-service (from architecture.md)
-   - api-gateway (from architecture.md)
-   - model-config (from architecture.md)
-   - llm-workflow (from key-workflows.md)
+📝 Creating PRD for: Change default model from GPT-5 to GPT-4
 
 ❓ Let me ask some clarifying questions:
 
@@ -179,42 +152,56 @@ Add entry to `.sdlc/prds/.metadata.json`:
 2. Why change from GPT-5 to GPT-4 specifically?
    > GPT-5 pricing is 3x GPT-4, quality difference minimal for our use case
 
-3. Should this affect all 3 components (inference-service, api-gateway, model-config)?
-   > Yes, update all to use GPT-4-turbo as default
+3. What components will be affected?
+   > inference-service, api-gateway, model-config
 
-4. Will llm-workflow need updates?
-   > No changes to workflow logic, just model reference
-
-5. Target cost reduction percentage?
+4. Target cost reduction percentage?
    > 65% cost reduction
 
-6. Acceptable latency increase?
+5. Acceptable latency increase?
    > Max 15% slower than GPT-5 baseline
 
-7. Backward compatibility needed?
+6. Backward compatibility needed?
    > Yes, API should accept model parameter for overrides
 
-8. How will success be measured?
+7. How will success be measured?
    > Cost metrics dashboard + latency monitoring
 
-9. What's out of scope?
+8. What's out of scope?
    > Model fine-tuning, prompt optimization
 
-✅ PRD created: .sdlc/prds/model-downgrade-gpt4.md
+✅ PRD created: model-downgrade-gpt4
 
 📊 Summary:
-   - 4 functional requirements
-   - 4 non-functional requirements
-   - 3 acceptance criteria
-   - 3 affected components (from architecture.md)
-   - 1 workflow reference (from key-workflows.md)
+- 4 functional requirements
+- 4 non-functional requirements
+- 3 acceptance criteria
+- 3 affected components
 
-🔗 Next: /sdlc:prd-list
+🔗 Next steps:
+- View: /sdlc:prd-list
+- Split: /sdlc:prd-split "model-downgrade-gpt4"
 ```
+
+## MCP Tools Used
+
+| Tool | Purpose |
+|------|---------|
+| `mcp__asdlc__create_prd` | Save new PRD to database |
+| `mcp__asdlc__list_prds` | Check for duplicate IDs |
+
+## PRD Status Flow
+
+```
+draft (initial) → ready (approved) → split (tasks created) → completed (done)
+```
+
+New PRDs are created with status `draft`. Use `/sdlc:prd-update` to change status.
 
 ## Notes
 
-- Questions adapt based on available artifacts
-- If artifacts missing, ask more detailed questions
-- Cross-references enhance PRD quality and traceability
-- Generated PRD is a draft - you can edit the file directly in `.sdlc/prds/`
+- PRD ID (slug) is auto-generated from title
+- All PRDs start in `draft` status
+- Questions adapt based on the type of change
+- Generated PRD can be edited with `/sdlc:prd-update`
+- PRDs can optionally be assigned to a sprint after creation

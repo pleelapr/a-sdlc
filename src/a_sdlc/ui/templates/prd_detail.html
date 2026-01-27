@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}{{ prd.id }} - {{ prd.title }}{% endblock %}
+
+{% block content %}
+<div style="margin-top: 1rem;">
+    <a href="/prds" style="color: var(--text-muted);">← Back to PRDs</a>
+</div>
+
+<div class="card" style="margin-top: 1rem;">
+    <div class="card-header">
+        <h1 style="margin: 0;">{{ prd.title }}</h1>
+        <select id="status-select" onchange="updateStatus(this.value)" style="
+            padding: 0.4rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.875rem;
+            cursor: pointer;
+        ">
+            <option value="draft" {% if prd.status == 'draft' %}selected{% endif %}>Draft</option>
+            <option value="ready" {% if prd.status == 'ready' %}selected{% endif %}>Ready</option>
+            <option value="split" {% if prd.status == 'split' %}selected{% endif %}>Split</option>
+            <option value="completed" {% if prd.status == 'completed' %}selected{% endif %}>Completed</option>
+        </select>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-top: 1rem;">
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">ID</div>
+            <div>{{ prd.id }}</div>
+        </div>
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">Sprint</div>
+            <div>
+                <select id="sprint-select" onchange="updateSprint(this.value)" style="
+                    padding: 0.4rem 0.75rem;
+                    border: 1px solid var(--border);
+                    border-radius: 6px;
+                    background: var(--bg);
+                    color: var(--text);
+                    font-size: 0.875rem;
+                    cursor: pointer;
+                    max-width: 180px;
+                ">
+                    <option value="" {% if not prd.sprint_id %}selected{% endif %}>Backlog (No Sprint)</option>
+                    {% for sprint in sprints %}
+                    <option value="{{ sprint.id }}" {% if prd.sprint_id == sprint.id %}selected{% endif %}>{{ sprint.title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">Source</div>
+            <div>{{ prd.source or 'Manual' }}</div>
+        </div>
+        <div>
+            <div style="color: var(--text-muted); font-size: 0.875rem;">Updated</div>
+            <div>{{ prd.updated_at[:10] if prd.updated_at else '-' }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3 style="margin: 0;">Content</h3>
+        <div id="content-actions">
+            <button id="edit-btn" class="btn" onclick="toggleEdit()">Edit</button>
+        </div>
+    </div>
+
+    <!-- View Mode: Rendered Markdown -->
+    <div id="content-view" class="markdown" style="margin-top: 1rem;"></div>
+
+    <!-- Edit Mode: Textarea -->
+    <div id="content-edit" style="display: none; margin-top: 1rem;">
+        <textarea id="content-textarea" style="
+            width: 100%;
+            min-height: 400px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.875rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            resize: vertical;
+        ">{{ prd.content or '' }}</textarea>
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="saveContent()">Save</button>
+            <button class="btn" onclick="cancelEdit()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Store original content for cancel
+    let originalContent = {{ prd.content | tojson | safe if prd.content else '""' }};
+    let isEditing = false;
+
+    async function updateSprint(sprintId) {
+        try {
+            const response = await fetch('/prds/{{ prd.id }}/sprint', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sprint_id: sprintId })
+            });
+
+            if (!response.ok) {
+                alert('Failed to update sprint');
+            }
+        } catch (error) {
+            console.error('Update sprint error:', error);
+            alert('Failed to update sprint');
+        }
+    }
+
+    async function updateStatus(status) {
+        try {
+            const response = await fetch('/prds/{{ prd.id }}/status', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: status })
+            });
+
+            if (!response.ok) {
+                alert('Failed to update status');
+            }
+        } catch (error) {
+            console.error('Update status error:', error);
+            alert('Failed to update status');
+        }
+    }
+
+    // Render markdown on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        renderMarkdown(originalContent);
+    });
+
+    function renderMarkdown(content) {
+        const viewEl = document.getElementById('content-view');
+        if (content) {
+            viewEl.innerHTML = marked.parse(content);
+        } else {
+            viewEl.innerHTML = '<p style="color: var(--text-muted);">No content yet. Click Edit to add content.</p>';
+        }
+    }
+
+    function toggleEdit() {
+        isEditing = !isEditing;
+        document.getElementById('content-view').style.display = isEditing ? 'none' : 'block';
+        document.getElementById('content-edit').style.display = isEditing ? 'block' : 'none';
+        document.getElementById('edit-btn').textContent = isEditing ? 'View' : 'Edit';
+
+        if (isEditing) {
+            document.getElementById('content-textarea').focus();
+        }
+    }
+
+    function cancelEdit() {
+        document.getElementById('content-textarea').value = originalContent;
+        toggleEdit();
+    }
+
+    async function saveContent() {
+        const content = document.getElementById('content-textarea').value;
+
+        try {
+            const response = await fetch('/prds/{{ prd.id }}/content', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: content })
+            });
+
+            if (response.ok) {
+                originalContent = content;
+                renderMarkdown(content);
+                toggleEdit();
+            } else {
+                alert('Failed to save content');
+            }
+        } catch (error) {
+            console.error('Save error:', error);
+            alert('Failed to save content');
+        }
+    }
+</script>
+{% endblock %}

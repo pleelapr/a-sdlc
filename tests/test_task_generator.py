@@ -117,21 +117,35 @@ class TestComponentExtraction:
 class TestTaskValidation:
     """Test task structure validation."""
 
+    def _create_complete_task(self, **overrides):
+        """Helper to create a complete task with all required fields."""
+        from a_sdlc.plugins.base import ImplementationStep
+
+        defaults = {
+            "id": "TASK-001",
+            "title": "Implement OAuth",
+            "description": "Add OAuth authentication",
+            "goal": "Enable third-party authentication via OAuth providers",
+            "status": TaskStatus.PENDING,
+            "priority": TaskPriority.HIGH,
+            "requirement_id": "FR-001",
+            "component": "auth-service",
+            "dependencies": [],
+            "files_to_modify": ["src/auth/oauth.py"],
+            "implementation_steps": [
+                ImplementationStep(title="Step 1", description="Do step 1"),
+                ImplementationStep(title="Step 2", description="Do step 2"),
+            ],
+            "success_criteria": ["Criterion 1"],
+            "deliverables": ["OAuth handler implementation"],
+            "exclusions": ["UI changes"],
+        }
+        defaults.update(overrides)
+        return Task(**defaults)
+
     def test_valid_task(self):
         """Test validation passes for complete task."""
-        task = Task(
-            id="TASK-001",
-            title="Implement OAuth",
-            description="Add OAuth authentication",
-            status=TaskStatus.PENDING,
-            priority=TaskPriority.HIGH,
-            requirement_id="FR-001",
-            component="auth-service",
-            dependencies=[],
-            files_to_modify=["src/auth/oauth.py"],
-            implementation_steps=["Step 1", "Step 2"],
-            success_criteria=["Criterion 1"],
-        )
+        task = self._create_complete_task()
 
         errors = validate_task_structure(task)
 
@@ -139,105 +153,84 @@ class TestTaskValidation:
 
     def test_missing_title(self):
         """Test validation fails for missing title."""
-        task = Task(
-            id="TASK-001",
-            title="",
-            description="Description",
-            requirement_id="FR-001",
-            component="auth-service",
-            implementation_steps=["Step"],
-            success_criteria=["Criterion"],
-        )
+        task = self._create_complete_task(title="")
 
         errors = validate_task_structure(task)
 
         assert len(errors) > 0
-        assert "title" in errors[0].lower()
+        assert any("title" in e.lower() for e in errors)
 
     def test_missing_description(self):
         """Test validation fails for missing description."""
-        task = Task(
-            id="TASK-001",
-            title="Title",
-            description="",
-            requirement_id="FR-001",
-            component="auth-service",
-            implementation_steps=["Step"],
-            success_criteria=["Criterion"],
-        )
+        task = self._create_complete_task(description="")
 
         errors = validate_task_structure(task)
 
         assert len(errors) > 0
-        assert "description" in errors[0].lower()
+        assert any("description" in e.lower() for e in errors)
+
+    def test_missing_goal(self):
+        """Test validation fails for missing goal."""
+        task = self._create_complete_task(goal="")
+
+        errors = validate_task_structure(task)
+
+        assert len(errors) > 0
+        assert any("goal" in e.lower() for e in errors)
 
     def test_missing_component(self):
         """Test validation fails for missing component."""
-        task = Task(
-            id="TASK-001",
-            title="Title",
-            description="Description",
-            requirement_id="FR-001",
-            component="",
-            implementation_steps=["Step"],
-            success_criteria=["Criterion"],
-        )
+        task = self._create_complete_task(component="")
 
         errors = validate_task_structure(task)
 
         assert len(errors) > 0
-        assert "component" in errors[0].lower()
+        assert any("component" in e.lower() for e in errors)
 
     def test_missing_requirement_id(self):
         """Test validation fails for missing requirement_id."""
-        task = Task(
-            id="TASK-001",
-            title="Title",
-            description="Description",
-            requirement_id="",
-            component="auth-service",
-            implementation_steps=["Step"],
-            success_criteria=["Criterion"],
-        )
+        task = self._create_complete_task(requirement_id="")
 
         errors = validate_task_structure(task)
 
         assert len(errors) > 0
-        assert "requirement" in errors[0].lower()
+        assert any("requirement" in e.lower() for e in errors)
 
     def test_missing_implementation_steps(self):
         """Test validation fails for missing implementation steps."""
-        task = Task(
-            id="TASK-001",
-            title="Title",
-            description="Description",
-            requirement_id="FR-001",
-            component="auth-service",
-            implementation_steps=[],
-            success_criteria=["Criterion"],
-        )
+        task = self._create_complete_task(implementation_steps=[])
 
         errors = validate_task_structure(task)
 
         assert len(errors) > 0
-        assert "implementation" in errors[0].lower()
+        assert any("implementation" in e.lower() for e in errors)
 
     def test_missing_success_criteria(self):
         """Test validation fails for missing success criteria."""
-        task = Task(
-            id="TASK-001",
-            title="Title",
-            description="Description",
-            requirement_id="FR-001",
-            component="auth-service",
-            implementation_steps=["Step"],
-            success_criteria=[],
-        )
+        task = self._create_complete_task(success_criteria=[])
 
         errors = validate_task_structure(task)
 
         assert len(errors) > 0
-        assert "success" in errors[0].lower() or "criteria" in errors[0].lower()
+        assert any("success" in e.lower() or "criteria" in e.lower() for e in errors)
+
+    def test_missing_deliverables(self):
+        """Test validation fails for missing deliverables."""
+        task = self._create_complete_task(deliverables=[])
+
+        errors = validate_task_structure(task)
+
+        assert len(errors) > 0
+        assert any("deliverables" in e.lower() for e in errors)
+
+    def test_missing_exclusions(self):
+        """Test validation fails for missing exclusions."""
+        task = self._create_complete_task(exclusions=[])
+
+        errors = validate_task_structure(task)
+
+        assert len(errors) > 0
+        assert any("exclusions" in e.lower() for e in errors)
 
     def test_multiple_validation_errors(self):
         """Test multiple validation errors are reported."""
@@ -253,5 +246,6 @@ class TestTaskValidation:
 
         errors = validate_task_structure(task)
 
-        # Should have multiple errors
-        assert len(errors) >= 4
+        # Should have multiple errors (title, description, goal, component,
+        # requirement_id, implementation_steps, success_criteria, deliverables, exclusions)
+        assert len(errors) >= 6

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}PRDs - {{ project.name }}{% endblock %}
+
+{% block content %}
+<h1 style="margin-top: 1rem;">Product Requirements Documents</h1>
+
+<div class="card">
+    {% if prds %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Sprint</th>
+                <th>Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for prd in prds %}
+            <tr>
+                <td><a href="/prds/{{ prd.id }}">{{ prd.id }}</a></td>
+                <td>{{ prd.title }}</td>
+                <td>
+                    <span class="badge badge-{% if prd.status == 'completed' %}success{% elif prd.status == 'ready' %}success{% elif prd.status == 'split' %}info{% else %}warning{% endif %}">
+                        {{ prd.status }}
+                    </span>
+                </td>
+                <td>{% if prd.sprint_id %}<a href="/sprints/{{ prd.sprint_id }}">{{ prd.sprint_id }}</a>{% else %}<span style="color: var(--text-muted);">Backlog</span>{% endif %}</td>
+                <td>{{ prd.updated_at[:10] if prd.updated_at else '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No PRDs yet</p>
+        <p style="margin-top: 0.5rem; font-size: 0.875rem;">Create one with <code>/sdlc:prd-generate</code> in Claude Code</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

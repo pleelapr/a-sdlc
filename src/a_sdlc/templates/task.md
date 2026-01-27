@@ -1,28 +1,37 @@
 # /sdlc:task - Task Management
 
-Manage implementation tasks derived from requirements.
+Manage implementation tasks derived from PRDs.
+
+## Architecture
+
+```
+Sprint (SPRINT-01)
+  └── PRD (feature-auth)
+        ├── TASK-001
+        ├── TASK-002
+        └── TASK-003
+```
+
+**Key concept**: Tasks belong to PRDs. Tasks inherit sprint membership through their parent PRD. You cannot assign a task directly to a sprint.
 
 ## Available Subcommands
 
 | Command | Description |
 |---------|-------------|
-| `/sdlc:task-split` | Split requirements into tasks |
 | `/sdlc:task-list` | List all tasks |
 | `/sdlc:task-show <id>` | Show task details |
 | `/sdlc:task-start <id>` | Mark task as in-progress |
 | `/sdlc:task-complete <id>` | Mark task as completed |
 | `/sdlc:task-create` | Manually create a task |
-| `/sdlc:task-link <id> <external-id>` | Link to external system |
 
-## Usage
+## Task Statuses
 
-This is a command group. Use one of the subcommands above.
-
-Example:
-```
-/sdlc:task-list --active
-/sdlc:task-start TASK-001
-```
+| Status | Description |
+|--------|-------------|
+| `pending` | Not started |
+| `in_progress` | Currently being worked on |
+| `completed` | Finished |
+| `blocked` | Cannot proceed (use `block_task()` with reason) |
 
 ## Quick Start
 
@@ -31,40 +40,70 @@ Example:
 3. **Start working**: `/sdlc:task-start TASK-001`
 4. **Complete task**: `/sdlc:task-complete TASK-001`
 
-## Configuration
+## MCP Tools
 
-Task behavior is controlled by `.sdlc/config.yaml`:
-
-```yaml
-tasks:
-  id_prefix: "TASK"           # Prefix for task IDs
-  auto_dependencies: true     # Auto-detect dependencies
-
-plugins:
-  tasks:
-    provider: "local"         # local | linear | github
-    linear:
-      team_id: "ENG"
-      sync_on_create: true
-      sync_on_complete: true
-```
-
-## Examples
+### List Tasks
 
 ```
-/sdlc:task-split                     # Create tasks from requirements
-/sdlc:task-list                      # Show all tasks
-/sdlc:task-list --active             # Show only active
-/sdlc:task-show TASK-001             # Show task details
-/sdlc:task-start TASK-001            # Begin working on task
-/sdlc:task-complete TASK-001         # Mark as done
-/sdlc:task-create                    # Manual task creation
-/sdlc:task-link TASK-001 ENG-123     # Link to Linear
+mcp__asdlc__list_tasks()                          # All tasks
+mcp__asdlc__list_tasks(status="pending")          # By status
+mcp__asdlc__list_tasks(prd_id="feature-auth")     # By PRD
 ```
+
+### Get Task Details
+
+```
+mcp__asdlc__get_task(task_id="TASK-001")
+```
+
+### Create Task
+
+```
+mcp__asdlc__create_task(
+    title="Implement login",
+    description="Add OAuth login flow",
+    prd_id="feature-auth",        # Required for sprint inheritance
+    priority="high",              # low, medium, high, critical
+    component="auth-service"
+)
+```
+
+### Update Task Status
+
+```
+mcp__asdlc__start_task(task_id="TASK-001")     # → in_progress
+mcp__asdlc__complete_task(task_id="TASK-001")  # → completed
+mcp__asdlc__block_task(task_id="TASK-001", reason="Waiting for API")
+```
+
+## Sprint Integration
+
+Tasks belong to sprints **through their parent PRD**:
+
+1. Create or get a PRD
+2. Assign PRD to sprint: `mcp__asdlc__add_prd_to_sprint(prd_id="...", sprint_id="...")`
+3. Create tasks with that PRD: `mcp__asdlc__create_task(..., prd_id="...")`
+4. Tasks are now part of the sprint
+
+To list tasks in a sprint, get the sprint's PRDs first:
+```
+mcp__asdlc__get_sprint_prds(sprint_id="SPRINT-01")
+# Then list tasks for each PRD
+mcp__asdlc__list_tasks(prd_id="<prd_id>")
+```
+
+## Storage
+
+All task data is stored in the SQLite database at `~/.a-sdlc/data.db`. No file-based storage is used.
 
 ## Notes
 
-- Tasks are stored as both Markdown (human-readable) and JSON (machine-parseable)
-- Dependencies are checked before starting a task
-- Only one task can be in-progress at a time (enforced)
-- Completed tasks are archived, not deleted
+- Tasks are auto-numbered (TASK-001, TASK-002, etc.)
+- Completing all tasks for a PRD should trigger updating PRD status to "completed"
+- Use `block_task()` with a reason when a task cannot proceed
+- Task priorities: low, medium, high, critical
+
+## Related Commands
+
+- `/sdlc:prd-split` - Generate tasks from a PRD
+- `/sdlc:sprint-run` - Execute sprint tasks in parallel

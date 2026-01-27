@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Tasks - {{ project.name }}{% endblock %}
+
+{% block content %}
+<h1 style="margin-top: 1rem;">Tasks</h1>
+
+<div class="filters">
+    <select onchange="window.location.href='?status=' + this.value + '{% if filter_sprint %}&sprint_id={{ filter_sprint }}{% endif %}'">
+        <option value="">All Status</option>
+        <option value="pending" {% if filter_status == 'pending' %}selected{% endif %}>Pending</option>
+        <option value="in_progress" {% if filter_status == 'in_progress' %}selected{% endif %}>In Progress</option>
+        <option value="completed" {% if filter_status == 'completed' %}selected{% endif %}>Completed</option>
+        <option value="blocked" {% if filter_status == 'blocked' %}selected{% endif %}>Blocked</option>
+    </select>
+    
+    <select onchange="window.location.href='?sprint_id=' + this.value + '{% if filter_status %}&status={{ filter_status }}{% endif %}'">
+        <option value="">All Sprints</option>
+        {% for sprint in sprints %}
+        <option value="{{ sprint.id }}" {% if filter_sprint == sprint.id %}selected{% endif %}>{{ sprint.title }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+<div class="card">
+    {% if tasks %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Component</th>
+                <th>PRD</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in tasks %}
+            <tr>
+                <td><a href="/tasks/{{ task.id }}">{{ task.id }}</a></td>
+                <td>{{ task.title[:50] }}{% if task.title|length > 50 %}...{% endif %}</td>
+                <td>
+                    <span id="status-{{ task.id }}" class="status-{{ task.status }}">
+                        {{ task.status.replace('_', ' ').title() }}
+                    </span>
+                </td>
+                <td><span class="priority-{{ task.priority }}">{{ task.priority.title() }}</span></td>
+                <td>{{ task.component or '-' }}</td>
+                <td>{% if task.prd_id %}<a href="/prds/{{ task.prd_id }}">{{ task.prd_id }}</a>{% else %}-{% endif %}</td>
+                <td>
+                    {% if task.status == 'pending' %}
+                    <button class="btn" 
+                            hx-post="/tasks/{{ task.id }}/status?status=in_progress"
+                            hx-target="#status-{{ task.id }}"
+                            hx-swap="outerHTML">
+                        Start
+                    </button>
+                    {% elif task.status == 'in_progress' %}
+                    <button class="btn btn-primary"
+                            hx-post="/tasks/{{ task.id }}/status?status=completed"
+                            hx-target="#status-{{ task.id }}"
+                            hx-swap="outerHTML">
+                        Complete
+                    </button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No tasks found</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

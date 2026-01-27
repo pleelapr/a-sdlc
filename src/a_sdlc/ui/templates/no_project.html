@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}No Project - a-sdlc{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-top: 2rem; max-width: 600px; margin-left: auto; margin-right: auto; text-align: center;">
+    <h2 style="margin-bottom: 1rem;">No Projects Found</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+        No projects have been initialized yet.
+    </p>
+    <p style="color: var(--text-muted);">
+        To create a project, run in Claude Code:
+    </p>
+    <pre style="text-align: left;">/sdlc:init</pre>
+</div>
+{% endblock %}

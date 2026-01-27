@@ -2,35 +2,91 @@
 
 ## Purpose
 
-Manually create a task without deriving from requirements.
+Create a new task for the current project.
 
-## Interactive Prompts
+## Usage
+
+Use the MCP tool to create a task:
+
+```
+mcp__asdlc__create_task(
+    title="Implement user authentication",
+    description="Add JWT-based authentication to the API",
+    priority="high",
+    component="auth-service",
+    prd_id="feature-auth"  # Optional - task inherits sprint from PRD
+)
+```
+
+## Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `title` | Yes | Task title |
+| `description` | No | Detailed description |
+| `project_id` | No | Project ID (auto-detected) |
+| `prd_id` | No | Link to parent PRD (task inherits sprint from PRD) |
+| `priority` | No | low, medium, high, critical (default: medium) |
+| `component` | No | Component/module name |
+| `data` | No | Additional structured data (JSON) |
+
+## Output
+
+```json
+{
+  "status": "created",
+  "message": "Task created: TASK-001",
+  "task": {
+    "id": "TASK-001",
+    "title": "Implement user authentication",
+    "description": "Add JWT-based authentication to the API",
+    "status": "pending",
+    "priority": "high",
+    "component": "auth-service",
+    "prd_id": "feature-auth",
+    "created_at": "2025-01-26T10:00:00Z"
+  }
+}
+```
+
+## Interactive Mode
+
+When invoked without arguments, prompt for task details:
 
 ```
 Task title: Fix login timeout bug
 Priority [high/medium/low]: high
 Component (optional): auth-service
-Related requirement (optional): FR-001
+PRD (optional): feature-auth
 Description:
 > The login process times out after 5 seconds...
-
-Files to modify (comma-separated):
-> src/auth/login.py, src/auth/config.py
-
-Success criteria (one per line, empty to finish):
-> Login completes within 30 seconds
-> Timeout is configurable
->
 ```
 
-## Output
+## Sprint via PRD
+
+Tasks inherit sprint membership from their parent PRD:
+1. Set task's `prd_id` to link to a PRD
+2. If the PRD is assigned to a sprint, the task is in that sprint
+3. To change a task's sprint, either:
+   - Move the task to a different PRD
+   - Change the PRD's sprint assignment
+
+## Examples
 
 ```
-Task Created: TASK-012
+# Create task interactively
+/sdlc:task-create
 
-Title: Fix login timeout bug
-Priority: high
-Component: auth-service
+# Create with PRD link (inherits sprint from PRD)
+/sdlc:task-create --title "Implement FR-001" --prd feature-auth
 
-Location: .sdlc/tasks/active/TASK-012.md
+# Create standalone task (no PRD, no sprint)
+/sdlc:task-create --title "Fix bug" --priority high
 ```
+
+## Related Commands
+
+- `/sdlc:task-list` - View all tasks
+- `/sdlc:task-start` - Start working on a task
+- `/sdlc:task-complete` - Mark task as done
+- `/sdlc:prd-split` - Generate tasks from PRD automatically

@@ -40,6 +40,11 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
+    "mcp>=1.0.0",
+    # UI dependencies (for web dashboard)
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "jinja2>=3.0.0",
 ]
 
 [project.optional-dependencies]

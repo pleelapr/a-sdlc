@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Sprints - {{ project.name }}{% endblock %}
+
+{% block content %}
+<h1 style="margin-top: 1rem;">Sprints</h1>
+
+<div class="card">
+    {% if sprints %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sprint in sprints %}
+            <tr>
+                <td><a href="/sprints/{{ sprint.id }}">{{ sprint.id }}</a></td>
+                <td>{{ sprint.title }}</td>
+                <td><span class="status-{{ sprint.status }}">{{ sprint.status.title() }}</span></td>
+                <td>
+                    {% if sprint.task_count > 0 %}
+                    {{ sprint.completed_count }}/{{ sprint.task_count }} tasks
+                    {% else %}
+                    No tasks
+                    {% endif %}
+                </td>
+                <td>{{ sprint.created_at[:10] if sprint.created_at else '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No sprints yet</p>
+        <p style="margin-top: 0.5rem; font-size: 0.875rem;">Create one with <code>/sdlc:sprint-create</code> in Claude Code</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
