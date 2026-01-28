@@ -7,13 +7,18 @@ PRDs, tasks, and sprints.
 Usage:
     a-sdlc ui              # Start web server on http://localhost:3847
     a-sdlc ui --port 8000  # Custom port
+    a-sdlc ui stop         # Stop running UI server
 """
 
+import atexit
+import os
+import signal
+import sys
 from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI, Form, Request
     from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.templating import Jinja2Templates
@@ -25,6 +30,101 @@ except ImportError:
     )
 
 from a_sdlc.server.database import get_db
+
+# PID file location
+PID_FILE = Path.home() / ".a-sdlc" / "ui.pid"
+
+
+def _get_pid() -> int | None:
+    """Read PID from file if it exists."""
+    if PID_FILE.exists():
+        try:
+            return int(PID_FILE.read_text().strip())
+        except (ValueError, OSError):
+            return None
+    return None
+
+
+def _is_process_running(pid: int) -> bool:
+    """Check if a process with the given PID is running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _write_pid() -> None:
+    """Write current PID to file."""
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()))
+
+
+def _remove_pid() -> None:
+    """Remove PID file."""
+    try:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+    except OSError:
+        pass
+
+
+def _cleanup_stale_pid() -> bool:
+    """Check for stale PID and kill if necessary. Returns True if cleanup was needed."""
+    pid = _get_pid()
+    if pid is None:
+        return False
+
+    if _is_process_running(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            # Give it a moment to shut down
+            import time
+            time.sleep(0.5)
+
+            # Force kill if still running
+            if _is_process_running(pid):
+                os.kill(pid, signal.SIGKILL)
+
+            _remove_pid()
+            return True
+        except (OSError, ProcessLookupError):
+            pass
+
+    # PID file exists but process is gone - clean up
+    _remove_pid()
+    return False
+
+
+def stop_server() -> bool:
+    """Stop the running UI server. Returns True if a server was stopped."""
+    pid = _get_pid()
+    if pid is None:
+        return False
+
+    if not _is_process_running(pid):
+        _remove_pid()
+        return False
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        import time
+        time.sleep(0.5)
+
+        if _is_process_running(pid):
+            os.kill(pid, signal.SIGKILL)
+
+        _remove_pid()
+        return True
+    except (OSError, ProcessLookupError):
+        _remove_pid()
+        return False
+
+
+def _signal_handler(signum: int, frame: Any) -> None:
+    """Handle shutdown signals gracefully."""
+    _remove_pid()
+    sys.exit(0)
 
 # Get templates directory
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -255,6 +355,62 @@ async def prds_page(request: Request, project: str | None = None):
     )
 
 
+def _generate_dependency_graph(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Generate Mermaid.js graph from tasks."""
+    if not tasks:
+        return {'mermaid_code': '', 'has_dependencies': False, 'task_count': 0}
+
+    # Sanitize task IDs for Mermaid (replace hyphens/special chars with underscores)
+    def sanitize_id(task_id: str) -> str:
+        return task_id.replace('-', '_').replace('.', '_').replace(' ', '_')
+
+    task_map = {t['id']: t for t in tasks}
+    id_map = {t['id']: sanitize_id(t['id']) for t in tasks}
+    edges = []
+
+    for task in tasks:
+        deps = (task.get('data') or {}).get('dependencies', [])
+        for dep_id in deps:
+            if dep_id in task_map:
+                edges.append((dep_id, task['id']))
+
+    lines = ['graph LR']
+
+    # Add nodes with status icons
+    status_icons = {'pending': '⏳', 'in_progress': '🔄', 'completed': '✅', 'blocked': '🚫'}
+    for task in tasks:
+        safe_id = id_map[task['id']]
+        title = task['title'][:25].replace('"', "'").replace('[', '(').replace(']', ')')
+        if len(task['title']) > 25:
+            title += '...'
+        icon = status_icons.get(task['status'], '❓')
+        lines.append(f'    {safe_id}["{icon} {title}"]')
+
+    # Add edges
+    for from_id, to_id in edges:
+        lines.append(f'    {id_map[from_id]} --> {id_map[to_id]}')
+
+    # Add click handlers and status classes (use original IDs in URLs)
+    for task in tasks:
+        safe_id = id_map[task['id']]
+        lines.append(f'    click {safe_id} "/tasks/{task["id"]}"')
+        lines.append(f'    class {safe_id} status-{task["status"]}')
+
+    # Status color definitions
+    lines.extend([
+        '    classDef status-pending fill:#d29922,stroke:#d29922,color:#0d1117',
+        '    classDef status-in_progress fill:#58a6ff,stroke:#58a6ff,color:#0d1117',
+        '    classDef status-completed fill:#3fb950,stroke:#3fb950,color:#0d1117',
+        '    classDef status-blocked fill:#f85149,stroke:#f85149,color:#0d1117',
+    ])
+
+    return {
+        'mermaid_code': '\n'.join(lines),
+        'has_dependencies': len(edges) > 0,
+        'task_count': len(tasks)
+    }
+
+
 @app.get("/prds/{prd_id}", response_class=HTMLResponse)
 async def prd_detail(request: Request, prd_id: str):
     """PRD detail page."""
@@ -267,9 +423,15 @@ async def prd_detail(request: Request, prd_id: str):
     # Get sprints for the project to populate sprint selector
     sprints = db.list_sprints(prd["project_id"])
 
+    # Get tasks associated with this PRD
+    tasks = db.list_tasks(prd["project_id"], prd_id=prd_id)
+
+    # Generate dependency graph
+    graph_data = _generate_dependency_graph(tasks)
+
     return templates.TemplateResponse(
         "prd_detail.html",
-        {"request": request, "prd": prd, "sprints": sprints}
+        {"request": request, "prd": prd, "sprints": sprints, "tasks": tasks, "graph_data": graph_data}
     )
 
 
@@ -319,9 +481,240 @@ async def update_prd_status(prd_id: str, request: Request):
     return {"success": True}
 
 
+# =============================================================================
+# Settings & Integrations
+# =============================================================================
+
+
+def _get_integrations_dict(project_id: str) -> dict[str, Any]:
+    """Get integrations as a dict keyed by system name."""
+    db = get_db()
+    configs = db.list_external_configs(project_id)
+    return {c["system"]: c for c in configs}
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request, project: str | None = None, message: str | None = None, message_type: str | None = None):
+    """Settings page with integrations management."""
+    db = get_db()
+    all_projects = _get_all_projects()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return templates.TemplateResponse(
+            "no_project.html",
+            {"request": request, "projects": all_projects}
+        )
+
+    integrations = _get_integrations_dict(current_project["id"])
+
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            "request": request,
+            "project": current_project,
+            "projects": all_projects,
+            "integrations": integrations,
+            "message": message,
+            "message_type": message_type,
+        }
+    )
+
+
+@app.get("/settings/integrations/{system}/edit", response_class=HTMLResponse)
+async def integration_edit_form(request: Request, system: str, project: str | None = None):
+    """Get the edit form for an integration (HTMX partial)."""
+    db = get_db()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return HTMLResponse(content="Project not found", status_code=404)
+
+    # Get existing config if any
+    existing = db.get_external_config(current_project["id"], system)
+    config = existing["config"] if existing else None
+
+    return templates.TemplateResponse(
+        "partials/integration_form.html",
+        {
+            "request": request,
+            "system": system,
+            "project_id": current_project["id"],
+            "config": config,
+        }
+    )
+
+
+@app.get("/settings/integrations/{system}/cancel", response_class=HTMLResponse)
+async def integration_cancel(system: str):
+    """Cancel integration form (returns empty content)."""
+    return HTMLResponse(content="")
+
+
+@app.post("/settings/integrations/linear", response_class=HTMLResponse)
+async def save_linear_integration(
+    request: Request,
+    project: str,
+    api_key: str = Form(...),
+    team_id: str = Form(...),
+    default_project: str = Form(""),
+):
+    """Save Linear integration configuration."""
+    db = get_db()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return HTMLResponse(content="Project not found", status_code=404)
+
+    config = {
+        "api_key": api_key,
+        "team_id": team_id,
+    }
+    if default_project:
+        config["default_project"] = default_project
+
+    db.set_external_config(current_project["id"], "linear", config)
+
+    # Return updated integration card
+    integrations = _get_integrations_dict(current_project["id"])
+    return templates.TemplateResponse(
+        "partials/integration_card.html",
+        {
+            "request": request,
+            "system": "linear",
+            "project": current_project,
+            "integration": integrations.get("linear"),
+        }
+    )
+
+
+@app.post("/settings/integrations/jira", response_class=HTMLResponse)
+async def save_jira_integration(
+    request: Request,
+    project: str,
+    base_url: str = Form(...),
+    email: str = Form(...),
+    api_token: str = Form(...),
+    project_key: str = Form(...),
+    issue_type: str = Form("Task"),
+):
+    """Save Jira integration configuration."""
+    db = get_db()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return HTMLResponse(content="Project not found", status_code=404)
+
+    config = {
+        "base_url": base_url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "project_key": project_key,
+        "issue_type": issue_type or "Task",
+    }
+
+    db.set_external_config(current_project["id"], "jira", config)
+
+    # Return updated integration card
+    integrations = _get_integrations_dict(current_project["id"])
+    return templates.TemplateResponse(
+        "partials/integration_card.html",
+        {
+            "request": request,
+            "system": "jira",
+            "project": current_project,
+            "integration": integrations.get("jira"),
+        }
+    )
+
+
+@app.post("/settings/integrations/confluence", response_class=HTMLResponse)
+async def save_confluence_integration(
+    request: Request,
+    project: str,
+    base_url: str = Form(...),
+    email: str = Form(...),
+    api_token: str = Form(...),
+    space_key: str = Form(...),
+    parent_page_id: str = Form(""),
+    page_title_prefix: str = Form(""),
+):
+    """Save Confluence integration configuration."""
+    db = get_db()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return HTMLResponse(content="Project not found", status_code=404)
+
+    config = {
+        "base_url": base_url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "space_key": space_key,
+    }
+    if parent_page_id:
+        config["parent_page_id"] = parent_page_id
+    if page_title_prefix:
+        config["page_title_prefix"] = page_title_prefix
+
+    db.set_external_config(current_project["id"], "confluence", config)
+
+    # Return updated integration card
+    integrations = _get_integrations_dict(current_project["id"])
+    return templates.TemplateResponse(
+        "partials/integration_card.html",
+        {
+            "request": request,
+            "system": "confluence",
+            "project": current_project,
+            "integration": integrations.get("confluence"),
+        }
+    )
+
+
+@app.delete("/settings/integrations/{system}", response_class=HTMLResponse)
+async def delete_integration(request: Request, system: str, project: str):
+    """Remove an integration configuration."""
+    db = get_db()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return HTMLResponse(content="Project not found", status_code=404)
+
+    db.delete_external_config(current_project["id"], system)
+
+    # Return empty integration card (not configured state)
+    return templates.TemplateResponse(
+        "partials/integration_card.html",
+        {
+            "request": request,
+            "system": system,
+            "project": current_project,
+            "integration": None,
+        }
+    )
+
+
 def run_server(host: str = "127.0.0.1", port: int = 3847) -> None:
     """Run the web UI server."""
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # Clean up any stale server
+    if _cleanup_stale_pid():
+        print(f"Cleaned up stale UI server process")
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    # Write PID file
+    _write_pid()
+
+    # Register cleanup on exit
+    atexit.register(_remove_pid)
+
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    finally:
+        _remove_pid()
 
 
 if __name__ == "__main__":

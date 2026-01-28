@@ -121,6 +121,47 @@ class LinearClient:
         data = self._query(query, {"teamId": self.team_id})
         return data.get("team", {}).get("cycles", {}).get("nodes", [])
 
+    def get_active_cycle(self) -> dict | None:
+        """Get the currently active cycle for the team.
+
+        Returns:
+            Active cycle dict, or None if no active cycle
+        """
+        cycles = self.list_cycles(status="active")
+        return cycles[0] if cycles else None
+
+    def get_issue_with_children(self, issue_id: str) -> dict | None:
+        """Get issue details with children (sub-issues).
+
+        Args:
+            issue_id: Linear issue ID
+
+        Returns:
+            Issue dict with children populated
+        """
+        query = """
+        query GetIssueWithChildren($id: String!) {
+            issue(id: $id) {
+                id
+                identifier
+                title
+                description
+                state { name }
+                priority
+                children {
+                    nodes {
+                        id
+                        identifier
+                        title
+                        state { name }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {"id": issue_id})
+        return data.get("issue")
+
     def get_cycle(self, cycle_id: str) -> dict | None:
         """Get cycle details with issues."""
         query = """
@@ -355,6 +396,50 @@ class JiraClient:
         )
         return data.get("issues", [])
 
+    def get_issue_with_subtasks(self, issue_key: str) -> dict:
+        """Get issue with subtasks expanded.
+
+        Args:
+            issue_key: The Jira issue key (e.g., 'PROJ-123')
+
+        Returns:
+            Issue dict with subtasks field populated
+        """
+        return self._get(
+            f"/issue/{issue_key}",
+            params={
+                "fields": "summary,description,status,priority,subtasks",
+            },
+        )
+
+    def get_subtask_details(self, subtask_keys: list[str]) -> list[dict]:
+        """Get details for multiple subtasks.
+
+        Args:
+            subtask_keys: List of subtask issue keys
+
+        Returns:
+            List of subtask issue dicts
+        """
+        if not subtask_keys:
+            return []
+
+        # Use JQL to fetch all subtasks in one call
+        jql = f"key in ({','.join(subtask_keys)})"
+        return self.search_issues(jql, max_results=len(subtask_keys))
+
+    def get_active_sprint(self, board_id: str) -> dict | None:
+        """Get the currently active sprint for a board.
+
+        Args:
+            board_id: Jira board ID
+
+        Returns:
+            Active sprint dict, or None if no active sprint
+        """
+        sprints = self.list_sprints(board_id, state="active")
+        return sprints[0] if sprints else None
+
     def create_issue(
         self,
         summary: str,
@@ -536,8 +621,15 @@ class ExternalSyncService:
                 label_names = [l.get("name", "") for l in labels]
                 content += f"\n\n**Labels**: {', '.join(label_names)}"
 
+            # Fetch and append sub-issues (children)
+            children_content = self._fetch_and_format_linear_children(
+                client, issue.get("id", "")
+            )
+            if children_content:
+                content += children_content
+
             # Create PRD with sprint assignment
-            prd_id = self._slugify_linear_issue(issue)
+            prd_id = self._slugify_linear_issue(issue, project_id)
             prd = self.db.create_prd(
                 prd_id=prd_id,
                 project_id=project_id,
@@ -566,15 +658,87 @@ class ExternalSyncService:
             "tasks_count": len(prds_created),
         }
 
-    def _slugify_linear_issue(self, issue: dict) -> str:
-        """Generate slug for Linear issue."""
+    def _slugify_linear_issue(self, issue: dict, project_id: str) -> str:
+        """Generate slug for Linear issue.
+
+        Args:
+            issue: Linear issue dict
+            project_id: Project ID to prefix for global uniqueness
+
+        Returns:
+            Project-prefixed slug ID
+        """
         import re
         identifier = issue.get("identifier", "")
         title = issue.get("title", "untitled")
         slug = f"{identifier}-{title}".lower()
         slug = re.sub(r"[^\w\s-]", "", slug)
         slug = re.sub(r"[-\s]+", "-", slug)
-        return slug.strip("-")[:64]
+        return f"{project_id}-{slug.strip('-')[:64]}"
+
+    def _fetch_and_format_linear_children(
+        self, client: LinearClient, issue_id: str
+    ) -> str:
+        """Fetch children (sub-issues) for an issue and format as markdown checklist.
+
+        Args:
+            client: LinearClient instance
+            issue_id: The parent Linear issue ID
+
+        Returns:
+            Markdown formatted sub-issues section, or empty string if no children
+        """
+        if not issue_id:
+            return ""
+
+        try:
+            issue = client.get_issue_with_children(issue_id)
+            if not issue:
+                return ""
+
+            children = issue.get("children", {}).get("nodes", [])
+
+            if not children:
+                return ""
+
+            # Format as markdown checklist
+            lines = ["\n\n## Sub-issues"]
+            for child in children:
+                identifier = child.get("identifier", "")
+                title = child.get("title", "Untitled")
+                state_name = child.get("state", {}).get("name", "Backlog")
+
+                # Check if completed
+                is_done = state_name.lower() in ("done", "canceled", "completed")
+                checkbox = "[x]" if is_done else "[ ]"
+
+                lines.append(f"- {checkbox} [{identifier}] {title} ({state_name})")
+
+            return "\n".join(lines)
+
+        except Exception:
+            # If children fetching fails, just skip it
+            return ""
+
+    def import_linear_active_cycle(self, project_id: str) -> dict[str, Any]:
+        """Import the active cycle from Linear.
+
+        Args:
+            project_id: Local project ID
+
+        Returns:
+            Dict with sprint and PRDs info
+
+        Raises:
+            RuntimeError: If no active cycle found for the team
+        """
+        client = self._get_linear_client(project_id)
+        cycle = client.get_active_cycle()
+
+        if not cycle:
+            raise RuntimeError("No active cycle found for this team")
+
+        return self.import_linear_cycle(project_id, cycle["id"])
 
     def sync_sprint_to_linear(
         self, project_id: str, sprint_id: str
@@ -734,7 +898,7 @@ class ExternalSyncService:
                     results["prds_updated"] += 1
                 else:
                     # Create new PRD
-                    prd_id = self._slugify_linear_issue(issue)
+                    prd_id = self._slugify_linear_issue(issue, project_id)
                     self.db.create_prd(
                         prd_id=prd_id,
                         project_id=project_id,
@@ -835,8 +999,13 @@ class ExternalSyncService:
             if labels:
                 content += f"\n\n**Labels**: {', '.join(labels)}"
 
+            # Fetch and append subtasks
+            subtasks_content = self._fetch_and_format_subtasks(client, issue["key"])
+            if subtasks_content:
+                content += subtasks_content
+
             # Create PRD with sprint assignment
-            prd_id = self._slugify_jira_issue(issue)
+            prd_id = self._slugify_jira_issue(issue, project_id)
             prd = self.db.create_prd(
                 prd_id=prd_id,
                 project_id=project_id,
@@ -865,15 +1034,23 @@ class ExternalSyncService:
             "tasks_count": len(prds_created),
         }
 
-    def _slugify_jira_issue(self, issue: dict) -> str:
-        """Generate slug for Jira issue."""
+    def _slugify_jira_issue(self, issue: dict, project_id: str) -> str:
+        """Generate slug for Jira issue.
+
+        Args:
+            issue: Jira issue dict
+            project_id: Project ID to prefix for global uniqueness
+
+        Returns:
+            Project-prefixed slug ID
+        """
         import re
         key = issue.get("key", "")
         summary = issue.get("fields", {}).get("summary", "untitled")
         slug = f"{key}-{summary}".lower()
         slug = re.sub(r"[^\w\s-]", "", slug)
         slug = re.sub(r"[-\s]+", "-", slug)
-        return slug.strip("-")[:64]
+        return f"{project_id}-{slug.strip('-')[:64]}"
 
     def _extract_jira_description(self, adf: dict | None) -> str:
         """Extract plain text from Jira ADF description."""
@@ -891,6 +1068,80 @@ class ExternalSyncService:
 
         extract(adf)
         return " ".join(texts)
+
+    def _fetch_and_format_subtasks(
+        self, client: JiraClient, issue_key: str
+    ) -> str:
+        """Fetch subtasks for an issue and format as markdown checklist.
+
+        Args:
+            client: JiraClient instance
+            issue_key: The parent issue key (e.g., 'PROJ-123')
+
+        Returns:
+            Markdown formatted subtasks section, or empty string if no subtasks
+        """
+        try:
+            issue = client.get_issue_with_subtasks(issue_key)
+            subtasks = issue.get("fields", {}).get("subtasks", [])
+
+            if not subtasks:
+                return ""
+
+            # Get subtask keys and fetch their full details
+            subtask_keys = [st["key"] for st in subtasks]
+            subtask_details = client.get_subtask_details(subtask_keys)
+
+            # Create a lookup for status by key
+            status_by_key: dict[str, str] = {}
+            for detail in subtask_details:
+                key = detail.get("key", "")
+                status_name = (
+                    detail.get("fields", {}).get("status", {}).get("name", "To Do")
+                )
+                status_by_key[key] = status_name
+
+            # Format as markdown checklist
+            lines = ["\n\n## Subtasks"]
+            for subtask in subtasks:
+                key = subtask.get("key", "")
+                summary = subtask.get("fields", {}).get("summary", "Untitled")
+                status = status_by_key.get(key, "To Do")
+
+                # Check if completed
+                is_done = status.lower() in ("done", "closed", "resolved", "completed")
+                checkbox = "[x]" if is_done else "[ ]"
+
+                lines.append(f"- {checkbox} [{key}] {summary} ({status})")
+
+            return "\n".join(lines)
+
+        except Exception:
+            # If subtask fetching fails, just skip it
+            return ""
+
+    def import_jira_active_sprint(
+        self, project_id: str, board_id: str
+    ) -> dict[str, Any]:
+        """Import the active sprint from a Jira board.
+
+        Args:
+            project_id: Local project ID
+            board_id: Jira board ID
+
+        Returns:
+            Dict with sprint and PRDs info
+
+        Raises:
+            RuntimeError: If no active sprint found for the board
+        """
+        client = self._get_jira_client(project_id)
+        sprint = client.get_active_sprint(board_id)
+
+        if not sprint:
+            raise RuntimeError(f"No active sprint found for board {board_id}")
+
+        return self.import_jira_sprint(project_id, str(sprint["id"]), board_id)
 
     def sync_sprint_to_jira(
         self, project_id: str, sprint_id: str
@@ -1025,7 +1276,7 @@ class ExternalSyncService:
                     )
                     results["prds_updated"] += 1
                 else:
-                    prd_id = self._slugify_jira_issue(issue)
+                    prd_id = self._slugify_jira_issue(issue, project_id)
                     self.db.create_prd(
                         prd_id=prd_id,
                         project_id=project_id,

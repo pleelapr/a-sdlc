@@ -2009,30 +2009,56 @@ def start_task_cmd(task_id: str) -> None:
     console.print(f"[dim]{task['title']}[/dim]")
 
 
-@main.command("ui")
+@main.group(invoke_without_command=True)
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--port", "-p", default=3847, type=int, help="Port to bind to")
-def ui_cmd(host: str, port: int) -> None:
-    """Start the web UI dashboard.
-
-    Opens a browser-based dashboard for viewing and managing
-    PRDs, tasks, and sprints.
+@click.pass_context
+def ui(ctx: click.Context, host: str, port: int) -> None:
+    """Web UI dashboard for viewing and managing PRDs, tasks, and sprints.
 
     Examples:
 
         a-sdlc ui                    # Start on http://localhost:3847
         a-sdlc ui --port 8000        # Custom port
+        a-sdlc ui stop               # Stop running server
+    """
+    # If no subcommand is given, start the server
+    if ctx.invoked_subcommand is None:
+        try:
+            from a_sdlc.ui import run_server
+        except ImportError:
+            console.print("[red]Web UI dependencies not installed.[/red]")
+            console.print("Install with: [cyan]pip install 'a-sdlc[ui]'[/cyan]")
+            sys.exit(1)
+
+        console.print(f"[green]Starting a-sdlc dashboard on http://{host}:{port}[/green]")
+        console.print("[dim]Press Ctrl+C to stop[/dim]")
+        run_server(host=host, port=port)
+
+
+@ui.command("stop")
+def ui_stop() -> None:
+    """Stop the running UI server.
+
+    Stops any a-sdlc UI server that was started in the background.
+
+    Examples:
+
+        a-sdlc ui stop
     """
     try:
-        from a_sdlc.ui import run_server
+        from a_sdlc.ui import stop_server, PID_FILE
     except ImportError:
         console.print("[red]Web UI dependencies not installed.[/red]")
         console.print("Install with: [cyan]pip install 'a-sdlc[ui]'[/cyan]")
         sys.exit(1)
 
-    console.print(f"[green]Starting a-sdlc dashboard on http://{host}:{port}[/green]")
-    console.print("[dim]Press Ctrl+C to stop[/dim]")
-    run_server(host=host, port=port)
+    if stop_server():
+        console.print("[green]UI server stopped.[/green]")
+    else:
+        console.print("[yellow]No UI server running.[/yellow]")
+        if PID_FILE.exists():
+            console.print(f"[dim]Cleaned up stale PID file: {PID_FILE}[/dim]")
 
 
 @main.command("complete")
@@ -2068,18 +2094,19 @@ def complete_task_cmd(task_id: str) -> None:
 def connect() -> None:
     """Configure external system integrations.
 
-    Connect to Linear or Jira to sync sprints and tasks.
+    Connect to Linear, Jira, or Confluence to sync sprints, tasks, and artifacts.
 
     \b
-      a-sdlc connect linear    Configure Linear integration
-      a-sdlc connect jira      Configure Jira integration
+      a-sdlc connect linear      Configure Linear integration
+      a-sdlc connect jira        Configure Jira integration
+      a-sdlc connect confluence  Configure Confluence integration
     """
     pass
 
 
 @connect.command("linear")
-@click.option("--api-key", prompt="Linear API Key", hide_input=True, help="Linear API key")
-@click.option("--team-id", prompt="Team ID", help="Team identifier (e.g., 'ENG')")
+@click.option("--api-key", prompt="Linear API Key (from Settings > API)", hide_input=True, help="Linear API key")
+@click.option("--team-id", prompt="Team ID (e.g., ENG, PROD)", help="Team identifier (e.g., 'ENG')")
 @click.option("--default-project", default=None, help="Optional default project name")
 def connect_linear(api_key: str, team_id: str, default_project: str | None) -> None:
     """Configure Linear integration for the current project.
@@ -2119,10 +2146,10 @@ def connect_linear(api_key: str, team_id: str, default_project: str | None) -> N
 
 
 @connect.command("jira")
-@click.option("--url", prompt="Atlassian Site URL", help="e.g., https://company.atlassian.net")
-@click.option("--email", prompt="Atlassian Email", help="Your Atlassian account email")
-@click.option("--api-token", prompt="API Token", hide_input=True, help="Atlassian API token")
-@click.option("--project-key", prompt="Project Key", help="Jira project key (e.g., 'PROJ')")
+@click.option("--url", prompt="Atlassian Site URL (e.g., https://company.atlassian.net)", help="e.g., https://company.atlassian.net")
+@click.option("--email", prompt="Atlassian Email (e.g., user@company.com)", help="Your Atlassian account email")
+@click.option("--api-token", prompt="API Token (from id.atlassian.com/manage-profile/security/api-tokens)", hide_input=True, help="Atlassian API token")
+@click.option("--project-key", prompt="Jira Project Key (e.g., PROJ, ENG)", help="Jira project key (e.g., 'PROJ')")
 @click.option("--issue-type", default="Task", help="Default issue type")
 def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_type: str) -> None:
     """Configure Jira integration for the current project.
@@ -2163,18 +2190,66 @@ def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_t
     console.print("  - Or link a sprint: [cyan]/sdlc:sprint-link SPRINT-01 jira <sprint-id>[/cyan]")
 
 
+@connect.command("confluence")
+@click.option("--url", prompt="Atlassian Site URL (e.g., https://company.atlassian.net)", help="e.g., https://company.atlassian.net")
+@click.option("--email", prompt="Atlassian Email (e.g., user@company.com)", help="Your Atlassian account email")
+@click.option("--api-token", prompt="API Token (from id.atlassian.com/manage-profile/security/api-tokens)", hide_input=True, help="Atlassian API token")
+@click.option("--space-key", prompt="Confluence Space Key (e.g., PROJ, DOCS, ENG)", help="Space key (e.g., 'PROJ')")
+@click.option("--parent-page-id", default=None, help="Optional parent page ID for SDLC docs")
+@click.option("--page-prefix", default="[SDLC]", help="Page title prefix (default: '[SDLC]')")
+def connect_confluence(url: str, email: str, api_token: str, space_key: str, parent_page_id: str | None, page_prefix: str) -> None:
+    """Configure Confluence integration for the current project.
+
+    API token can be generated from https://id.atlassian.com/manage-profile/security/api-tokens
+
+    Examples:
+
+        a-sdlc connect confluence --url https://company.atlassian.net --email user@example.com --space-key PROJ
+        a-sdlc connect confluence  # Interactive prompts
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        sys.exit(1)
+
+    config = {
+        "base_url": url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "space_key": space_key,
+        "parent_page_id": parent_page_id,
+        "page_title_prefix": page_prefix,
+    }
+
+    db.set_external_config(project["id"], "confluence", config)
+
+    console.print(f"[green]✓ Confluence integration configured for {project['name']}[/green]")
+    console.print(f"[dim]Space: {space_key} at {url}[/dim]")
+    console.print()
+    console.print("Next steps:")
+    console.print("  - Push artifacts: [cyan]a-sdlc artifacts push[/cyan]")
+    console.print("  - Push PRDs: [cyan]a-sdlc prd push <prd-id>[/cyan]")
+
+
 @main.command("disconnect")
-@click.argument("system", type=click.Choice(["linear", "jira"]))
+@click.argument("system", type=click.Choice(["linear", "jira", "confluence"]))
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
 def disconnect(system: str, yes: bool) -> None:
     """Remove an external system integration.
 
-    SYSTEM: The integration to remove ('linear' or 'jira')
+    SYSTEM: The integration to remove ('linear', 'jira', or 'confluence')
 
     Examples:
 
         a-sdlc disconnect linear
         a-sdlc disconnect jira -y
+        a-sdlc disconnect confluence
     """
     from a_sdlc.server.database import get_db
 
@@ -2245,6 +2320,8 @@ def integrations() -> None:
         # Format config display (mask sensitive data)
         if config["system"] == "linear":
             config_display = f"Team: {cfg.get('team_id', 'N/A')}"
+        elif config["system"] == "confluence":
+            config_display = f"Space: {cfg.get('space_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
         else:  # jira
             config_display = f"Project: {cfg.get('project_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
 
@@ -2263,6 +2340,617 @@ def integrations() -> None:
         sprint_mappings = [m for m in mappings if m["entity_type"] == "sprint"]
         task_mappings = [m for m in mappings if m["entity_type"] == "task"]
         console.print(f"[dim]Linked: {len(sprint_mappings)} sprint(s), {len(task_mappings)} task(s)[/dim]")
+
+
+# =============================================================================
+# Sync Commands
+# =============================================================================
+
+
+@main.group()
+def sync() -> None:
+    """Sync sprints with external systems (Jira, Linear).
+
+    Pull sprints from external systems as local sprints with PRDs,
+    or push local changes back to the external system.
+
+    \b
+    Commands:
+      a-sdlc sync jira pull     Pull sprint from Jira
+      a-sdlc sync jira push     Push sprint to Jira
+      a-sdlc sync jira status   Show sync status
+      a-sdlc sync linear pull   Pull cycle from Linear
+      a-sdlc sync linear push   Push sprint to Linear
+      a-sdlc sync linear status Show sync status
+    """
+    pass
+
+
+# -----------------------------------------------------------------------------
+# Jira Sync Commands
+# -----------------------------------------------------------------------------
+
+
+@sync.group()
+def jira() -> None:
+    """Sync with Jira.
+
+    \b
+    Examples:
+      a-sdlc sync jira pull --board 123 --active
+      a-sdlc sync jira push SPRINT-01
+      a-sdlc sync jira status
+    """
+    pass
+
+
+@jira.command("pull")
+@click.option("--active", is_flag=True, help="Pull active sprint (default if no --sprint)")
+@click.option("--sprint", "sprint_id", help="Specific Jira sprint ID")
+@click.option("--board", "board_id", help="Jira board ID")
+@click.option("--dry-run", is_flag=True, help="Preview what would be imported")
+def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run: bool) -> None:
+    """Pull sprint from Jira as local sprint with PRDs.
+
+    Jira issues are imported as PRDs. Subtasks are appended to PRD content
+    as markdown checklists.
+
+    Default behavior: Pulls the active sprint if --board is provided.
+    If --sprint is specified, pulls that specific sprint (ignores --active).
+
+    \b
+    Examples:
+      a-sdlc sync jira pull --board 123                # List available sprints
+      a-sdlc sync jira pull --board 123 --active       # Pull active sprint
+      a-sdlc sync jira pull --sprint 456               # Pull specific sprint
+      a-sdlc sync jira pull --sprint 456 --dry-run     # Preview import
+    """
+    from a_sdlc.server.database import get_db
+    from a_sdlc.server.sync import ExternalSyncService, JiraClient
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        sys.exit(1)
+
+    config = db.get_external_config(project["id"], "jira")
+    if not config:
+        console.print("[red]Jira not configured.[/red]")
+        console.print("Run [cyan]a-sdlc connect jira[/cyan] first.")
+        sys.exit(1)
+
+    cfg = config["config"]
+    client = JiraClient(cfg["base_url"], cfg["email"], cfg["api_token"], cfg["project_key"])
+    sync_service = ExternalSyncService(db)
+
+    # If sprint_id is provided, import specific sprint
+    if sprint_id:
+        if dry_run:
+            console.print(f"[cyan]Dry run:[/cyan] Would import Jira sprint {sprint_id}")
+            jira_sprint = client.get_sprint(sprint_id)
+            if jira_sprint:
+                console.print(f"  Sprint: {jira_sprint.get('name', 'Unknown')}")
+                issues = client.get_sprint_issues(sprint_id)
+                console.print(f"  Issues: {len(issues)}")
+            else:
+                console.print("[red]Sprint not found.[/red]")
+            return
+
+        try:
+            result = sync_service.import_jira_sprint(project["id"], sprint_id, board_id)
+            console.print(f"[green]✓ Imported sprint as {result['sprint']['id']}[/green]")
+            console.print(f"  Title: {result['sprint']['title']}")
+            console.print(f"  PRDs imported: {result['prds_count']}")
+        except Exception as e:
+            console.print(f"[red]Failed to import sprint: {e}[/red]")
+            sys.exit(1)
+        return
+
+    # If active flag with board_id, import active sprint
+    if active and board_id:
+        if dry_run:
+            console.print(f"[cyan]Dry run:[/cyan] Would import active sprint from board {board_id}")
+            active_sprint = client.get_active_sprint(board_id)
+            if active_sprint:
+                console.print(f"  Sprint: {active_sprint.get('name', 'Unknown')} (ID: {active_sprint['id']})")
+                issues = client.get_sprint_issues(str(active_sprint["id"]))
+                console.print(f"  Issues: {len(issues)}")
+            else:
+                console.print("[yellow]No active sprint found.[/yellow]")
+            return
+
+        try:
+            result = sync_service.import_jira_active_sprint(project["id"], board_id)
+            console.print(f"[green]✓ Imported active sprint as {result['sprint']['id']}[/green]")
+            console.print(f"  Title: {result['sprint']['title']}")
+            console.print(f"  PRDs imported: {result['prds_count']}")
+        except Exception as e:
+            console.print(f"[red]Failed to import active sprint: {e}[/red]")
+            sys.exit(1)
+        return
+
+    # Otherwise, list available sprints
+    if not board_id:
+        console.print("[yellow]Provide --board to list sprints, or --sprint to import directly.[/yellow]")
+        console.print()
+        console.print("Examples:")
+        console.print("  [cyan]a-sdlc sync jira pull --board 123[/cyan]              # List sprints")
+        console.print("  [cyan]a-sdlc sync jira pull --board 123 --active[/cyan]     # Pull active")
+        console.print("  [cyan]a-sdlc sync jira pull --sprint 456[/cyan]             # Pull specific")
+        return
+
+    # List sprints from board
+    try:
+        sprints = client.list_sprints(board_id)
+
+        if not sprints:
+            console.print(f"[yellow]No sprints found for board {board_id}.[/yellow]")
+            return
+
+        table = Table(title=f"Sprints for Board {board_id}")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("State")
+        table.add_column("Goal", style="dim", max_width=40)
+
+        for sprint in sprints:
+            state = sprint.get("state", "")
+            state_style = "green" if state == "active" else "dim"
+            table.add_row(
+                str(sprint["id"]),
+                sprint.get("name", ""),
+                f"[{state_style}]{state}[/{state_style}]",
+                (sprint.get("goal", "") or "")[:40],
+            )
+
+        console.print(table)
+        console.print()
+        console.print("To import:")
+        console.print(f"  [cyan]a-sdlc sync jira pull --board {board_id} --active[/cyan]  # Active sprint")
+        console.print(f"  [cyan]a-sdlc sync jira pull --sprint <ID>[/cyan]               # Specific sprint")
+
+    except Exception as e:
+        console.print(f"[red]Failed to list sprints: {e}[/red]")
+        sys.exit(1)
+
+
+@jira.command("push")
+@click.argument("sprint_id")
+@click.option("--dry-run", is_flag=True, help="Preview what would be pushed")
+@click.option("--force", "-f", is_flag=True, help="Overwrite remote changes")
+def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
+    """Push local sprint to linked Jira sprint.
+
+    Updates Jira issues with changes from local PRDs.
+
+    \b
+    Examples:
+      a-sdlc sync jira push SPRINT-01
+      a-sdlc sync jira push SPRINT-01 --dry-run
+    """
+    from a_sdlc.server.database import get_db
+    from a_sdlc.server.sync import ExternalSyncService
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        sys.exit(1)
+
+    config = db.get_external_config(project["id"], "jira")
+    if not config:
+        console.print("[red]Jira not configured.[/red]")
+        console.print("Run [cyan]a-sdlc connect jira[/cyan] first.")
+        sys.exit(1)
+
+    # Check sprint is linked
+    mapping = db.get_sync_mapping("sprint", sprint_id, "jira")
+    if not mapping:
+        console.print(f"[red]Sprint {sprint_id} is not linked to Jira.[/red]")
+        console.print("Use [cyan]a-sdlc sync jira pull[/cyan] to import from Jira first.")
+        sys.exit(1)
+
+    if dry_run:
+        prds = db.get_sprint_prds(sprint_id)
+        console.print(f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Jira sprint {mapping['external_id']}")
+        for prd in prds:
+            prd_mapping = db.get_sync_mapping("prd", prd["id"], "jira")
+            action = "Update" if prd_mapping else "Create"
+            console.print(f"  {action}: {prd['title']}")
+        return
+
+    try:
+        sync_service = ExternalSyncService(db)
+        result = sync_service.sync_sprint_to_jira(project["id"], sprint_id)
+
+        console.print(f"[green]✓ Pushed to Jira sprint {result['jira_sprint_id']}[/green]")
+        console.print(f"  Updated: {result['prds_updated']}")
+        console.print(f"  Created: {result['prds_created']}")
+
+        if result.get("errors"):
+            console.print("[yellow]Errors:[/yellow]")
+            for err in result["errors"]:
+                console.print(f"  - {err}")
+
+    except Exception as e:
+        console.print(f"[red]Failed to push: {e}[/red]")
+        sys.exit(1)
+
+
+@jira.command("status")
+@click.argument("sprint_id", required=False)
+def jira_status(sprint_id: str | None) -> None:
+    """Show Jira sync status for sprints.
+
+    \b
+    Examples:
+      a-sdlc sync jira status              # All linked sprints
+      a-sdlc sync jira status SPRINT-01    # Specific sprint
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        return
+
+    config = db.get_external_config(project["id"], "jira")
+    if not config:
+        console.print("[dim]Jira not configured.[/dim]")
+        return
+
+    if sprint_id:
+        # Show specific sprint status
+        mapping = db.get_sync_mapping("sprint", sprint_id, "jira")
+        if not mapping:
+            console.print(f"[yellow]Sprint {sprint_id} is not linked to Jira.[/yellow]")
+            return
+
+        sprint = db.get_sprint(sprint_id)
+        prds = db.get_sprint_prds(sprint_id)
+
+        console.print(f"\n[bold]Sprint: {sprint['title']}[/bold]")
+        console.print(f"Local ID: {sprint_id}")
+        console.print(f"Jira Sprint ID: {mapping['external_id']}")
+        console.print(f"Sync Status: {mapping.get('sync_status', 'unknown')}")
+        console.print(f"Last Synced: {mapping.get('last_synced', 'Never')}")
+        console.print(f"PRDs: {len(prds)}")
+
+        # Show PRD sync status
+        if prds:
+            console.print("\nPRD Sync Status:")
+            for prd in prds:
+                prd_mapping = db.get_sync_mapping("prd", prd["id"], "jira")
+                if prd_mapping:
+                    console.print(f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id']}")
+                else:
+                    console.print(f"  [dim]-[/dim] {prd['title']} (not linked)")
+    else:
+        # Show all linked sprints
+        mappings = db.list_sync_mappings("sprint", "jira")
+
+        if not mappings:
+            console.print("[dim]No sprints linked to Jira.[/dim]")
+            console.print()
+            console.print("To link a sprint:")
+            console.print("  [cyan]a-sdlc sync jira pull --board <id> --active[/cyan]")
+            return
+
+        table = Table(title="Jira-Linked Sprints")
+        table.add_column("Local Sprint", style="cyan")
+        table.add_column("Jira Sprint ID")
+        table.add_column("Status")
+        table.add_column("Last Synced", style="dim")
+
+        for m in mappings:
+            sprint = db.get_sprint(m["local_id"])
+            if sprint:
+                table.add_row(
+                    f"{m['local_id']} ({sprint['title']})",
+                    m["external_id"],
+                    m.get("sync_status", "unknown"),
+                    (m.get("last_synced") or "Never")[:16],
+                )
+
+        console.print(table)
+
+
+# -----------------------------------------------------------------------------
+# Linear Sync Commands
+# -----------------------------------------------------------------------------
+
+
+@sync.group()
+def linear() -> None:
+    """Sync with Linear.
+
+    \b
+    Examples:
+      a-sdlc sync linear pull --active
+      a-sdlc sync linear push SPRINT-01
+      a-sdlc sync linear status
+    """
+    pass
+
+
+@linear.command("pull")
+@click.option("--active", is_flag=True, help="Pull active cycle (default)")
+@click.option("--cycle", "cycle_id", help="Specific Linear cycle ID")
+@click.option("--team", "team_id", help="Team ID (uses configured default if not specified)")
+@click.option("--dry-run", is_flag=True, help="Preview what would be imported")
+def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run: bool) -> None:
+    """Pull cycle from Linear as local sprint with PRDs.
+
+    Linear issues are imported as PRDs. Sub-issues are appended to PRD content
+    as markdown checklists.
+
+    Default behavior: Pulls the active cycle.
+    If --cycle is specified, pulls that specific cycle.
+
+    \b
+    Examples:
+      a-sdlc sync linear pull                          # List available cycles
+      a-sdlc sync linear pull --active                 # Pull active cycle
+      a-sdlc sync linear pull --cycle <id>             # Pull specific cycle
+      a-sdlc sync linear pull --cycle <id> --dry-run   # Preview import
+    """
+    from a_sdlc.server.database import get_db
+    from a_sdlc.server.sync import ExternalSyncService, LinearClient
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
+        sys.exit(1)
+
+    config = db.get_external_config(project["id"], "linear")
+    if not config:
+        console.print("[red]Linear not configured.[/red]")
+        console.print("Run [cyan]a-sdlc connect linear[/cyan] first.")
+        sys.exit(1)
+
+    cfg = config["config"]
+    effective_team_id = team_id or cfg["team_id"]
+    client = LinearClient(cfg["api_key"], effective_team_id)
+    sync_service = ExternalSyncService(db)
+
+    # If cycle_id is provided, import specific cycle
+    if cycle_id:
+        if dry_run:
+            console.print(f"[cyan]Dry run:[/cyan] Would import Linear cycle {cycle_id}")
+            cycle = client.get_cycle(cycle_id)
+            if cycle:
+                console.print(f"  Cycle: {cycle.get('name', 'Unknown')}")
+                issues = cycle.get("issues", {}).get("nodes", [])
+                console.print(f"  Issues: {len(issues)}")
+            else:
+                console.print("[red]Cycle not found.[/red]")
+            return
+
+        try:
+            result = sync_service.import_linear_cycle(project["id"], cycle_id)
+            console.print(f"[green]✓ Imported cycle as {result['sprint']['id']}[/green]")
+            console.print(f"  Title: {result['sprint']['title']}")
+            console.print(f"  PRDs imported: {result['prds_count']}")
+        except Exception as e:
+            console.print(f"[red]Failed to import cycle: {e}[/red]")
+            sys.exit(1)
+        return
+
+    # If active flag, import active cycle
+    if active:
+        if dry_run:
+            console.print("[cyan]Dry run:[/cyan] Would import active cycle")
+            active_cycle = client.get_active_cycle()
+            if active_cycle:
+                console.print(f"  Cycle: {active_cycle.get('name', 'Unknown')} (ID: {active_cycle['id']})")
+                issues = active_cycle.get("issues", {}).get("nodes", [])
+                console.print(f"  Issues: {len(issues)}")
+            else:
+                console.print("[yellow]No active cycle found.[/yellow]")
+            return
+
+        try:
+            result = sync_service.import_linear_active_cycle(project["id"])
+            console.print(f"[green]✓ Imported active cycle as {result['sprint']['id']}[/green]")
+            console.print(f"  Title: {result['sprint']['title']}")
+            console.print(f"  PRDs imported: {result['prds_count']}")
+        except Exception as e:
+            console.print(f"[red]Failed to import active cycle: {e}[/red]")
+            sys.exit(1)
+        return
+
+    # Otherwise, list available cycles
+    try:
+        cycles = client.list_cycles()
+
+        if not cycles:
+            console.print("[yellow]No cycles found.[/yellow]")
+            return
+
+        table = Table(title="Linear Cycles")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Progress")
+        table.add_column("Issues")
+
+        for cycle in cycles:
+            progress = cycle.get("progress", 0)
+            issues_count = len(cycle.get("issues", {}).get("nodes", []))
+            table.add_row(
+                cycle["id"][:12] + "...",
+                cycle.get("name", f"Cycle {cycle.get('number', '')}"),
+                f"{progress:.0%}",
+                str(issues_count),
+            )
+
+        console.print(table)
+        console.print()
+        console.print("To import:")
+        console.print("  [cyan]a-sdlc sync linear pull --active[/cyan]       # Active cycle")
+        console.print("  [cyan]a-sdlc sync linear pull --cycle <ID>[/cyan]   # Specific cycle")
+
+    except Exception as e:
+        console.print(f"[red]Failed to list cycles: {e}[/red]")
+        sys.exit(1)
+
+
+@linear.command("push")
+@click.argument("sprint_id")
+@click.option("--dry-run", is_flag=True, help="Preview what would be pushed")
+@click.option("--force", "-f", is_flag=True, help="Overwrite remote changes")
+def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
+    """Push local sprint to linked Linear cycle.
+
+    Updates Linear issues with changes from local PRDs.
+
+    \b
+    Examples:
+      a-sdlc sync linear push SPRINT-01
+      a-sdlc sync linear push SPRINT-01 --dry-run
+    """
+    from a_sdlc.server.database import get_db
+    from a_sdlc.server.sync import ExternalSyncService
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        sys.exit(1)
+
+    config = db.get_external_config(project["id"], "linear")
+    if not config:
+        console.print("[red]Linear not configured.[/red]")
+        console.print("Run [cyan]a-sdlc connect linear[/cyan] first.")
+        sys.exit(1)
+
+    # Check sprint is linked
+    mapping = db.get_sync_mapping("sprint", sprint_id, "linear")
+    if not mapping:
+        console.print(f"[red]Sprint {sprint_id} is not linked to Linear.[/red]")
+        console.print("Use [cyan]a-sdlc sync linear pull[/cyan] to import from Linear first.")
+        sys.exit(1)
+
+    if dry_run:
+        prds = db.get_sprint_prds(sprint_id)
+        console.print(f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Linear cycle {mapping['external_id'][:12]}...")
+        for prd in prds:
+            prd_mapping = db.get_sync_mapping("prd", prd["id"], "linear")
+            action = "Update" if prd_mapping else "Create"
+            console.print(f"  {action}: {prd['title']}")
+        return
+
+    try:
+        sync_service = ExternalSyncService(db)
+        result = sync_service.sync_sprint_to_linear(project["id"], sprint_id)
+
+        console.print(f"[green]✓ Pushed to Linear cycle {result['cycle_id'][:12]}...[/green]")
+        console.print(f"  Updated: {result['prds_updated']}")
+        console.print(f"  Created: {result['prds_created']}")
+
+        if result.get("errors"):
+            console.print("[yellow]Errors:[/yellow]")
+            for err in result["errors"]:
+                console.print(f"  - {err}")
+
+    except Exception as e:
+        console.print(f"[red]Failed to push: {e}[/red]")
+        sys.exit(1)
+
+
+@linear.command("status")
+@click.argument("sprint_id", required=False)
+def linear_status(sprint_id: str | None) -> None:
+    """Show Linear sync status for sprints.
+
+    \b
+    Examples:
+      a-sdlc sync linear status              # All linked sprints
+      a-sdlc sync linear status SPRINT-01    # Specific sprint
+    """
+    from a_sdlc.server.database import get_db
+
+    db = get_db()
+    cwd = str(Path.cwd())
+    project = db.get_project_by_path(cwd)
+
+    if not project:
+        console.print("[yellow]No project found for current directory.[/yellow]")
+        return
+
+    config = db.get_external_config(project["id"], "linear")
+    if not config:
+        console.print("[dim]Linear not configured.[/dim]")
+        return
+
+    if sprint_id:
+        # Show specific sprint status
+        mapping = db.get_sync_mapping("sprint", sprint_id, "linear")
+        if not mapping:
+            console.print(f"[yellow]Sprint {sprint_id} is not linked to Linear.[/yellow]")
+            return
+
+        sprint = db.get_sprint(sprint_id)
+        prds = db.get_sprint_prds(sprint_id)
+
+        console.print(f"\n[bold]Sprint: {sprint['title']}[/bold]")
+        console.print(f"Local ID: {sprint_id}")
+        console.print(f"Linear Cycle ID: {mapping['external_id'][:12]}...")
+        console.print(f"Sync Status: {mapping.get('sync_status', 'unknown')}")
+        console.print(f"Last Synced: {mapping.get('last_synced', 'Never')}")
+        console.print(f"PRDs: {len(prds)}")
+
+        # Show PRD sync status
+        if prds:
+            console.print("\nPRD Sync Status:")
+            for prd in prds:
+                prd_mapping = db.get_sync_mapping("prd", prd["id"], "linear")
+                if prd_mapping:
+                    console.print(f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id'][:12]}...")
+                else:
+                    console.print(f"  [dim]-[/dim] {prd['title']} (not linked)")
+    else:
+        # Show all linked sprints
+        mappings = db.list_sync_mappings("sprint", "linear")
+
+        if not mappings:
+            console.print("[dim]No sprints linked to Linear.[/dim]")
+            console.print()
+            console.print("To link a sprint:")
+            console.print("  [cyan]a-sdlc sync linear pull --active[/cyan]")
+            return
+
+        table = Table(title="Linear-Linked Sprints")
+        table.add_column("Local Sprint", style="cyan")
+        table.add_column("Linear Cycle ID")
+        table.add_column("Status")
+        table.add_column("Last Synced", style="dim")
+
+        for m in mappings:
+            sprint = db.get_sprint(m["local_id"])
+            if sprint:
+                table.add_row(
+                    f"{m['local_id']} ({sprint['title']})",
+                    m["external_id"][:12] + "...",
+                    m.get("sync_status", "unknown"),
+                    (m.get("last_synced") or "Never")[:16],
+                )
+
+        console.print(table)
 
 
 @main.command("init")

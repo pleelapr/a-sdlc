@@ -567,13 +567,17 @@ class Database:
             return cursor.rowcount > 0
 
     def get_next_task_id(self, project_id: str) -> str:
-        """Generate next task ID for a project."""
+        """Generate next task ID for a project.
+
+        IDs are prefixed with project_id to ensure global uniqueness
+        across all projects in the database.
+        """
         with self.connection() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM tasks WHERE project_id = ?", (project_id,)
             )
             count = cursor.fetchone()[0]
-        return f"TASK-{count + 1:03d}"
+        return f"{project_id}-TASK-{count + 1:03d}"
 
     # =========================================================================
     # Sprint Operations
@@ -690,13 +694,17 @@ class Database:
         return self.update_prd(prd_id, sprint_id=sprint_id)
 
     def get_next_sprint_id(self, project_id: str) -> str:
-        """Generate next sprint ID for a project."""
+        """Generate next sprint ID for a project.
+
+        IDs are prefixed with project_id to ensure global uniqueness
+        across all projects in the database.
+        """
         with self.connection() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM sprints WHERE project_id = ?", (project_id,)
             )
             count = cursor.fetchone()[0]
-        return f"SPRINT-{count + 1:02d}"
+        return f"{project_id}-SPRINT-{count + 1:02d}"
 
     # =========================================================================
     # Sync Mapping Operations

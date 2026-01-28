@@ -1,0 +1,149 @@
+{% if system == 'linear' %}
+<div class="integration-form">
+    <form hx-post="/settings/integrations/linear?project={{ project_id }}"
+          hx-target="#integration-linear"
+          hx-swap="outerHTML">
+        <div class="form-group">
+            <label for="api_key">API Key</label>
+            <input type="password" id="api_key" name="api_key"
+                   value="{{ config.api_key if config else '' }}"
+                   placeholder="lin_api_..." required>
+            <div class="help-text">Your Linear personal API key. Get one from Linear Settings > API.</div>
+        </div>
+        <div class="form-group">
+            <label for="team_id">Team ID</label>
+            <input type="text" id="team_id" name="team_id"
+                   value="{{ config.team_id if config else '' }}"
+                   placeholder="TEAM-123" required>
+            <div class="help-text">The Linear team ID to sync with.</div>
+        </div>
+        <div class="form-group">
+            <label for="default_project">Default Project (Optional)</label>
+            <input type="text" id="default_project" name="default_project"
+                   value="{{ config.default_project if config else '' }}"
+                   placeholder="PROJECT-456">
+            <div class="help-text">Default Linear project for new issues.</div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn"
+                    hx-get="/settings/integrations/linear/cancel"
+                    hx-target="#linear-form-container"
+                    hx-swap="innerHTML">
+                Cancel
+            </button>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </form>
+</div>
+
+{% elif system == 'jira' %}
+<div class="integration-form">
+    <form hx-post="/settings/integrations/jira?project={{ project_id }}"
+          hx-target="#integration-jira"
+          hx-swap="outerHTML">
+        <div class="form-group">
+            <label for="base_url">Site URL</label>
+            <input type="url" id="base_url" name="base_url"
+                   value="{{ config.base_url if config else '' }}"
+                   placeholder="https://company.atlassian.net" required>
+            <div class="help-text">Your Jira Cloud site URL.</div>
+        </div>
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email"
+                   value="{{ config.email if config else '' }}"
+                   placeholder="you@company.com" required>
+            <div class="help-text">The email address for your Atlassian account.</div>
+        </div>
+        <div class="form-group">
+            <label for="api_token">API Token</label>
+            <input type="password" id="api_token" name="api_token"
+                   value="{{ config.api_token if config else '' }}"
+                   placeholder="Your API token" required>
+            <div class="help-text">Generate one at id.atlassian.com > Security > API tokens.</div>
+        </div>
+        <div class="form-group">
+            <label for="project_key">Project Key</label>
+            <input type="text" id="project_key" name="project_key"
+                   value="{{ config.project_key if config else '' }}"
+                   placeholder="PROJ" required>
+            <div class="help-text">The Jira project key (e.g., PROJ, DEV).</div>
+        </div>
+        <div class="form-group">
+            <label for="issue_type">Issue Type (Optional)</label>
+            <input type="text" id="issue_type" name="issue_type"
+                   value="{{ config.issue_type if config else 'Task' }}"
+                   placeholder="Task">
+            <div class="help-text">Default issue type for new tasks. Defaults to "Task".</div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn"
+                    hx-get="/settings/integrations/jira/cancel"
+                    hx-target="#jira-form-container"
+                    hx-swap="innerHTML">
+                Cancel
+            </button>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </form>
+</div>
+
+{% elif system == 'confluence' %}
+<div class="integration-form">
+    <form hx-post="/settings/integrations/confluence?project={{ project_id }}"
+          hx-target="#integration-confluence"
+          hx-swap="outerHTML">
+        <div class="form-group">
+            <label for="base_url">Site URL</label>
+            <input type="url" id="base_url" name="base_url"
+                   value="{{ config.base_url if config else '' }}"
+                   placeholder="https://company.atlassian.net" required>
+            <div class="help-text">Your Confluence Cloud site URL.</div>
+        </div>
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email"
+                   value="{{ config.email if config else '' }}"
+                   placeholder="you@company.com" required>
+            <div class="help-text">The email address for your Atlassian account.</div>
+        </div>
+        <div class="form-group">
+            <label for="api_token">API Token</label>
+            <input type="password" id="api_token" name="api_token"
+                   value="{{ config.api_token if config else '' }}"
+                   placeholder="Your API token" required>
+            <div class="help-text">Generate one at id.atlassian.com > Security > API tokens.</div>
+        </div>
+        <div class="form-group">
+            <label for="space_key">Space Key</label>
+            <input type="text" id="space_key" name="space_key"
+                   value="{{ config.space_key if config else '' }}"
+                   placeholder="PROJ" required>
+            <div class="help-text">The Confluence space key where PRDs will be published.</div>
+        </div>
+        <div class="form-group">
+            <label for="parent_page_id">Parent Page ID (Optional)</label>
+            <input type="text" id="parent_page_id" name="parent_page_id"
+                   value="{{ config.parent_page_id if config else '' }}"
+                   placeholder="123456">
+            <div class="help-text">Page ID to nest PRDs under. Leave empty for root level.</div>
+        </div>
+        <div class="form-group">
+            <label for="page_title_prefix">Page Title Prefix (Optional)</label>
+            <input type="text" id="page_title_prefix" name="page_title_prefix"
+                   value="{{ config.page_title_prefix if config else '' }}"
+                   placeholder="[PRD] ">
+            <div class="help-text">Prefix added to page titles (e.g., "[PRD] Feature Name").</div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn"
+                    hx-get="/settings/integrations/confluence/cancel"
+                    hx-target="#confluence-form-container"
+                    hx-swap="innerHTML">
+                Cancel
+            </button>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </form>
+</div>
+{% endif %}

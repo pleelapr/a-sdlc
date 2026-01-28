@@ -6,6 +6,22 @@
     <title>{% block title %}a-sdlc Dashboard{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#161b22',
+                primaryTextColor: '#c9d1d9',
+                primaryBorderColor: '#30363d',
+                lineColor: '#8b949e',
+                background: '#0d1117'
+            },
+            flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+            securityLevel: 'loose'
+        });
+    </script>
     <style>
         :root {
             --bg: #0d1117;
@@ -265,6 +281,58 @@
         }
         .markdown strong { color: var(--text); }
         .markdown a { color: var(--accent); }
+
+        /* Tab Navigation */
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.25rem;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 500;
+            position: relative;
+            transition: color 0.2s;
+        }
+
+        .tab:hover { color: var(--text); }
+
+        .tab.active {
+            color: var(--text);
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--accent);
+            border-radius: 2px 2px 0 0;
+        }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* Dependency Graph */
+        .dependency-graph {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            overflow-x: auto;
+            min-height: 200px;
+        }
+        .dependency-graph .mermaid { display: flex; justify-content: center; }
+        .dependency-graph .node:hover rect { filter: brightness(1.2); cursor: pointer; }
+        .graph-legend { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.875rem; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
@@ -276,6 +344,7 @@
                 <a href="/sprints?project={{ project.id if project else '' }}" {% if "/sprints" in request.url.path %}class="active"{% endif %}>Sprints</a>
                 <a href="/prds?project={{ project.id if project else '' }}" {% if "/prds" in request.url.path %}class="active"{% endif %}>PRDs</a>
                 <a href="/tasks?project={{ project.id if project else '' }}" {% if "/tasks" in request.url.path %}class="active"{% endif %}>Tasks</a>
+                <a href="/settings?project={{ project.id if project else '' }}" {% if "/settings" in request.url.path %}class="active"{% endif %}>Settings</a>
             </div>
             {% if projects and projects|length > 1 %}
             <div class="project-switcher">

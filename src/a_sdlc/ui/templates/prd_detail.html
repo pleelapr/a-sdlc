@@ -63,34 +63,148 @@
 </div>
 
 <div class="card">
-    <div class="card-header">
-        <h3 style="margin: 0;">Content</h3>
-        <div id="content-actions">
-            <button id="edit-btn" class="btn" onclick="toggleEdit()">Edit</button>
+    <!-- Tab Navigation -->
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('documentation')" id="tab-documentation">
+            Documentation
+        </button>
+        <button class="tab" onclick="switchTab('tasks')" id="tab-tasks">
+            Tasks {% if tasks %}({{ tasks|length }}){% endif %}
+        </button>
+        <button class="tab" onclick="switchTab('dependencies')" id="tab-dependencies">
+            Dependencies
+        </button>
+    </div>
+
+    <!-- Documentation Tab Panel -->
+    <div class="tab-panel active" id="panel-documentation">
+        <div class="card-header" style="border-top: none; padding-top: 0;">
+            <h3 style="margin: 0;">Content</h3>
+            <div id="content-actions">
+                <button id="edit-btn" class="btn" onclick="toggleEdit()">Edit</button>
+            </div>
+        </div>
+
+        <!-- View Mode: Rendered Markdown -->
+        <div id="content-view" class="markdown" style="margin-top: 1rem;"></div>
+
+        <!-- Edit Mode: Textarea -->
+        <div id="content-edit" style="display: none; margin-top: 1rem;">
+            <textarea id="content-textarea" style="
+                width: 100%;
+                min-height: 400px;
+                padding: 1rem;
+                font-family: monospace;
+                font-size: 0.875rem;
+                background: var(--bg);
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                color: var(--text);
+                resize: vertical;
+            ">{{ prd.content or '' }}</textarea>
+            <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+                <button class="btn btn-primary" onclick="saveContent()">Save</button>
+                <button class="btn" onclick="cancelEdit()">Cancel</button>
+            </div>
         </div>
     </div>
 
-    <!-- View Mode: Rendered Markdown -->
-    <div id="content-view" class="markdown" style="margin-top: 1rem;"></div>
-
-    <!-- Edit Mode: Textarea -->
-    <div id="content-edit" style="display: none; margin-top: 1rem;">
-        <textarea id="content-textarea" style="
-            width: 100%;
-            min-height: 400px;
-            padding: 1rem;
-            font-family: monospace;
-            font-size: 0.875rem;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            resize: vertical;
-        ">{{ prd.content or '' }}</textarea>
-        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
-            <button class="btn btn-primary" onclick="saveContent()">Save</button>
-            <button class="btn" onclick="cancelEdit()">Cancel</button>
+    <!-- Tasks Tab Panel -->
+    <div class="tab-panel" id="panel-tasks">
+        {% if tasks %}
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Component</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for task in tasks %}
+                <tr>
+                    <td><a href="/tasks/{{ task.id }}">{{ task.id[:8] }}...</a></td>
+                    <td>{{ task.title[:50] }}{% if task.title|length > 50 %}...{% endif %}</td>
+                    <td>
+                        <span id="prd-task-status-{{ task.id }}" class="status-{{ task.status }}">
+                            {{ task.status.replace('_', ' ').title() }}
+                        </span>
+                    </td>
+                    <td><span class="priority-{{ task.priority }}">{{ task.priority.title() }}</span></td>
+                    <td>{{ task.component or '-' }}</td>
+                    <td>
+                        {% if task.status == 'pending' %}
+                        <button class="btn"
+                                hx-post="/tasks/{{ task.id }}/status?status=in_progress"
+                                hx-target="#prd-task-status-{{ task.id }}"
+                                hx-swap="outerHTML"
+                                style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                            Start
+                        </button>
+                        {% elif task.status == 'in_progress' %}
+                        <button class="btn btn-primary"
+                                hx-post="/tasks/{{ task.id }}/status?status=completed"
+                                hx-target="#prd-task-status-{{ task.id }}"
+                                hx-swap="outerHTML"
+                                style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                            Complete
+                        </button>
+                        {% elif task.status == 'completed' %}
+                        <span style="color: var(--success); font-size: 0.75rem;">✓ Done</span>
+                        {% elif task.status == 'blocked' %}
+                        <button class="btn"
+                                hx-post="/tasks/{{ task.id }}/status?status=in_progress"
+                                hx-target="#prd-task-status-{{ task.id }}"
+                                hx-swap="outerHTML"
+                                style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                            Unblock
+                        </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <p>No tasks have been split from this PRD yet.</p>
+            <p style="font-size: 0.875rem; margin-top: 0.5rem;">Use the <code>/sdlc:prd-split</code> command to generate tasks from this PRD.</p>
         </div>
+        {% endif %}
+    </div>
+
+    <!-- Dependencies Tab Panel -->
+    <div class="tab-panel" id="panel-dependencies">
+        {% if not tasks %}
+        <div class="empty-state">
+            <p>No tasks have been created from this PRD yet.</p>
+        </div>
+        {% elif not graph_data.has_dependencies %}
+        <div style="padding: 1rem; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); margin-bottom: 1rem;">
+            <p style="margin: 0; color: var(--text-muted);">
+                <strong>All {{ graph_data.task_count }} tasks are independent</strong> - they can run in parallel.
+            </p>
+        </div>
+        <div class="dependency-graph" id="dependency-graph">
+            <pre class="mermaid">{{ graph_data.mermaid_code }}</pre>
+        </div>
+        {% else %}
+        <div class="graph-legend">
+            <span>⏳ Pending</span>
+            <span>🔄 In Progress</span>
+            <span>✅ Completed</span>
+            <span>🚫 Blocked</span>
+        </div>
+        <div class="dependency-graph" id="dependency-graph">
+            <pre class="mermaid">{{ graph_data.mermaid_code }}</pre>
+        </div>
+        <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+            Click any task to view details. Arrows show: A → B means B depends on A.
+        </p>
+        {% endif %}
     </div>
 </div>
 
@@ -98,6 +212,31 @@
     // Store original content for cancel
     let originalContent = {{ prd.content | tojson | safe if prd.content else '""' }};
     let isEditing = false;
+    let mermaidRendered = false;
+
+    function switchTab(tabName) {
+        // Update tab buttons
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.getElementById('tab-' + tabName).classList.add('active');
+
+        // Update tab panels
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        document.getElementById('panel-' + tabName).classList.add('active');
+
+        // Cancel edit if switching away from documentation
+        if (tabName !== 'documentation' && isEditing) {
+            cancelEdit();
+        }
+
+        // Render Mermaid on first view of dependencies tab
+        if (tabName === 'dependencies' && !mermaidRendered) {
+            const el = document.querySelector('#dependency-graph .mermaid');
+            if (el) {
+                mermaid.run({ nodes: [el] });
+                mermaidRendered = true;
+            }
+        }
+    }
 
     async function updateSprint(sprintId) {
         try {
@@ -160,7 +299,9 @@
 
     function cancelEdit() {
         document.getElementById('content-textarea').value = originalContent;
-        toggleEdit();
+        if (isEditing) {
+            toggleEdit();
+        }
     }
 
     async function saveContent() {

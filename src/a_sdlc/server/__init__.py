@@ -290,7 +290,8 @@ def create_prd(
     if not pid:
         return {"status": "error", "message": "No project context. Run /sdlc:init first."}
 
-    prd_id = _slugify(title)
+    # Prefix prd_id with project_id for global uniqueness
+    prd_id = f"{pid}-{_slugify(title)}"
     prd = db.create_prd(prd_id, pid, title, content, status, source, sprint_id)
 
     return {
@@ -645,6 +646,117 @@ def delete_task(task_id: str) -> dict[str, Any]:
         "status": "deleted",
         "message": f"Task deleted: {task_id}",
     }
+
+
+@mcp.tool()
+def split_prd(
+    prd_id: str,
+    task_specs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Split a PRD into tasks atomically.
+
+    Creates all tasks in a single operation to ensure persistence even if
+    the agent session is interrupted. This is the recommended way to create
+    tasks from a PRD breakdown.
+
+    Args:
+        prd_id: The PRD to split.
+        task_specs: List of task specifications. Each spec should contain:
+            - title (required): Task title
+            - description (optional): Task description
+            - priority (optional): low, medium, high, critical (default: medium)
+            - component (optional): Component/module name
+            - dependencies (optional): List of task IDs this task depends on
+
+    Returns:
+        Created task IDs and status.
+
+    Example:
+        split_prd(
+            prd_id="feature-auth",
+            task_specs=[
+                {"title": "Set up OAuth config", "priority": "high", "component": "auth"},
+                {"title": "Implement login flow", "priority": "high", "component": "auth"},
+                {"title": "Add logout endpoint", "priority": "medium", "component": "auth"},
+            ]
+        )
+    """
+    db = get_db()
+    pid = _get_current_project_id()
+
+    if not pid:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    # Verify PRD exists
+    prd = db.get_prd(prd_id)
+    if not prd:
+        return {"status": "error", "message": f"PRD not found: {prd_id}"}
+
+    if not task_specs:
+        return {"status": "error", "message": "No task specifications provided"}
+
+    # Helper to resolve shorthand dependency references to full task IDs
+    def resolve_dep_id(dep: str | int) -> str:
+        dep_str = str(dep).strip()
+
+        # Already a full ID (contains project prefix)
+        if dep_str.startswith(pid):
+            return dep_str
+
+        # Extract task number from various formats:
+        # "1", "task-1", "TASK-001", "task-001"
+        match = re.search(r'(\d+)$', dep_str)
+        if match:
+            num = int(match.group(1))
+            return f"{pid}-TASK-{num:03d}"
+
+        # Can't resolve, return as-is
+        return dep_str
+
+    created_tasks = []
+    try:
+        for spec in task_specs:
+            if not spec.get("title"):
+                return {"status": "error", "message": "Each task spec must have a 'title'"}
+
+            task_id = db.get_next_task_id(pid)
+
+            # Build data dict if dependencies provided, resolving shorthand IDs
+            data = None
+            if spec.get("dependencies"):
+                resolved_deps = [resolve_dep_id(d) for d in spec["dependencies"]]
+                data = {"dependencies": resolved_deps}
+
+            task = db.create_task(
+                task_id=task_id,
+                project_id=pid,
+                title=spec["title"],
+                description=spec.get("description", ""),
+                prd_id=prd_id,
+                priority=spec.get("priority", "medium"),
+                component=spec.get("component"),
+                data=data,
+            )
+            created_tasks.append({
+                "id": task["id"],
+                "title": task["title"],
+                "priority": task["priority"],
+                "component": task.get("component"),
+            })
+
+        # Update PRD status to "split"
+        db.update_prd(prd_id, status="split")
+
+        return {
+            "status": "success",
+            "message": f"Created {len(created_tasks)} tasks from PRD '{prd_id}'",
+            "prd_id": prd_id,
+            "prd_status": "split",
+            "tasks_created": len(created_tasks),
+            "tasks": created_tasks,
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to create tasks: {str(e)}"}
 
 
 # =============================================================================
@@ -1054,6 +1166,53 @@ def configure_jira(
 
 
 @mcp.tool()
+def configure_confluence(
+    base_url: str,
+    email: str,
+    api_token: str,
+    space_key: str,
+    parent_page_id: str | None = None,
+    page_title_prefix: str = "[SDLC]",
+) -> dict[str, Any]:
+    """Configure Confluence integration for the current project.
+
+    Args:
+        base_url: Atlassian site URL (e.g., https://company.atlassian.net).
+        email: Atlassian account email.
+        api_token: API token from Atlassian account settings.
+        space_key: Confluence space key (e.g., 'PROJ').
+        parent_page_id: Optional parent page ID for SDLC documentation.
+        page_title_prefix: Prefix for created pages (default: '[SDLC]').
+
+    Returns:
+        Configuration status.
+    """
+    db = get_db()
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    config = {
+        "base_url": base_url.rstrip("/"),
+        "email": email,
+        "api_token": api_token,
+        "space_key": space_key,
+        "parent_page_id": parent_page_id,
+        "page_title_prefix": page_title_prefix,
+    }
+
+    db.set_external_config(project_id, "confluence", config)
+
+    return {
+        "status": "configured",
+        "message": f"Confluence integration configured for {project_id}",
+        "system": "confluence",
+        "space_key": space_key,
+    }
+
+
+@mcp.tool()
 def get_integrations() -> dict[str, Any]:
     """List configured external integrations for the current project.
 
@@ -1096,7 +1255,7 @@ def remove_integration(system: str) -> dict[str, Any]:
     """Remove external system integration from the current project.
 
     Args:
-        system: External system name ('linear' or 'jira').
+        system: External system name ('linear', 'jira', or 'confluence').
 
     Returns:
         Removal status.
@@ -1107,8 +1266,8 @@ def remove_integration(system: str) -> dict[str, Any]:
     if not project_id:
         return {"status": "error", "message": "No project context. Run /sdlc:init first."}
 
-    if system not in ["linear", "jira"]:
-        return {"status": "error", "message": f"Unknown system: {system}. Use 'linear' or 'jira'."}
+    if system not in ["linear", "jira", "confluence"]:
+        return {"status": "error", "message": f"Unknown system: {system}. Use 'linear', 'jira', or 'confluence'."}
 
     deleted = db.delete_external_config(project_id, system)
 
@@ -1140,16 +1299,19 @@ def _get_sync_service():
 def import_from_linear(
     cycle_id: str | None = None,
     status: str | None = None,
+    active: bool = False,
 ) -> dict[str, Any]:
-    """Import a Linear cycle as a local sprint with tasks.
+    """Import a Linear cycle as a local sprint with PRDs.
 
-    Either provide a specific cycle_id to import, or use status
-    to list available cycles first.
+    Either provide a specific cycle_id to import, use active=True
+    to import the currently active cycle, or use status to list
+    available cycles first.
 
     Args:
         cycle_id: Specific Linear cycle ID to import.
         status: Filter cycles by status ('active', 'upcoming', 'completed').
-                If provided without cycle_id, lists available cycles.
+                If provided without cycle_id and active=False, lists available cycles.
+        active: If True, import the currently active cycle (ignores cycle_id).
 
     Returns:
         Import result or list of available cycles.
@@ -1168,6 +1330,22 @@ def import_from_linear(
             "message": "Linear not configured. Use configure_linear tool first.",
         }
 
+    # If active flag is set, import active cycle
+    if active:
+        try:
+            sync = _get_sync_service()
+            result = sync.import_linear_active_cycle(project_id)
+
+            return {
+                "status": "imported",
+                "message": f"Imported active cycle as sprint {result['sprint']['id']}",
+                "sprint_id": result["sprint"]["id"],
+                "sprint_title": result["sprint"]["title"],
+                "prds_imported": result["prds_count"],
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     if not cycle_id:
         # List available cycles
         try:
@@ -1178,7 +1356,7 @@ def import_from_linear(
 
             return {
                 "status": "ok",
-                "message": "Available cycles (provide cycle_id to import):",
+                "message": "Available cycles (provide cycle_id to import, or use active=True):",
                 "cycles": [
                     {
                         "id": c["id"],
@@ -1202,7 +1380,7 @@ def import_from_linear(
             "message": f"Imported cycle as sprint {result['sprint']['id']}",
             "sprint_id": result["sprint"]["id"],
             "sprint_title": result["sprint"]["title"],
-            "tasks_imported": result["tasks_count"],
+            "prds_imported": result["prds_count"],
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -1213,16 +1391,19 @@ def import_from_jira(
     sprint_id: str | None = None,
     board_id: str | None = None,
     state: str | None = None,
+    active: bool = False,
 ) -> dict[str, Any]:
-    """Import a Jira sprint as a local sprint with tasks.
+    """Import a Jira sprint as a local sprint with PRDs.
 
-    Either provide a specific sprint_id to import, or use board_id
+    Either provide a specific sprint_id to import, use board_id with
+    active=True to import the currently active sprint, or use board_id
     and state to list available sprints first.
 
     Args:
-        sprint_id: Specific Jira sprint ID to import.
-        board_id: Jira board ID (required if sprint_id not provided).
+        sprint_id: Specific Jira sprint ID to import (overrides active flag).
+        board_id: Jira board ID (required for listing or active sprint).
         state: Filter sprints by state ('active', 'future', 'closed').
+        active: If True and board_id provided, import the active sprint.
 
     Returns:
         Import result or list of available sprints.
@@ -1240,11 +1421,27 @@ def import_from_jira(
             "message": "Jira not configured. Use configure_jira tool first.",
         }
 
+    # If active flag is set with board_id, import active sprint
+    if active and board_id and not sprint_id:
+        try:
+            sync = _get_sync_service()
+            result = sync.import_jira_active_sprint(project_id, board_id)
+
+            return {
+                "status": "imported",
+                "message": f"Imported active sprint as {result['sprint']['id']}",
+                "sprint_id": result["sprint"]["id"],
+                "sprint_title": result["sprint"]["title"],
+                "prds_imported": result["prds_count"],
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     if not sprint_id:
         if not board_id:
             return {
                 "status": "error",
-                "message": "Provide either sprint_id to import, or board_id to list sprints.",
+                "message": "Provide sprint_id to import, board_id with active=True, or board_id to list sprints.",
             }
 
         # List available sprints
@@ -1258,7 +1455,7 @@ def import_from_jira(
 
             return {
                 "status": "ok",
-                "message": "Available sprints (provide sprint_id to import):",
+                "message": "Available sprints (provide sprint_id to import, or use active=True):",
                 "sprints": [
                     {
                         "id": s["id"],
@@ -1282,7 +1479,7 @@ def import_from_jira(
             "message": f"Imported sprint as {result['sprint']['id']}",
             "sprint_id": result["sprint"]["id"],
             "sprint_title": result["sprint"]["title"],
-            "tasks_imported": result["tasks_count"],
+            "prds_imported": result["prds_count"],
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

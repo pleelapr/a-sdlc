@@ -1,0 +1,143 @@
+{% if system == 'linear' %}
+<div class="integration-card" id="integration-linear">
+    <div class="integration-header">
+        <div class="integration-title">
+            <h3>Linear</h3>
+            {% if integration %}
+            <span class="integration-status status-configured">Configured</span>
+            {% else %}
+            <span class="integration-status status-not-configured">Not Configured</span>
+            {% endif %}
+        </div>
+    </div>
+    <p class="integration-description">Sync sprints and tasks with Linear for issue tracking</p>
+    {% if integration %}
+    <div class="integration-details">
+        Team ID: <code>{{ integration.config.team_id }}</code>
+        {% if integration.config.default_project %}
+        &bull; Project: <code>{{ integration.config.default_project }}</code>
+        {% endif %}
+    </div>
+    <div class="integration-actions">
+        <button class="btn"
+                hx-get="/settings/integrations/linear/edit?project={{ project.id }}"
+                hx-target="#linear-form-container"
+                hx-swap="innerHTML">
+            Edit
+        </button>
+        <button class="btn btn-danger"
+                hx-delete="/settings/integrations/linear?project={{ project.id }}"
+                hx-confirm="Are you sure you want to remove this integration?"
+                hx-target="#integration-linear"
+                hx-swap="outerHTML">
+            Remove
+        </button>
+    </div>
+    {% else %}
+    <div class="integration-actions">
+        <button class="btn btn-primary"
+                hx-get="/settings/integrations/linear/edit?project={{ project.id }}"
+                hx-target="#linear-form-container"
+                hx-swap="innerHTML">
+            Configure
+        </button>
+    </div>
+    {% endif %}
+    <div id="linear-form-container"></div>
+</div>
+
+{% elif system == 'jira' %}
+<div class="integration-card" id="integration-jira">
+    <div class="integration-header">
+        <div class="integration-title">
+            <h3>Jira</h3>
+            {% if integration %}
+            <span class="integration-status status-configured">Configured</span>
+            {% else %}
+            <span class="integration-status status-not-configured">Not Configured</span>
+            {% endif %}
+        </div>
+    </div>
+    <p class="integration-description">Sync sprints and tasks with Jira Cloud for project management</p>
+    {% if integration %}
+    <div class="integration-details">
+        Site: <code>{{ integration.config.base_url }}</code>
+        &bull; Project: <code>{{ integration.config.project_key }}</code>
+    </div>
+    <div class="integration-actions">
+        <button class="btn"
+                hx-get="/settings/integrations/jira/edit?project={{ project.id }}"
+                hx-target="#jira-form-container"
+                hx-swap="innerHTML">
+            Edit
+        </button>
+        <button class="btn btn-danger"
+                hx-delete="/settings/integrations/jira?project={{ project.id }}"
+                hx-confirm="Are you sure you want to remove this integration?"
+                hx-target="#integration-jira"
+                hx-swap="outerHTML">
+            Remove
+        </button>
+    </div>
+    {% else %}
+    <div class="integration-actions">
+        <button class="btn btn-primary"
+                hx-get="/settings/integrations/jira/edit?project={{ project.id }}"
+                hx-target="#jira-form-container"
+                hx-swap="innerHTML">
+            Configure
+        </button>
+    </div>
+    {% endif %}
+    <div id="jira-form-container"></div>
+</div>
+
+{% elif system == 'confluence' %}
+<div class="integration-card" id="integration-confluence">
+    <div class="integration-header">
+        <div class="integration-title">
+            <h3>Confluence</h3>
+            {% if integration %}
+            <span class="integration-status status-configured">Configured</span>
+            {% else %}
+            <span class="integration-status status-not-configured">Not Configured</span>
+            {% endif %}
+        </div>
+    </div>
+    <p class="integration-description">Publish PRDs and documentation to Confluence</p>
+    {% if integration %}
+    <div class="integration-details">
+        Site: <code>{{ integration.config.base_url }}</code>
+        &bull; Space: <code>{{ integration.config.space_key }}</code>
+        {% if integration.config.page_title_prefix %}
+        &bull; Prefix: <code>{{ integration.config.page_title_prefix }}</code>
+        {% endif %}
+    </div>
+    <div class="integration-actions">
+        <button class="btn"
+                hx-get="/settings/integrations/confluence/edit?project={{ project.id }}"
+                hx-target="#confluence-form-container"
+                hx-swap="innerHTML">
+            Edit
+        </button>
+        <button class="btn btn-danger"
+                hx-delete="/settings/integrations/confluence?project={{ project.id }}"
+                hx-confirm="Are you sure you want to remove this integration?"
+                hx-target="#integration-confluence"
+                hx-swap="outerHTML">
+            Remove
+        </button>
+    </div>
+    {% else %}
+    <div class="integration-actions">
+        <button class="btn btn-primary"
+                hx-get="/settings/integrations/confluence/edit?project={{ project.id }}"
+                hx-target="#confluence-form-container"
+                hx-swap="innerHTML">
+            Configure
+        </button>
+    </div>
+    {% endif %}
+    <div id="confluence-form-container"></div>
+</div>
+{% endif %}
