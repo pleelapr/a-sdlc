@@ -4,21 +4,23 @@ SQLite database operations for a-sdlc MCP server.
 Provides:
 - Platform-aware data directory (macOS, Linux, Windows)
 - SQLite connection management
-- Schema migrations
 - CRUD operations for projects, PRDs, tasks, sprints
+- Hybrid storage: SQLite indexes metadata, file_path references markdown files
 """
 
 import json
 import os
 import platform
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Generator
 
-# Schema version for migrations
-SCHEMA_VERSION = 3
+# Schema version for fresh start (hybrid storage with file_path design)
+# Version 2: Added shortname column to projects table
+SCHEMA_VERSION = 2
 
 
 def get_data_dir() -> Path:
@@ -47,7 +49,11 @@ def ensure_data_dir() -> Path:
 
 
 class Database:
-    """SQLite database manager for a-sdlc."""
+    """SQLite database manager for a-sdlc.
+
+    This class manages metadata and file path references.
+    Actual content is stored in markdown files (managed by ContentManager).
+    """
 
     def __init__(self, db_path: Path | None = None):
         """Initialize database connection.
@@ -71,10 +77,10 @@ class Database:
             if cursor.fetchone() is None:
                 self._create_schema(conn)
             else:
-                self._migrate_if_needed(conn)
+                self._check_schema_version(conn)
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
-        """Create initial database schema."""
+        """Create initial database schema (version 2 - with shortname)."""
         conn.executescript(f"""
             -- Schema version tracking
             CREATE TABLE schema_version (
@@ -85,20 +91,22 @@ class Database:
             -- Projects table
             CREATE TABLE projects (
                 id TEXT PRIMARY KEY,
+                shortname TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
                 path TEXT NOT NULL UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX idx_projects_path ON projects(path);
+            CREATE UNIQUE INDEX idx_projects_shortname ON projects(shortname);
 
-            -- PRDs table (PRDs can optionally belong to a sprint)
+            -- PRDs table (metadata + file path reference)
             CREATE TABLE prds (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
                 sprint_id TEXT,
                 title TEXT NOT NULL,
-                content TEXT,
+                file_path TEXT,
                 status TEXT DEFAULT 'draft',
                 source TEXT,
                 version TEXT DEFAULT '1.0.0',
@@ -111,17 +119,16 @@ class Database:
             CREATE INDEX idx_prds_status ON prds(status);
             CREATE INDEX idx_prds_sprint ON prds(sprint_id);
 
-            -- Tasks table (tasks belong to PRDs, sprint is derived from PRD)
+            -- Tasks table (metadata + file path reference)
             CREATE TABLE tasks (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
                 prd_id TEXT,
                 title TEXT NOT NULL,
-                description TEXT,
+                file_path TEXT,
                 status TEXT DEFAULT 'pending',
                 priority TEXT DEFAULT 'medium',
                 component TEXT,
-                data JSON,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 completed_at TIMESTAMP,
@@ -177,23 +184,53 @@ class Database:
             CREATE INDEX idx_external_config_project ON external_config(project_id);
         """)
 
-    def _migrate_if_needed(self, conn: sqlite3.Connection) -> None:
-        """Check schema version and run migrations if needed.
-
-        Note: Historical migrations (v1→v2, v2→v3) have been removed.
-        New databases are created with the current schema directly.
-        Existing databases at version 3 require no migration.
-        """
+    def _check_schema_version(self, conn: sqlite3.Connection) -> None:
+        """Check schema version matches expected and run migrations if needed."""
         cursor = conn.execute("SELECT version FROM schema_version")
         current_version = cursor.fetchone()[0]
 
-        if current_version < SCHEMA_VERSION:
-            # No automatic migrations - manual intervention required
-            raise RuntimeError(
-                f"Database schema version {current_version} is outdated. "
-                f"Expected version {SCHEMA_VERSION}. "
-                "Please backup your data and recreate the database."
+        if current_version == SCHEMA_VERSION:
+            return
+
+        # Handle migration from version 1 to version 2
+        if current_version == 1 and SCHEMA_VERSION == 2:
+            self._migrate_v1_to_v2(conn)
+            return
+
+        # Unknown version - can't migrate
+        raise RuntimeError(
+            f"Database schema version {current_version} is incompatible. "
+            f"Expected version {SCHEMA_VERSION}. "
+            "Please backup your data and delete ~/.a-sdlc/data.db to recreate."
+        )
+
+    def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 1 to version 2 (add shortname column)."""
+        # Add shortname column
+        conn.execute("ALTER TABLE projects ADD COLUMN shortname TEXT")
+
+        # Generate shortnames for existing projects
+        cursor = conn.execute("SELECT id, name FROM projects")
+        projects = cursor.fetchall()
+
+        existing_shortnames: set[str] = set()
+        for project in projects:
+            project_id = project["id"]
+            project_name = project["name"]
+            shortname = self._generate_unique_shortname_internal(
+                project_name, existing_shortnames, conn
             )
+            existing_shortnames.add(shortname)
+            conn.execute(
+                "UPDATE projects SET shortname = ? WHERE id = ?",
+                (shortname, project_id)
+            )
+
+        # Add unique constraint
+        conn.execute("CREATE UNIQUE INDEX idx_projects_shortname ON projects(shortname)")
+
+        # Update schema version
+        conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
 
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -215,26 +252,169 @@ class Database:
             conn.close()
 
     # =========================================================================
+    # Shortname Utilities
+    # =========================================================================
+
+    @staticmethod
+    def validate_shortname(shortname: str) -> tuple[bool, str]:
+        """Validate a project shortname.
+
+        Args:
+            shortname: The shortname to validate.
+
+        Returns:
+            Tuple of (is_valid, error_message). Error message is empty if valid.
+        """
+        if not shortname:
+            return False, "Shortname cannot be empty"
+        if len(shortname) != 4:
+            return False, "Shortname must be exactly 4 characters"
+        if not re.match(r'^[A-Z]{4}$', shortname):
+            return False, "Shortname must contain only uppercase letters (A-Z)"
+        return True, ""
+
+    @staticmethod
+    def _generate_shortname_candidate(name: str) -> str:
+        """Generate a 4-char shortname candidate from project name.
+
+        Args:
+            name: Project name to generate shortname from.
+
+        Returns:
+            4-character uppercase shortname candidate.
+        """
+        # Remove non-alpha, uppercase
+        clean = re.sub(r'[^a-zA-Z]', '', name).upper()
+
+        # Try consonants first (more memorable)
+        consonants = re.sub(r'[AEIOU]', '', clean)
+        if len(consonants) >= 4:
+            return consonants[:4]
+
+        # Fall back to first 4 letters
+        if len(clean) >= 4:
+            return clean[:4]
+
+        # Pad with X if too short
+        return (clean + 'XXXX')[:4]
+
+    def _generate_unique_shortname_internal(
+        self,
+        name: str,
+        existing: set[str],
+        conn: sqlite3.Connection,
+    ) -> str:
+        """Generate a unique shortname (internal helper for migration).
+
+        Args:
+            name: Project name.
+            existing: Set of already-used shortnames in this batch.
+            conn: Database connection.
+
+        Returns:
+            Unique shortname.
+        """
+        base = self._generate_shortname_candidate(name)
+
+        # Try the base candidate first
+        if base not in existing:
+            cursor = conn.execute(
+                "SELECT 1 FROM projects WHERE shortname = ?", (base,)
+            )
+            if not cursor.fetchone():
+                return base
+
+        # Try adding numeric suffix (A, B, C... then 1, 2, 3...)
+        for suffix in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+            candidate = base[:3] + suffix
+            if candidate not in existing:
+                cursor = conn.execute(
+                    "SELECT 1 FROM projects WHERE shortname = ?", (candidate,)
+                )
+                if not cursor.fetchone():
+                    return candidate
+
+        # Fallback: random-ish suffix
+        import random
+        while True:
+            suffix = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=1))
+            candidate = base[:3] + suffix
+            if candidate not in existing:
+                cursor = conn.execute(
+                    "SELECT 1 FROM projects WHERE shortname = ?", (candidate,)
+                )
+                if not cursor.fetchone():
+                    return candidate
+
+    def generate_unique_shortname(self, name: str) -> str:
+        """Generate a unique shortname for a new project.
+
+        Args:
+            name: Project name to generate shortname from.
+
+        Returns:
+            Unique 4-character uppercase shortname.
+        """
+        with self.connection() as conn:
+            return self._generate_unique_shortname_internal(name, set(), conn)
+
+    def is_shortname_available(self, shortname: str) -> bool:
+        """Check if a shortname is available.
+
+        Args:
+            shortname: Shortname to check.
+
+        Returns:
+            True if available, False if already in use.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM projects WHERE shortname = ?", (shortname,)
+            )
+            return cursor.fetchone() is None
+
+    # =========================================================================
     # Project Operations
     # =========================================================================
 
-    def create_project(self, project_id: str, name: str, path: str) -> dict[str, Any]:
+    def create_project(
+        self,
+        project_id: str,
+        name: str,
+        path: str,
+        shortname: str | None = None,
+    ) -> dict[str, Any]:
         """Create a new project.
 
         Args:
             project_id: Unique project identifier (slug)
             name: Display name
             path: Filesystem path to project root
+            shortname: 4-character uppercase project key (auto-generated if not provided)
 
         Returns:
             Created project dict
+
+        Raises:
+            ValueError: If shortname is invalid or already in use.
         """
+        # Generate shortname if not provided
+        if shortname is None:
+            shortname = self.generate_unique_shortname(name)
+        else:
+            # Validate provided shortname
+            is_valid, error_msg = self.validate_shortname(shortname)
+            if not is_valid:
+                raise ValueError(error_msg)
+            if not self.is_shortname_available(shortname):
+                raise ValueError(f"Shortname '{shortname}' is already in use")
+
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
             conn.execute(
-                """INSERT INTO projects (id, name, path, created_at, last_accessed)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (project_id, name, path, now, now),
+                """INSERT INTO projects (id, shortname, name, path, created_at, last_accessed)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (project_id, shortname, name, path, now, now),
             )
         return self.get_project(project_id)
 
@@ -255,6 +435,54 @@ class Database:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def get_project_by_shortname(self, shortname: str) -> dict[str, Any] | None:
+        """Get project by shortname.
+
+        Args:
+            shortname: 4-character project shortname.
+
+        Returns:
+            Project dict if found, None otherwise.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM projects WHERE shortname = ?", (shortname,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def update_project_path(self, project_id: str, new_path: str) -> dict[str, Any] | None:
+        """Update project filesystem path (for relocating projects).
+
+        Args:
+            project_id: Project identifier.
+            new_path: New filesystem path.
+
+        Returns:
+            Updated project dict or None if not found.
+
+        Raises:
+            ValueError: If new_path is already used by another project.
+        """
+        # Check if path is already in use by another project
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT id FROM projects WHERE path = ? AND id != ?",
+                (new_path, project_id)
+            )
+            if cursor.fetchone():
+                raise ValueError(f"Path '{new_path}' is already used by another project")
+
+            now = datetime.now(timezone.utc).isoformat()
+            cursor = conn.execute(
+                "UPDATE projects SET path = ?, last_accessed = ? WHERE id = ?",
+                (new_path, now, project_id)
+            )
+            if cursor.rowcount == 0:
+                return None
+
+        return self.get_project(project_id)
 
     def list_projects(self) -> list[dict[str, Any]]:
         """List all projects ordered by last accessed."""
@@ -301,7 +529,7 @@ class Database:
         prd_id: str,
         project_id: str,
         title: str,
-        content: str = "",
+        file_path: str | None = None,
         status: str = "draft",
         source: str | None = None,
         sprint_id: str | None = None,
@@ -312,7 +540,7 @@ class Database:
             prd_id: Unique PRD identifier
             project_id: Parent project ID
             title: PRD title
-            content: PRD markdown content
+            file_path: Path to markdown file (source of truth for content)
             status: PRD status (draft, ready, split)
             source: Optional source reference
             sprint_id: Optional sprint assignment
@@ -320,14 +548,14 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
             conn.execute(
-                """INSERT INTO prds (id, project_id, sprint_id, title, content, status, source, created_at, updated_at)
+                """INSERT INTO prds (id, project_id, sprint_id, title, file_path, status, source, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (prd_id, project_id, sprint_id, title, content, status, source, now, now),
+                (prd_id, project_id, sprint_id, title, file_path, status, source, now, now),
             )
         return self.get_prd(prd_id)
 
     def get_prd(self, prd_id: str) -> dict[str, Any] | None:
-        """Get PRD by ID."""
+        """Get PRD by ID (metadata only, content in file)."""
         with self.connection() as conn:
             cursor = conn.execute("SELECT * FROM prds WHERE id = ?", (prd_id,))
             row = cursor.fetchone()
@@ -395,12 +623,11 @@ class Database:
         task_id: str,
         project_id: str,
         title: str,
-        description: str = "",
+        file_path: str | None = None,
         status: str = "pending",
         priority: str = "medium",
         prd_id: str | None = None,
         component: str | None = None,
-        data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new task.
 
@@ -408,44 +635,37 @@ class Database:
             task_id: Unique task identifier
             project_id: Parent project ID
             title: Task title
-            description: Task description
+            file_path: Path to markdown file (source of truth for content)
             status: Task status (pending, in_progress, blocked, completed)
             priority: Task priority (low, medium, high, critical)
             prd_id: Optional parent PRD (task inherits sprint from PRD)
             component: Optional component/module name
-            data: Optional additional structured data
 
         Note:
             Tasks no longer have direct sprint_id. Sprint is derived
             from the parent PRD's sprint_id.
         """
         now = datetime.now(timezone.utc).isoformat()
-        data_json = json.dumps(data) if data else None
 
         with self.connection() as conn:
             conn.execute(
                 """INSERT INTO tasks
-                   (id, project_id, prd_id, title, description,
-                    status, priority, component, data, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, project_id, prd_id, title, file_path,
+                    status, priority, component, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    task_id, project_id, prd_id, title, description,
-                    status, priority, component, data_json, now, now,
+                    task_id, project_id, prd_id, title, file_path,
+                    status, priority, component, now, now,
                 ),
             )
         return self.get_task(task_id)
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
-        """Get task by ID."""
+        """Get task by ID (metadata only, content in file)."""
         with self.connection() as conn:
             cursor = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
             row = cursor.fetchone()
-            if row:
-                result = dict(row)
-                if result.get("data"):
-                    result["data"] = json.loads(result["data"])
-                return result
-            return None
+            return dict(row) if row else None
 
     def list_tasks(
         self,
@@ -490,13 +710,7 @@ class Database:
 
         with self.connection() as conn:
             cursor = conn.execute(query, params)
-            results = []
-            for row in cursor.fetchall():
-                result = dict(row)
-                if result.get("data"):
-                    result["data"] = json.loads(result["data"])
-                results.append(result)
-            return results
+            return [dict(row) for row in cursor.fetchall()]
 
     def list_tasks_by_sprint(
         self,
@@ -530,22 +744,12 @@ class Database:
 
         with self.connection() as conn:
             cursor = conn.execute(query, params)
-            results = []
-            for row in cursor.fetchall():
-                result = dict(row)
-                if result.get("data"):
-                    result["data"] = json.loads(result["data"])
-                results.append(result)
-            return results
+            return [dict(row) for row in cursor.fetchall()]
 
     def update_task(self, task_id: str, **kwargs: Any) -> dict[str, Any] | None:
         """Update task fields."""
         if not kwargs:
             return self.get_task(task_id)
-
-        # Handle special fields
-        if "data" in kwargs and kwargs["data"] is not None:
-            kwargs["data"] = json.dumps(kwargs["data"])
 
         kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -569,15 +773,21 @@ class Database:
     def get_next_task_id(self, project_id: str) -> str:
         """Generate next task ID for a project.
 
-        IDs are prefixed with project_id to ensure global uniqueness
-        across all projects in the database.
+        Format: {shortname}-T{number:05d} (e.g., PCRA-T00001)
+        Uses project shortname for compact, Jira-style IDs.
         """
+        project = self.get_project(project_id)
+        if not project:
+            raise ValueError(f"Project not found: {project_id}")
+
+        shortname = project["shortname"]
+
         with self.connection() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM tasks WHERE project_id = ?", (project_id,)
             )
             count = cursor.fetchone()[0]
-        return f"{project_id}-TASK-{count + 1:03d}"
+        return f"{shortname}-T{count + 1:05d}"
 
     # =========================================================================
     # Sprint Operations
@@ -696,15 +906,40 @@ class Database:
     def get_next_sprint_id(self, project_id: str) -> str:
         """Generate next sprint ID for a project.
 
-        IDs are prefixed with project_id to ensure global uniqueness
-        across all projects in the database.
+        Format: {shortname}-S{number:04d} (e.g., PCRA-S0001)
+        Uses project shortname for compact, Jira-style IDs.
         """
+        project = self.get_project(project_id)
+        if not project:
+            raise ValueError(f"Project not found: {project_id}")
+
+        shortname = project["shortname"]
+
         with self.connection() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM sprints WHERE project_id = ?", (project_id,)
             )
             count = cursor.fetchone()[0]
-        return f"{project_id}-SPRINT-{count + 1:02d}"
+        return f"{shortname}-S{count + 1:04d}"
+
+    def get_next_prd_id(self, project_id: str) -> str:
+        """Generate next PRD ID for a project.
+
+        Format: {shortname}-P{number:04d} (e.g., PCRA-P0001)
+        Uses project shortname for compact, Jira-style IDs.
+        """
+        project = self.get_project(project_id)
+        if not project:
+            raise ValueError(f"Project not found: {project_id}")
+
+        shortname = project["shortname"]
+
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM prds WHERE project_id = ?", (project_id,)
+            )
+            count = cursor.fetchone()[0]
+        return f"{shortname}-P{count + 1:04d}"
 
     # =========================================================================
     # Sync Mapping Operations

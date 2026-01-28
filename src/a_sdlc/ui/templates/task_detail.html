@@ -51,18 +51,18 @@
 
 <div class="card">
     <div class="card-header">
-        <h3 style="margin: 0;">Description</h3>
-        <div id="desc-actions">
+        <h3 style="margin: 0;">Content</h3>
+        <div id="content-actions">
             <button id="edit-btn" class="btn" onclick="toggleEdit()">Edit</button>
         </div>
     </div>
 
     <!-- View Mode: Rendered Markdown -->
-    <div id="desc-view" class="markdown" style="margin-top: 1rem;"></div>
+    <div id="content-view" class="markdown" style="margin-top: 1rem;"></div>
 
     <!-- Edit Mode: Textarea -->
-    <div id="desc-edit" style="display: none; margin-top: 1rem;">
-        <textarea id="desc-textarea" style="
+    <div id="content-edit" style="display: none; margin-top: 1rem;">
+        <textarea id="content-textarea" style="
             width: 100%;
             min-height: 300px;
             padding: 1rem;
@@ -73,9 +73,9 @@
             border-radius: 6px;
             color: var(--text);
             resize: vertical;
-        ">{{ task.description or '' }}</textarea>
+        ">{{ task.content or '' }}</textarea>
         <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
-            <button class="btn btn-primary" onclick="saveDescription()">Save</button>
+            <button class="btn btn-primary" onclick="saveContent()">Save</button>
             <button class="btn" onclick="cancelEdit()">Cancel</button>
         </div>
     </div>
@@ -95,8 +95,8 @@
 </div>
 
 <script>
-    // Store original description for cancel
-    let originalDescription = {{ task.description | tojson | safe if task.description else '""' }};
+    // Store original content for cancel
+    let originalContent = {{ task.content | tojson | safe if task.content else '""' }};
     let isEditing = false;
 
     async function updateStatus(status) {
@@ -116,54 +116,54 @@
 
     // Render markdown on page load
     document.addEventListener('DOMContentLoaded', function() {
-        renderMarkdown(originalDescription);
+        renderMarkdown(originalContent);
     });
 
     function renderMarkdown(content) {
-        const viewEl = document.getElementById('desc-view');
+        const viewEl = document.getElementById('content-view');
         if (content) {
             viewEl.innerHTML = marked.parse(content);
         } else {
-            viewEl.innerHTML = '<p style="color: var(--text-muted);">No description yet. Click Edit to add a description.</p>';
+            viewEl.innerHTML = '<p style="color: var(--text-muted);">No content yet. Click Edit to add content.</p>';
         }
     }
 
     function toggleEdit() {
         isEditing = !isEditing;
-        document.getElementById('desc-view').style.display = isEditing ? 'none' : 'block';
-        document.getElementById('desc-edit').style.display = isEditing ? 'block' : 'none';
+        document.getElementById('content-view').style.display = isEditing ? 'none' : 'block';
+        document.getElementById('content-edit').style.display = isEditing ? 'block' : 'none';
         document.getElementById('edit-btn').textContent = isEditing ? 'View' : 'Edit';
 
         if (isEditing) {
-            document.getElementById('desc-textarea').focus();
+            document.getElementById('content-textarea').focus();
         }
     }
 
     function cancelEdit() {
-        document.getElementById('desc-textarea').value = originalDescription;
+        document.getElementById('content-textarea').value = originalContent;
         toggleEdit();
     }
 
-    async function saveDescription() {
-        const description = document.getElementById('desc-textarea').value;
+    async function saveContent() {
+        const content = document.getElementById('content-textarea').value;
 
         try {
-            const response = await fetch('/tasks/{{ task.id }}/description', {
+            const response = await fetch('/tasks/{{ task.id }}/content', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: description })
+                body: JSON.stringify({ content: content })
             });
 
             if (response.ok) {
-                originalDescription = description;
-                renderMarkdown(description);
+                originalContent = content;
+                renderMarkdown(content);
                 toggleEdit();
             } else {
-                alert('Failed to save description');
+                alert('Failed to save content');
             }
         } catch (error) {
             console.error('Save error:', error);
-            alert('Failed to save description');
+            alert('Failed to save content');
         }
     }
 </script>

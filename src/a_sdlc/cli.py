@@ -1872,20 +1872,20 @@ def tasks_list(status: str | None, sprint: str | None) -> None:
         a-sdlc tasks --status pending   # Pending tasks only
         a-sdlc tasks --sprint SPRINT-01 # Tasks in sprint
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
 
     # Get current project
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
         return
 
-    tasks = db.list_tasks(project["id"], status=status, sprint_id=sprint)
+    tasks = storage.list_tasks(project["id"], status=status, sprint_id=sprint)
 
     if not tasks:
         console.print("[dim]No tasks found.[/dim]")
@@ -1945,10 +1945,10 @@ def show_task(task_id: str) -> None:
         a-sdlc show TASK-001
         a-sdlc show TASK-002
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
-    task = db.get_task(task_id)
+    storage = get_storage()
+    task = storage.get_task(task_id)
 
     if not task:
         console.print(f"[red]Task not found: {task_id}[/red]")
@@ -1996,10 +1996,10 @@ def start_task_cmd(task_id: str) -> None:
 
         a-sdlc start TASK-001
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
-    task = db.update_task(task_id, status="in_progress")
+    storage = get_storage()
+    task = storage.update_task(task_id, status="in_progress")
 
     if not task:
         console.print(f"[red]Task not found: {task_id}[/red]")
@@ -2072,10 +2072,10 @@ def complete_task_cmd(task_id: str) -> None:
 
         a-sdlc complete TASK-001
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
-    task = db.update_task(task_id, status="completed")
+    storage = get_storage()
+    task = storage.update_task(task_id, status="completed")
 
     if not task:
         console.print(f"[red]Task not found: {task_id}[/red]")
@@ -2118,11 +2118,11 @@ def connect_linear(api_key: str, team_id: str, default_project: str | None) -> N
         a-sdlc connect linear --api-key <key> --team-id ENG
         a-sdlc connect linear  # Interactive prompts
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -2135,7 +2135,7 @@ def connect_linear(api_key: str, team_id: str, default_project: str | None) -> N
         "default_project": default_project,
     }
 
-    db.set_external_config(project["id"], "linear", config)
+    storage.set_external_config(project["id"], "linear", config)
 
     console.print(f"[green]✓ Linear integration configured for {project['name']}[/green]")
     console.print(f"[dim]Team: {team_id}[/dim]")
@@ -2161,11 +2161,11 @@ def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_t
         a-sdlc connect jira --url https://company.atlassian.net --email user@example.com --project-key PROJ
         a-sdlc connect jira  # Interactive prompts
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -2180,7 +2180,7 @@ def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_t
         "issue_type": issue_type,
     }
 
-    db.set_external_config(project["id"], "jira", config)
+    storage.set_external_config(project["id"], "jira", config)
 
     console.print(f"[green]✓ Jira integration configured for {project['name']}[/green]")
     console.print(f"[dim]Project: {project_key} at {url}[/dim]")
@@ -2207,11 +2207,11 @@ def connect_confluence(url: str, email: str, api_token: str, space_key: str, par
         a-sdlc connect confluence --url https://company.atlassian.net --email user@example.com --space-key PROJ
         a-sdlc connect confluence  # Interactive prompts
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -2227,7 +2227,7 @@ def connect_confluence(url: str, email: str, api_token: str, space_key: str, par
         "page_title_prefix": page_prefix,
     }
 
-    db.set_external_config(project["id"], "confluence", config)
+    storage.set_external_config(project["id"], "confluence", config)
 
     console.print(f"[green]✓ Confluence integration configured for {project['name']}[/green]")
     console.print(f"[dim]Space: {space_key} at {url}[/dim]")
@@ -2251,18 +2251,18 @@ def disconnect(system: str, yes: bool) -> None:
         a-sdlc disconnect jira -y
         a-sdlc disconnect confluence
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         sys.exit(1)
 
     # Check if configured
-    config = db.get_external_config(project["id"], system)
+    config = storage.get_external_config(project["id"], system)
     if not config:
         console.print(f"[yellow]{system.title()} integration not configured.[/yellow]")
         return
@@ -2272,7 +2272,7 @@ def disconnect(system: str, yes: bool) -> None:
             console.print("Aborted.")
             return
 
-    db.delete_external_config(project["id"], system)
+    storage.delete_external_config(project["id"], system)
     console.print(f"[green]✓ {system.title()} integration removed from {project['name']}[/green]")
 
 
@@ -2286,18 +2286,18 @@ def integrations() -> None:
 
         a-sdlc integrations
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
         return
 
-    configs = db.list_external_configs(project["id"])
+    configs = storage.list_external_configs(project["id"])
 
     console.print(f"\n[bold]Integrations for {project['name']}[/bold]\n")
 
@@ -2335,7 +2335,7 @@ def integrations() -> None:
     console.print()
 
     # Show sync mappings summary
-    mappings = db.list_sync_mappings()
+    mappings = storage.list_sync_mappings()
     if mappings:
         sprint_mappings = [m for m in mappings if m["entity_type"] == "sprint"]
         task_mappings = [m for m in mappings if m["entity_type"] == "task"]
@@ -2405,19 +2405,19 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
       a-sdlc sync jira pull --sprint 456               # Pull specific sprint
       a-sdlc sync jira pull --sprint 456 --dry-run     # Preview import
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService, JiraClient
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
         sys.exit(1)
 
-    config = db.get_external_config(project["id"], "jira")
+    config = storage.get_external_config(project["id"], "jira")
     if not config:
         console.print("[red]Jira not configured.[/red]")
         console.print("Run [cyan]a-sdlc connect jira[/cyan] first.")
@@ -2532,35 +2532,35 @@ def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
       a-sdlc sync jira push SPRINT-01
       a-sdlc sync jira push SPRINT-01 --dry-run
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         sys.exit(1)
 
-    config = db.get_external_config(project["id"], "jira")
+    config = storage.get_external_config(project["id"], "jira")
     if not config:
         console.print("[red]Jira not configured.[/red]")
         console.print("Run [cyan]a-sdlc connect jira[/cyan] first.")
         sys.exit(1)
 
     # Check sprint is linked
-    mapping = db.get_sync_mapping("sprint", sprint_id, "jira")
+    mapping = storage.get_sync_mapping("sprint", sprint_id, "jira")
     if not mapping:
         console.print(f"[red]Sprint {sprint_id} is not linked to Jira.[/red]")
         console.print("Use [cyan]a-sdlc sync jira pull[/cyan] to import from Jira first.")
         sys.exit(1)
 
     if dry_run:
-        prds = db.get_sprint_prds(sprint_id)
+        prds = storage.get_sprint_prds(sprint_id)
         console.print(f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Jira sprint {mapping['external_id']}")
         for prd in prds:
-            prd_mapping = db.get_sync_mapping("prd", prd["id"], "jira")
+            prd_mapping = storage.get_sync_mapping("prd", prd["id"], "jira")
             action = "Update" if prd_mapping else "Create"
             console.print(f"  {action}: {prd['title']}")
         return
@@ -2593,30 +2593,30 @@ def jira_status(sprint_id: str | None) -> None:
       a-sdlc sync jira status              # All linked sprints
       a-sdlc sync jira status SPRINT-01    # Specific sprint
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         return
 
-    config = db.get_external_config(project["id"], "jira")
+    config = storage.get_external_config(project["id"], "jira")
     if not config:
         console.print("[dim]Jira not configured.[/dim]")
         return
 
     if sprint_id:
         # Show specific sprint status
-        mapping = db.get_sync_mapping("sprint", sprint_id, "jira")
+        mapping = storage.get_sync_mapping("sprint", sprint_id, "jira")
         if not mapping:
             console.print(f"[yellow]Sprint {sprint_id} is not linked to Jira.[/yellow]")
             return
 
-        sprint = db.get_sprint(sprint_id)
-        prds = db.get_sprint_prds(sprint_id)
+        sprint = storage.get_sprint(sprint_id)
+        prds = storage.get_sprint_prds(sprint_id)
 
         console.print(f"\n[bold]Sprint: {sprint['title']}[/bold]")
         console.print(f"Local ID: {sprint_id}")
@@ -2629,14 +2629,14 @@ def jira_status(sprint_id: str | None) -> None:
         if prds:
             console.print("\nPRD Sync Status:")
             for prd in prds:
-                prd_mapping = db.get_sync_mapping("prd", prd["id"], "jira")
+                prd_mapping = storage.get_sync_mapping("prd", prd["id"], "jira")
                 if prd_mapping:
                     console.print(f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id']}")
                 else:
                     console.print(f"  [dim]-[/dim] {prd['title']} (not linked)")
     else:
         # Show all linked sprints
-        mappings = db.list_sync_mappings("sprint", "jira")
+        mappings = storage.list_sync_mappings("sprint", "jira")
 
         if not mappings:
             console.print("[dim]No sprints linked to Jira.[/dim]")
@@ -2652,7 +2652,7 @@ def jira_status(sprint_id: str | None) -> None:
         table.add_column("Last Synced", style="dim")
 
         for m in mappings:
-            sprint = db.get_sprint(m["local_id"])
+            sprint = storage.get_sprint(m["local_id"])
             if sprint:
                 table.add_row(
                     f"{m['local_id']} ({sprint['title']})",
@@ -2703,19 +2703,19 @@ def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run
       a-sdlc sync linear pull --cycle <id>             # Pull specific cycle
       a-sdlc sync linear pull --cycle <id> --dry-run   # Preview import
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService, LinearClient
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         console.print("Run [cyan]/sdlc:init[/cyan] in Claude Code first.")
         sys.exit(1)
 
-    config = db.get_external_config(project["id"], "linear")
+    config = storage.get_external_config(project["id"], "linear")
     if not config:
         console.print("[red]Linear not configured.[/red]")
         console.print("Run [cyan]a-sdlc connect linear[/cyan] first.")
@@ -2821,35 +2821,35 @@ def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
       a-sdlc sync linear push SPRINT-01
       a-sdlc sync linear push SPRINT-01 --dry-run
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         sys.exit(1)
 
-    config = db.get_external_config(project["id"], "linear")
+    config = storage.get_external_config(project["id"], "linear")
     if not config:
         console.print("[red]Linear not configured.[/red]")
         console.print("Run [cyan]a-sdlc connect linear[/cyan] first.")
         sys.exit(1)
 
     # Check sprint is linked
-    mapping = db.get_sync_mapping("sprint", sprint_id, "linear")
+    mapping = storage.get_sync_mapping("sprint", sprint_id, "linear")
     if not mapping:
         console.print(f"[red]Sprint {sprint_id} is not linked to Linear.[/red]")
         console.print("Use [cyan]a-sdlc sync linear pull[/cyan] to import from Linear first.")
         sys.exit(1)
 
     if dry_run:
-        prds = db.get_sprint_prds(sprint_id)
+        prds = storage.get_sprint_prds(sprint_id)
         console.print(f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Linear cycle {mapping['external_id'][:12]}...")
         for prd in prds:
-            prd_mapping = db.get_sync_mapping("prd", prd["id"], "linear")
+            prd_mapping = storage.get_sync_mapping("prd", prd["id"], "linear")
             action = "Update" if prd_mapping else "Create"
             console.print(f"  {action}: {prd['title']}")
         return
@@ -2882,30 +2882,30 @@ def linear_status(sprint_id: str | None) -> None:
       a-sdlc sync linear status              # All linked sprints
       a-sdlc sync linear status SPRINT-01    # Specific sprint
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
-    project = db.get_project_by_path(cwd)
+    project = storage.get_project_by_path(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
         return
 
-    config = db.get_external_config(project["id"], "linear")
+    config = storage.get_external_config(project["id"], "linear")
     if not config:
         console.print("[dim]Linear not configured.[/dim]")
         return
 
     if sprint_id:
         # Show specific sprint status
-        mapping = db.get_sync_mapping("sprint", sprint_id, "linear")
+        mapping = storage.get_sync_mapping("sprint", sprint_id, "linear")
         if not mapping:
             console.print(f"[yellow]Sprint {sprint_id} is not linked to Linear.[/yellow]")
             return
 
-        sprint = db.get_sprint(sprint_id)
-        prds = db.get_sprint_prds(sprint_id)
+        sprint = storage.get_sprint(sprint_id)
+        prds = storage.get_sprint_prds(sprint_id)
 
         console.print(f"\n[bold]Sprint: {sprint['title']}[/bold]")
         console.print(f"Local ID: {sprint_id}")
@@ -2918,14 +2918,14 @@ def linear_status(sprint_id: str | None) -> None:
         if prds:
             console.print("\nPRD Sync Status:")
             for prd in prds:
-                prd_mapping = db.get_sync_mapping("prd", prd["id"], "linear")
+                prd_mapping = storage.get_sync_mapping("prd", prd["id"], "linear")
                 if prd_mapping:
                     console.print(f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id'][:12]}...")
                 else:
                     console.print(f"  [dim]-[/dim] {prd['title']} (not linked)")
     else:
         # Show all linked sprints
-        mappings = db.list_sync_mappings("sprint", "linear")
+        mappings = storage.list_sync_mappings("sprint", "linear")
 
         if not mappings:
             console.print("[dim]No sprints linked to Linear.[/dim]")
@@ -2941,7 +2941,7 @@ def linear_status(sprint_id: str | None) -> None:
         table.add_column("Last Synced", style="dim")
 
         for m in mappings:
-            sprint = db.get_sprint(m["local_id"])
+            sprint = storage.get_sprint(m["local_id"])
             if sprint:
                 table.add_row(
                     f"{m['local_id']} ({sprint['title']})",
@@ -2966,13 +2966,13 @@ def init_project_cmd(name: str | None) -> None:
         a-sdlc init                    # Use folder name
         a-sdlc init --name "My Project"  # Custom name
     """
-    from a_sdlc.server.database import get_db
+    from a_sdlc.storage import get_storage
 
-    db = get_db()
+    storage = get_storage()
     cwd = str(Path.cwd())
 
     # Check if already exists
-    existing = db.get_project_by_path(cwd)
+    existing = storage.get_project_by_path(cwd)
     if existing:
         console.print(f"[yellow]Project already initialized: {existing['name']}[/yellow]")
         console.print(f"[dim]ID: {existing['id']}[/dim]")
@@ -2983,7 +2983,7 @@ def init_project_cmd(name: str | None) -> None:
     project_id = folder_name.lower().replace(" ", "-").replace("_", "-")
     project_name = name or folder_name
 
-    project = db.create_project(project_id, project_name, cwd)
+    project = storage.create_project(project_id, project_name, cwd)
 
     console.print(Panel(
         f"[green]Project '{project_name}' initialized![/green]\n\n"

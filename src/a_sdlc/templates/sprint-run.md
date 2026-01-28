@@ -91,21 +91,21 @@ Launch agents in parallel by including multiple Task tool calls in ONE message:
 
 Task(
   description="Execute TASK-001",
-  prompt="Execute task TASK-001: Set up OAuth config. Read the full task from .sdlc/tasks/active/TASK-001.json and .sdlc/tasks/active/TASK-001.md. Follow the implementation steps exactly. When complete, update task status to completed.",
+  prompt="Execute task TASK-001: Set up OAuth config. Fetch task details using mcp__asdlc__get_task(task_id='TASK-001'). Follow the implementation steps exactly. When complete, use mcp__asdlc__update_task to set status to completed.",
   subagent_type="general-purpose",
   run_in_background=true
 )
 
 Task(
   description="Execute TASK-002",
-  prompt="Execute task TASK-002: Create login endpoint. Read the full task from .sdlc/tasks/active/TASK-002.json and .sdlc/tasks/active/TASK-002.md. Follow the implementation steps exactly. When complete, update task status to completed.",
+  prompt="Execute task TASK-002: Create login endpoint. Fetch task details using mcp__asdlc__get_task(task_id='TASK-002'). Follow the implementation steps exactly. When complete, use mcp__asdlc__update_task to set status to completed.",
   subagent_type="general-purpose",
   run_in_background=true
 )
 
 Task(
   description="Execute TASK-003",
-  prompt="Execute task TASK-003: Add user model fields. Read the full task from .sdlc/tasks/active/TASK-003.json and .sdlc/tasks/active/TASK-003.md. Follow the implementation steps exactly. When complete, update task status to completed.",
+  prompt="Execute task TASK-003: Add user model fields. Fetch task details using mcp__asdlc__get_task(task_id='TASK-003'). Follow the implementation steps exactly. When complete, use mcp__asdlc__update_task to set status to completed.",
   subagent_type="general-purpose",
   run_in_background=true
 )

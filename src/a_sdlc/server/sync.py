@@ -1,17 +1,18 @@
 """
 External sync service for a-sdlc.
 
-Handles synchronization between local SQLite database and external
-systems like Linear and Jira.
+Handles synchronization between local hybrid storage (SQLite + markdown files)
+and external systems like Linear and Jira.
 """
 
-import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
-from a_sdlc.server.database import Database
+from a_sdlc.core.database import Database
+from a_sdlc.core.content import ContentManager
 
 
 class LinearClient:
@@ -387,7 +388,7 @@ class JiraClient:
     def search_issues(self, jql: str, max_results: int = 100) -> list[dict]:
         """Search issues with JQL."""
         data = self._get(
-            "/search",
+            "/search/jql",
             params={
                 "jql": jql,
                 "maxResults": max_results,
@@ -516,13 +517,15 @@ class JiraClient:
 class ExternalSyncService:
     """Handles sync operations between local and external systems."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, content_mgr: ContentManager):
         """Initialize sync service.
 
         Args:
-            db: Database instance
+            db: Database instance for metadata
+            content_mgr: ContentManager instance for file operations
         """
         self.db = db
+        self.content_mgr = content_mgr
 
     def _get_linear_client(self, project_id: str) -> LinearClient:
         """Get configured Linear client for project."""
@@ -618,7 +621,7 @@ class ExternalSyncService:
             content = issue.get("description", "") or ""
             labels = issue.get("labels", {}).get("nodes", [])
             if labels:
-                label_names = [l.get("name", "") for l in labels]
+                label_names = [label.get("name", "") for label in labels]
                 content += f"\n\n**Labels**: {', '.join(label_names)}"
 
             # Fetch and append sub-issues (children)
@@ -630,11 +633,21 @@ class ExternalSyncService:
 
             # Create PRD with sprint assignment
             prd_id = self._slugify_linear_issue(issue, project_id)
+
+            # Write content file
+            file_path = self.content_mgr.write_prd(
+                project_id=project_id,
+                prd_id=prd_id,
+                title=issue.get("title", "Untitled"),
+                content=content,
+            )
+
+            # Register in database
             prd = self.db.create_prd(
                 prd_id=prd_id,
                 project_id=project_id,
                 title=issue.get("title", "Untitled"),
-                content=content,
+                file_path=str(file_path),
                 status=prd_status,
                 source=f"linear:{issue.get('identifier', issue.get('id'))}",
                 sprint_id=sprint_id,
@@ -668,7 +681,6 @@ class ExternalSyncService:
         Returns:
             Project-prefixed slug ID
         """
-        import re
         identifier = issue.get("identifier", "")
         title = issue.get("title", "untitled")
         slug = f"{identifier}-{title}".lower()
@@ -789,13 +801,18 @@ class ExternalSyncService:
             else:
                 linear_state = "Backlog"
 
+            # Read content from file
+            content = ""
+            if prd.get("file_path"):
+                content = self.content_mgr.read_content(prd["file_path"]) or ""
+
             try:
                 if prd_mapping:
                     # Update existing issue
                     client.update_issue(
                         prd_mapping["external_id"],
                         title=prd["title"],
-                        description=prd.get("content", ""),
+                        description=content,
                         state_name=linear_state,
                     )
                     self.db.update_sync_mapping(
@@ -806,7 +823,7 @@ class ExternalSyncService:
                     # Create new issue
                     issue = client.create_issue(
                         title=prd["title"],
-                        description=prd.get("content", ""),
+                        description=content,
                         priority=3,  # Default medium
                         cycle_id=cycle_id,
                     )
@@ -885,25 +902,45 @@ class ExternalSyncService:
             try:
                 if prd_mapping:
                     # Update existing PRD
-                    self.db.update_prd(
-                        prd_mapping["local_id"],
+                    prd_id = prd_mapping["local_id"]
+
+                    # Update content file
+                    self.content_mgr.write_prd(
+                        project_id=project_id,
+                        prd_id=prd_id,
                         title=issue.get("title", "Untitled"),
                         content=issue.get("description", ""),
+                    )
+
+                    # Update database
+                    self.db.update_prd(
+                        prd_id,
+                        title=issue.get("title", "Untitled"),
                         status=prd_status,
                     )
                     self.db.update_sync_mapping(
-                        "prd", prd_mapping["local_id"], "linear",
+                        "prd", prd_id, "linear",
                         sync_status="synced"
                     )
                     results["prds_updated"] += 1
                 else:
                     # Create new PRD
                     prd_id = self._slugify_linear_issue(issue, project_id)
+
+                    # Write content file
+                    file_path = self.content_mgr.write_prd(
+                        project_id=project_id,
+                        prd_id=prd_id,
+                        title=issue.get("title", "Untitled"),
+                        content=issue.get("description", ""),
+                    )
+
+                    # Register in database
                     self.db.create_prd(
                         prd_id=prd_id,
                         project_id=project_id,
                         title=issue.get("title", "Untitled"),
-                        content=issue.get("description", ""),
+                        file_path=str(file_path),
                         status=prd_status,
                         source=f"linear:{issue.get('identifier', issue.get('id'))}",
                         sprint_id=sprint_id,
@@ -1006,11 +1043,21 @@ class ExternalSyncService:
 
             # Create PRD with sprint assignment
             prd_id = self._slugify_jira_issue(issue, project_id)
+
+            # Write content file
+            file_path = self.content_mgr.write_prd(
+                project_id=project_id,
+                prd_id=prd_id,
+                title=fields.get("summary", "Untitled"),
+                content=content,
+            )
+
+            # Register in database
             prd = self.db.create_prd(
                 prd_id=prd_id,
                 project_id=project_id,
                 title=fields.get("summary", "Untitled"),
-                content=content,
+                file_path=str(file_path),
                 status=prd_status,
                 source=f"jira:{issue['key']}",
                 sprint_id=local_sprint_id,
@@ -1044,7 +1091,6 @@ class ExternalSyncService:
         Returns:
             Project-prefixed slug ID
         """
-        import re
         key = issue.get("key", "")
         summary = issue.get("fields", {}).get("summary", "untitled")
         slug = f"{key}-{summary}".lower()
@@ -1180,6 +1226,11 @@ class ExternalSyncService:
             else:
                 jira_status = "To Do"
 
+            # Read content from file
+            content = ""
+            if prd.get("file_path"):
+                content = self.content_mgr.read_content(prd["file_path"]) or ""
+
             try:
                 if prd_mapping:
                     # Update existing issue - transition status
@@ -1199,7 +1250,7 @@ class ExternalSyncService:
                     # Create new issue
                     issue = client.create_issue(
                         summary=prd["title"],
-                        description=prd.get("content", ""),
+                        description=content,
                         priority="Medium",
                         sprint_id=jira_sprint_id,
                     )
@@ -1264,24 +1315,44 @@ class ExternalSyncService:
 
             try:
                 if prd_mapping:
-                    self.db.update_prd(
-                        prd_mapping["local_id"],
+                    prd_id = prd_mapping["local_id"]
+
+                    # Update content file
+                    self.content_mgr.write_prd(
+                        project_id=project_id,
+                        prd_id=prd_id,
                         title=fields.get("summary", "Untitled"),
                         content=self._extract_jira_description(fields.get("description")),
+                    )
+
+                    # Update database
+                    self.db.update_prd(
+                        prd_id,
+                        title=fields.get("summary", "Untitled"),
                         status=prd_status,
                     )
                     self.db.update_sync_mapping(
-                        "prd", prd_mapping["local_id"], "jira",
+                        "prd", prd_id, "jira",
                         sync_status="synced"
                     )
                     results["prds_updated"] += 1
                 else:
                     prd_id = self._slugify_jira_issue(issue, project_id)
+
+                    # Write content file
+                    file_path = self.content_mgr.write_prd(
+                        project_id=project_id,
+                        prd_id=prd_id,
+                        title=fields.get("summary", "Untitled"),
+                        content=self._extract_jira_description(fields.get("description")),
+                    )
+
+                    # Register in database
                     self.db.create_prd(
                         prd_id=prd_id,
                         project_id=project_id,
                         title=fields.get("summary", "Untitled"),
-                        content=self._extract_jira_description(fields.get("description")),
+                        file_path=str(file_path),
                         status=prd_status,
                         source=f"jira:{issue['key']}",
                         sprint_id=sprint_id,

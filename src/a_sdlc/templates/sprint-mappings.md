@@ -21,7 +21,7 @@ View all sprint mappings between local sprints and external systems (Linear/Jira
 
 ### 1. Load Mappings
 
-Read `.sdlc/sprints/mappings.json`:
+Fetch mappings using `mcp__asdlc__list_sync_mappings()`:
 ```json
 {
   "SPRINT-001": {
@@ -160,7 +160,7 @@ To import from external:
 
 ## Notes
 
-- Mappings are stored in `.sdlc/sprints/mappings.json`
+- Mappings are stored in the SQLite database (~/.a-sdlc/data.db)
 - Sync status is updated after each sync operation
 - Deleted sprints will show as "deleted" in mapping list
 - Use `/sdlc:sprint-unlink` to remove stale mappings

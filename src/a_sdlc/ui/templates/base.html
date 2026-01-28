@@ -153,7 +153,14 @@
         th { color: var(--text-muted); font-weight: 500; }
         
         tr:hover { background: var(--bg); }
-        
+
+        /* Ensure ID columns display fully */
+        td:first-child,
+        th:first-child {
+            white-space: nowrap;
+            min-width: 120px;
+        }
+
         a { color: var(--accent); text-decoration: none; }
         a:hover { text-decoration: underline; }
         

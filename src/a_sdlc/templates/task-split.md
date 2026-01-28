@@ -20,14 +20,14 @@ Decompose requirements into actionable implementation tasks, automatically detec
 
 ### 1. Load Requirements
 
-Read `.sdlc/requirements/current.md` and parse:
+Use `mcp__asdlc__get_prd()` to get the PRD requirements and parse:
 - All FR-XXX entries
 - All NFR-XXX entries
 - Acceptance criteria
 
 ### 2. Load Architecture Context
 
-Read `.sdlc/artifacts/architecture.md` to understand:
+Use the project's architecture context from the codebase to understand:
 - Component boundaries
 - File locations
 - Existing patterns
@@ -67,11 +67,11 @@ def decompose_requirement(req, architecture, sprint_id=None):
     return tasks
 ```
 
-### 4. Generate Task Files
+### 4. Create Tasks via MCP API
 
-For each task, create:
+For each task, use `mcp__asdlc__create_task()` to create the task in the database.
 
-**`.sdlc/tasks/active/TASK-001.md`:**
+**Example task structure:**
 
 ```markdown
 # TASK-001: [Task Title]
@@ -129,22 +129,8 @@ Implement only the changes described above. Do not:
 - Refactor existing code unless necessary
 ```
 
-**`.sdlc/tasks/active/TASK-001.json`:**
-
-```json
-{
-  "id": "TASK-001",
-  "title": "Implement FR-001 in auth-service",
-  "status": "pending",
-  "priority": "high",
-  "requirement_id": "FR-001",
-  "component": "auth-service",
-  "dependencies": [],
-  "files_to_modify": ["src/auth/handlers.py"],
-  "sprint_id": "SPRINT-001",
-  "created_at": "2025-01-21T12:00:00Z"
-}
-```
+Tasks are created using `mcp__asdlc__create_task()` and stored in the database (~/.a-sdlc/data.db).
+Task content is stored in ~/.a-sdlc/content/tasks/{project}/.
 
 ### 5. Sync to External System (if configured)
 
@@ -171,7 +157,7 @@ Tasks created:
 Total: 12 tasks
 Dependencies detected: 4
 
-Location: .sdlc/tasks/active/
+Storage: Database (~/.a-sdlc/data.db) with content in ~/.a-sdlc/content/tasks/
 
 Next step: Run /sdlc:task-start TASK-001 to begin work
 ```

@@ -4,13 +4,16 @@ a-sdlc MCP Server.
 Provides MCP tools for managing SDLC artifacts (PRDs, tasks, sprints)
 through Claude Code integration.
 
+Architecture: Hybrid storage
+- SQLite database: Metadata and file path references (fast queries)
+- Markdown files: Source of truth for content (LLM-generated, git-friendly)
+
 Usage:
     a-sdlc serve              # Start MCP server with stdio transport
     uvx a-sdlc serve          # Run via uvx (Claude Code config)
 """
 
 import atexit
-import json
 import os
 import re
 import signal
@@ -25,7 +28,8 @@ from mcp.server.fastmcp import FastMCP
 # Module-level variable to track UI server process
 _ui_process: subprocess.Popen | None = None
 
-from a_sdlc.server.database import Database, get_db
+from a_sdlc.core.database import Database, get_db
+from a_sdlc.core.content import ContentManager, get_content_manager
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -92,6 +96,7 @@ def get_context() -> dict[str, Any]:
         "status": "ok",
         "project": {
             "id": project["id"],
+            "shortname": project["shortname"],
             "name": project["name"],
             "path": project["path"],
         },
@@ -112,13 +117,14 @@ def get_context() -> dict[str, Any]:
 def list_projects() -> list[dict[str, Any]]:
     """List all known projects.
 
-    Returns projects ordered by last accessed time.
+    Returns projects ordered by last accessed time with shortname for each.
     """
     db = get_db()
     projects = db.list_projects()
     return [
         {
             "id": p["id"],
+            "shortname": p["shortname"],
             "name": p["name"],
             "path": p["path"],
             "last_accessed": p["last_accessed"],
@@ -128,14 +134,21 @@ def list_projects() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def init_project(name: str | None = None) -> dict[str, Any]:
+def init_project(
+    name: str | None = None,
+    shortname: str | None = None,
+) -> dict[str, Any]:
     """Initialize a project for the current directory.
 
     Args:
         name: Optional project name. Defaults to folder name.
+        shortname: Optional 4-character uppercase project key (e.g., "PCRA").
+                  Must be exactly 4 uppercase letters (A-Z).
+                  If not provided, auto-generates from project name.
 
     Returns:
-        Created project details.
+        Created project details including shortname.
+        All entity IDs will use this shortname (e.g., PCRA-T00001, PCRA-S0001).
     """
     db = get_db()
     cwd = os.getcwd()
@@ -154,12 +167,40 @@ def init_project(name: str | None = None) -> dict[str, Any]:
     project_id = _slugify(folder_name)
     project_name = name or folder_name
 
-    project = db.create_project(project_id, project_name, cwd)
+    # Validate shortname if provided
+    if shortname is not None:
+        is_valid, error_msg = db.validate_shortname(shortname)
+        if not is_valid:
+            return {
+                "status": "error",
+                "message": f"Invalid shortname: {error_msg}",
+            }
+        if not db.is_shortname_available(shortname):
+            return {
+                "status": "error",
+                "message": f"Shortname '{shortname}' is already in use by another project.",
+            }
+    else:
+        # Generate suggestion for user awareness
+        shortname = db.generate_unique_shortname(project_name)
+
+    try:
+        project = db.create_project(project_id, project_name, cwd, shortname)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "message": str(e),
+        }
 
     return {
         "status": "created",
-        "message": f"Project '{project_name}' initialized.",
+        "message": f"Project '{project_name}' initialized with shortname '{shortname}'.",
         "project": project,
+        "id_format_examples": {
+            "task": f"{shortname}-T00001",
+            "sprint": f"{shortname}-S0001",
+            "prd": f"{shortname}-P0001",
+        },
     }
 
 
@@ -190,6 +231,62 @@ def switch_project(project_id: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool()
+def relocate_project(shortname: str) -> dict[str, Any]:
+    """Re-link an existing project to the current directory.
+
+    Use this when you've moved a repository to a new location and want to
+    reconnect it to its existing project data (PRDs, tasks, sprints).
+
+    Args:
+        shortname: The 4-character project shortname to relocate.
+
+    Returns:
+        Updated project details.
+    """
+    db = get_db()
+    cwd = os.getcwd()
+
+    # Find project by shortname
+    project = db.get_project_by_shortname(shortname)
+    if not project:
+        return {
+            "status": "not_found",
+            "message": f"No project found with shortname '{shortname}'.",
+        }
+
+    # Check if current directory is already linked to a different project
+    existing = db.get_project_by_path(cwd)
+    if existing and existing["id"] != project["id"]:
+        return {
+            "status": "error",
+            "message": f"Current directory is already linked to project '{existing['name']}' ({existing['shortname']}).",
+        }
+
+    # Update the project path
+    try:
+        updated = db.update_project_path(project["id"], cwd)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "message": str(e),
+        }
+
+    if not updated:
+        return {
+            "status": "error",
+            "message": f"Failed to update project path.",
+        }
+
+    return {
+        "status": "relocated",
+        "message": f"Project '{project['name']}' ({shortname}) relocated to {cwd}",
+        "project": updated,
+        "old_path": project["path"],
+        "new_path": cwd,
+    }
+
+
 # =============================================================================
 # PRD Operations
 # =============================================================================
@@ -209,7 +306,7 @@ def list_prds(
         status: Filter by PRD status (draft, ready, split).
 
     Returns:
-        List of PRD summaries.
+        List of PRD summaries (metadata only, no content).
     """
     db = get_db()
     pid = project_id or _get_current_project_id()
@@ -233,6 +330,7 @@ def list_prds(
                 "status": p["status"],
                 "version": p["version"],
                 "sprint_id": p.get("sprint_id"),
+                "file_path": p.get("file_path"),
                 "updated_at": p["updated_at"],
             }
             for p in prds
@@ -242,30 +340,42 @@ def list_prds(
 
 @mcp.tool()
 def get_prd(prd_id: str) -> dict[str, Any]:
-    """Get full PRD content.
+    """Get full PRD with content.
 
     Args:
         prd_id: PRD identifier.
 
     Returns:
-        Full PRD including content.
+        Full PRD including content from markdown file.
     """
     db = get_db()
-    prd = db.get_prd(prd_id)
+    content_mgr = get_content_manager()
 
+    prd = db.get_prd(prd_id)
     if not prd:
         return {"status": "not_found", "message": f"PRD not found: {prd_id}"}
 
+    # Read content from file
+    content = None
+    if prd.get("file_path"):
+        content = content_mgr.read_content(Path(prd["file_path"]))
+    else:
+        # Try to find by project_id and prd_id
+        content = content_mgr.read_prd(prd["project_id"], prd_id)
+
+    prd_with_content = dict(prd)
+    prd_with_content["content"] = content
+
     return {
         "status": "ok",
-        "prd": prd,
+        "prd": prd_with_content,
     }
 
 
 @mcp.tool()
 def create_prd(
     title: str,
-    content: str,
+    content: str = "",
     project_id: str | None = None,
     status: str = "draft",
     source: str | None = None,
@@ -282,22 +392,40 @@ def create_prd(
         sprint_id: Optional sprint to assign this PRD to.
 
     Returns:
-        Created PRD details.
+        Created PRD details with ID in format {shortname}-P{number}.
     """
     db = get_db()
+    content_mgr = get_content_manager()
     pid = project_id or _get_current_project_id()
 
     if not pid:
         return {"status": "error", "message": "No project context. Run /sdlc:init first."}
 
-    # Prefix prd_id with project_id for global uniqueness
-    prd_id = f"{pid}-{_slugify(title)}"
-    prd = db.create_prd(prd_id, pid, title, content, status, source, sprint_id)
+    # Generate PRD ID using shortname format
+    prd_id = db.get_next_prd_id(pid)
+
+    # Write content to file
+    file_path = content_mgr.write_prd(pid, prd_id, title, content)
+
+    # Register in database
+    prd = db.create_prd(
+        prd_id=prd_id,
+        project_id=pid,
+        title=title,
+        file_path=str(file_path),
+        status=status,
+        source=source,
+        sprint_id=sprint_id,
+    )
+
+    # Add content to response
+    prd_with_content = dict(prd)
+    prd_with_content["content"] = content
 
     return {
         "status": "created",
         "message": f"PRD created: {prd_id}",
-        "prd": prd,
+        "prd": prd_with_content,
     }
 
 
@@ -324,33 +452,46 @@ def update_prd(
         Updated PRD details.
     """
     db = get_db()
+    content_mgr = get_content_manager()
 
-    # Build update kwargs
-    kwargs = {}
-    if title is not None:
-        kwargs["title"] = title
-    if content is not None:
-        kwargs["content"] = content
-    if status is not None:
-        kwargs["status"] = status
-    if version is not None:
-        kwargs["version"] = version
-    if sprint_id is not None:
-        # Empty string means unassign from sprint
-        kwargs["sprint_id"] = sprint_id if sprint_id else None
-
-    if not kwargs:
-        return {"status": "error", "message": "No fields to update"}
-
-    prd = db.update_prd(prd_id, **kwargs)
-
+    prd = db.get_prd(prd_id)
     if not prd:
         return {"status": "not_found", "message": f"PRD not found: {prd_id}"}
+
+    # Build update kwargs for database
+    db_kwargs = {}
+    if title is not None:
+        db_kwargs["title"] = title
+    if status is not None:
+        db_kwargs["status"] = status
+    if version is not None:
+        db_kwargs["version"] = version
+    if sprint_id is not None:
+        # Empty string means unassign from sprint
+        db_kwargs["sprint_id"] = sprint_id if sprint_id else None
+
+    # Update content file if content or title changed
+    if content is not None or title is not None:
+        new_title = title if title is not None else prd["title"]
+        new_content = content if content is not None else ""
+        if content is None:
+            # Read existing content if only title changed
+            existing_content = content_mgr.read_prd(prd["project_id"], prd_id)
+            if existing_content:
+                new_content = existing_content
+
+        file_path = content_mgr.write_prd(prd["project_id"], prd_id, new_title, new_content)
+        db_kwargs["file_path"] = str(file_path)
+
+    if not db_kwargs:
+        return {"status": "error", "message": "No fields to update"}
+
+    updated_prd = db.update_prd(prd_id, **db_kwargs)
 
     return {
         "status": "updated",
         "message": f"PRD updated: {prd_id}",
-        "prd": prd,
+        "prd": updated_prd,
     }
 
 
@@ -365,10 +506,17 @@ def delete_prd(prd_id: str) -> dict[str, Any]:
         Deletion status.
     """
     db = get_db()
-    deleted = db.delete_prd(prd_id)
+    content_mgr = get_content_manager()
 
-    if not deleted:
+    prd = db.get_prd(prd_id)
+    if not prd:
         return {"status": "not_found", "message": f"PRD not found: {prd_id}"}
+
+    # Delete content file
+    content_mgr.delete_prd(prd["project_id"], prd_id)
+
+    # Delete from database
+    db.delete_prd(prd_id)
 
     return {
         "status": "deleted",
@@ -397,7 +545,7 @@ def list_tasks(
         sprint_id: Filter by sprint (derived from PRD's sprint assignment).
 
     Returns:
-        List of task summaries.
+        List of task summaries (metadata only).
 
     Note:
         Tasks no longer have direct sprint_id. Sprint membership is
@@ -428,6 +576,7 @@ def list_tasks(
                 "priority": t["priority"],
                 "component": t["component"],
                 "prd_id": t.get("prd_id"),
+                "file_path": t.get("file_path"),
                 "updated_at": t["updated_at"],
             }
             for t in tasks
@@ -437,23 +586,49 @@ def list_tasks(
 
 @mcp.tool()
 def get_task(task_id: str) -> dict[str, Any]:
-    """Get full task details.
+    """Get full task details with content.
 
     Args:
         task_id: Task identifier.
 
     Returns:
-        Full task including description and data.
+        Full task including description from markdown file.
     """
     db = get_db()
-    task = db.get_task(task_id)
+    content_mgr = get_content_manager()
 
+    task = db.get_task(task_id)
     if not task:
         return {"status": "not_found", "message": f"Task not found: {task_id}"}
 
+    # Read content from file
+    content = None
+    if task.get("file_path"):
+        content = content_mgr.read_content(Path(task["file_path"]))
+    else:
+        content = content_mgr.read_task(task["project_id"], task_id)
+
+    task_with_content = dict(task)
+    task_with_content["content"] = content
+
+    # Parse content for description and data
+    if content:
+        parsed = content_mgr.parse_task_content(content)
+        task_with_content["description"] = parsed.get("description", "")
+        if "dependencies" in parsed:
+            task_with_content["data"] = {"dependencies": parsed["dependencies"]}
+
+    # Derive sprint_id from PRD (tasks inherit sprint from their parent PRD)
+    sprint_id = None
+    if task.get("prd_id"):
+        prd = db.get_prd(task["prd_id"])
+        if prd:
+            sprint_id = prd.get("sprint_id")
+    task_with_content["sprint_id"] = sprint_id
+
     return {
         "status": "ok",
-        "task": task,
+        "task": task_with_content,
     }
 
 
@@ -476,7 +651,7 @@ def create_task(
         prd_id: Optional parent PRD. Task inherits sprint from PRD.
         priority: Task priority (low, medium, high, critical).
         component: Optional component/module name.
-        data: Optional additional structured data.
+        data: Optional additional structured data (including dependencies).
 
     Returns:
         Created task details.
@@ -486,27 +661,47 @@ def create_task(
         set its prd_id to a PRD that belongs to that sprint.
     """
     db = get_db()
+    content_mgr = get_content_manager()
     pid = project_id or _get_current_project_id()
 
     if not pid:
         return {"status": "error", "message": "No project context. Run /sdlc:init first."}
 
     task_id = db.get_next_task_id(pid)
+
+    # Write content to file
+    file_path = content_mgr.write_task(
+        project_id=pid,
+        task_id=task_id,
+        title=title,
+        description=description,
+        priority=priority,
+        status="pending",
+        component=component,
+        prd_id=prd_id,
+        data=data,
+    )
+
+    # Register in database
     task = db.create_task(
         task_id=task_id,
         project_id=pid,
         title=title,
-        description=description,
+        file_path=str(file_path),
         prd_id=prd_id,
         priority=priority,
         component=component,
-        data=data,
     )
+
+    # Add content info to response
+    task_with_content = dict(task)
+    task_with_content["description"] = description
+    task_with_content["data"] = data
 
     return {
         "status": "created",
         "message": f"Task created: {task_id}",
-        "task": task,
+        "task": task_with_content,
     }
 
 
@@ -541,37 +736,70 @@ def update_task(
         or move the task to a different PRD.
     """
     db = get_db()
+    content_mgr = get_content_manager()
 
-    # Build update kwargs
-    kwargs = {}
-    if title is not None:
-        kwargs["title"] = title
-    if description is not None:
-        kwargs["description"] = description
-    if status is not None:
-        kwargs["status"] = status
-    if priority is not None:
-        kwargs["priority"] = priority
-    if component is not None:
-        kwargs["component"] = component
-    if prd_id is not None:
-        # Empty string means unassign from PRD
-        kwargs["prd_id"] = prd_id if prd_id else None
-    if data is not None:
-        kwargs["data"] = data
-
-    if not kwargs:
-        return {"status": "error", "message": "No fields to update"}
-
-    task = db.update_task(task_id, **kwargs)
-
+    task = db.get_task(task_id)
     if not task:
         return {"status": "not_found", "message": f"Task not found: {task_id}"}
+
+    # Build update kwargs for database
+    db_kwargs = {}
+    if title is not None:
+        db_kwargs["title"] = title
+    if status is not None:
+        db_kwargs["status"] = status
+    if priority is not None:
+        db_kwargs["priority"] = priority
+    if component is not None:
+        db_kwargs["component"] = component
+    if prd_id is not None:
+        # Empty string means unassign from PRD
+        db_kwargs["prd_id"] = prd_id if prd_id else None
+
+    # Update content file if relevant fields changed
+    if any(x is not None for x in [title, description, priority, status, component, prd_id, data]):
+        # Read existing content to preserve what we don't update
+        existing_content = content_mgr.read_task(task["project_id"], task_id)
+        existing_data = {}
+        if existing_content:
+            existing_data = content_mgr.parse_task_content(existing_content)
+
+        new_title = title if title is not None else task["title"]
+        new_description = description if description is not None else existing_data.get("description", "")
+        new_priority = priority if priority is not None else task["priority"]
+        new_status = status if status is not None else task["status"]
+        new_component = component if component is not None else task["component"]
+        new_prd_id = prd_id if prd_id is not None else task.get("prd_id")
+        if new_prd_id == "":
+            new_prd_id = None
+
+        # Merge data
+        merged_data = data if data is not None else {}
+        if "dependencies" not in merged_data and "dependencies" in existing_data:
+            merged_data["dependencies"] = existing_data["dependencies"]
+
+        file_path = content_mgr.write_task(
+            project_id=task["project_id"],
+            task_id=task_id,
+            title=new_title,
+            description=new_description,
+            priority=new_priority,
+            status=new_status,
+            component=new_component,
+            prd_id=new_prd_id,
+            data=merged_data if merged_data else None,
+        )
+        db_kwargs["file_path"] = str(file_path)
+
+    if not db_kwargs:
+        return {"status": "error", "message": "No fields to update"}
+
+    updated_task = db.update_task(task_id, **db_kwargs)
 
     return {
         "status": "updated",
         "message": f"Task updated: {task_id}",
-        "task": task,
+        "task": updated_task,
     }
 
 
@@ -612,16 +840,9 @@ def block_task(task_id: str, reason: str | None = None) -> dict[str, Any]:
     Returns:
         Updated task details.
     """
-    db = get_db()
-    task = db.get_task(task_id)
-
-    if not task:
-        return {"status": "not_found", "message": f"Task not found: {task_id}"}
-
-    # Update data with block reason
-    data = task.get("data") or {}
+    data = None
     if reason:
-        data["block_reason"] = reason
+        data = {"block_reason": reason}
 
     return update_task(task_id, status="blocked", data=data)
 
@@ -637,10 +858,17 @@ def delete_task(task_id: str) -> dict[str, Any]:
         Deletion status.
     """
     db = get_db()
-    deleted = db.delete_task(task_id)
+    content_mgr = get_content_manager()
 
-    if not deleted:
+    task = db.get_task(task_id)
+    if not task:
         return {"status": "not_found", "message": f"Task not found: {task_id}"}
+
+    # Delete content file
+    content_mgr.delete_task(task["project_id"], task_id)
+
+    # Delete from database
+    db.delete_task(task_id)
 
     return {
         "status": "deleted",
@@ -682,6 +910,7 @@ def split_prd(
         )
     """
     db = get_db()
+    content_mgr = get_content_manager()
     pid = _get_current_project_id()
 
     if not pid:
@@ -695,20 +924,24 @@ def split_prd(
     if not task_specs:
         return {"status": "error", "message": "No task specifications provided"}
 
+    # Get project shortname for ID formatting
+    project = db.get_project(pid)
+    shortname = project["shortname"] if project else "UNKN"
+
     # Helper to resolve shorthand dependency references to full task IDs
     def resolve_dep_id(dep: str | int) -> str:
         dep_str = str(dep).strip()
 
-        # Already a full ID (contains project prefix)
-        if dep_str.startswith(pid):
+        # Already a full ID with correct format (e.g., "CWAI-T00001")
+        if re.match(r'^[A-Z]{4}-T\d{5}$', dep_str):
             return dep_str
 
         # Extract task number from various formats:
-        # "1", "task-1", "TASK-001", "task-001"
+        # "1", "task-1", "TASK-001", "task-001", "T00001"
         match = re.search(r'(\d+)$', dep_str)
         if match:
             num = int(match.group(1))
-            return f"{pid}-TASK-{num:03d}"
+            return f"{shortname}-T{num:05d}"
 
         # Can't resolve, return as-is
         return dep_str
@@ -727,16 +960,30 @@ def split_prd(
                 resolved_deps = [resolve_dep_id(d) for d in spec["dependencies"]]
                 data = {"dependencies": resolved_deps}
 
+            # Write content to file
+            file_path = content_mgr.write_task(
+                project_id=pid,
+                task_id=task_id,
+                title=spec["title"],
+                description=spec.get("description", ""),
+                priority=spec.get("priority", "medium"),
+                status="pending",
+                component=spec.get("component"),
+                prd_id=prd_id,
+                data=data,
+            )
+
+            # Register in database
             task = db.create_task(
                 task_id=task_id,
                 project_id=pid,
                 title=spec["title"],
-                description=spec.get("description", ""),
+                file_path=str(file_path),
                 prd_id=prd_id,
                 priority=spec.get("priority", "medium"),
                 component=spec.get("component"),
-                data=data,
             )
+
             created_tasks.append({
                 "id": task["id"],
                 "title": task["title"],
@@ -1078,6 +1325,11 @@ def get_sprint_tasks(sprint_id: str, status: str | None = None) -> dict[str, Any
     }
 
 
+# Alias for backward compatibility
+add_tasks_to_sprint = add_prd_to_sprint
+remove_tasks_from_sprint = remove_prd_from_sprint
+
+
 # =============================================================================
 # External Integration Configuration
 # =============================================================================
@@ -1292,7 +1544,7 @@ def remove_integration(system: str) -> dict[str, Any]:
 def _get_sync_service():
     """Get sync service instance."""
     from a_sdlc.server.sync import ExternalSyncService
-    return ExternalSyncService(get_db())
+    return ExternalSyncService(get_db(), get_content_manager())
 
 
 @mcp.tool()

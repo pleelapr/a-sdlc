@@ -545,7 +545,7 @@ class JiraPlugin(TaskPlugin):
             jql = f"project = {self.project_key} ORDER BY updated DESC"
 
         response = client.get(
-            "/rest/api/3/search",
+            "/rest/api/3/search/jql",
             params={
                 "jql": jql,
                 "maxResults": 100,

@@ -110,7 +110,7 @@ Read requirements to show:
 
 🔌 Plugin
 
-  Task storage: local (.sdlc/tasks/)
+  Task storage: database (~/.a-sdlc/data.db)
 
 ╭──────────────────────────────────────────────────────────╮
 │ Quick Actions                                             │

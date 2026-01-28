@@ -29,7 +29,7 @@ except ImportError:
         "Install with: pip install 'a-sdlc[ui]'"
     )
 
-from a_sdlc.server.database import get_db
+from a_sdlc.storage import get_storage
 
 # PID file location
 PID_FILE = Path.home() / ".a-sdlc" / "ui.pid"
@@ -135,22 +135,22 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 def _get_current_project(project_id: str | None = None) -> dict[str, Any] | None:
     """Get the specified project or fall back to most recently accessed."""
-    db = get_db()
+    storage = get_storage()
     if project_id:
-        return db.get_project(project_id)
-    return db.get_most_recent_project()
+        return storage.get_project(project_id)
+    return storage.get_most_recent_project()
 
 
 def _get_all_projects() -> list[dict[str, Any]]:
     """Get all projects for the project switcher."""
-    db = get_db()
-    return db.list_projects()
+    storage = get_storage()
+    return storage.list_projects()
 
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, project: str | None = None):
     """Main dashboard showing project overview."""
-    db = get_db()
+    storage = get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -161,9 +161,9 @@ async def dashboard(request: Request, project: str | None = None):
         )
 
     # Get stats
-    tasks = db.list_tasks(current_project["id"])
-    sprints = db.list_sprints(current_project["id"])
-    prds = db.list_prds(current_project["id"])
+    tasks = storage.list_tasks(current_project["id"])
+    sprints = storage.list_sprints(current_project["id"])
+    prds = storage.list_prds(current_project["id"])
 
     # Task stats
     task_stats = {"pending": 0, "in_progress": 0, "completed": 0, "blocked": 0}
@@ -193,7 +193,7 @@ async def dashboard(request: Request, project: str | None = None):
 @app.get("/tasks", response_class=HTMLResponse)
 async def tasks_page(request: Request, project: str | None = None, status: str | None = None, sprint_id: str | None = None):
     """Tasks list page."""
-    db = get_db()
+    storage = get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -205,10 +205,10 @@ async def tasks_page(request: Request, project: str | None = None, status: str |
 
     # Get tasks - use sprint-specific method if filtering by sprint
     if sprint_id:
-        tasks = db.list_tasks_by_sprint(current_project["id"], sprint_id, status=status)
+        tasks = storage.list_tasks_by_sprint(current_project["id"], sprint_id, status=status)
     else:
-        tasks = db.list_tasks(current_project["id"], status=status)
-    sprints = db.list_sprints(current_project["id"])
+        tasks = storage.list_tasks(current_project["id"], status=status)
+    sprints = storage.list_sprints(current_project["id"])
 
     return templates.TemplateResponse(
         "tasks.html",
@@ -227,8 +227,8 @@ async def tasks_page(request: Request, project: str | None = None, status: str |
 @app.get("/tasks/{task_id}", response_class=HTMLResponse)
 async def task_detail(request: Request, task_id: str):
     """Task detail page."""
-    db = get_db()
-    task = db.get_task(task_id)
+    storage = get_storage()
+    task = storage.get_task(task_id)
 
     if not task:
         return HTMLResponse(content="<h1>Task not found</h1>", status_code=404)
@@ -242,8 +242,8 @@ async def task_detail(request: Request, task_id: str):
 @app.post("/tasks/{task_id}/status")
 async def update_task_status(task_id: str, status: str):
     """Update task status (HTMX endpoint)."""
-    db = get_db()
-    task = db.update_task(task_id, status=status)
+    storage = get_storage()
+    task = storage.update_task(task_id, status=status)
 
     if not task:
         return HTMLResponse(content="Task not found", status_code=404)
@@ -253,14 +253,14 @@ async def update_task_status(task_id: str, status: str):
     )
 
 
-@app.put("/tasks/{task_id}/description")
-async def update_task_description(task_id: str, request: Request):
-    """Update task description."""
-    db = get_db()
+@app.put("/tasks/{task_id}/content")
+async def update_task_content(task_id: str, request: Request):
+    """Update task content (full markdown)."""
+    storage = get_storage()
     data = await request.json()
-    description = data.get("description", "")
+    content = data.get("content", "")
 
-    task = db.update_task(task_id, description=description)
+    task = storage.update_task(task_id, content=content)
     if not task:
         return HTMLResponse(content="Task not found", status_code=404)
 
@@ -270,7 +270,7 @@ async def update_task_description(task_id: str, request: Request):
 @app.get("/sprints", response_class=HTMLResponse)
 async def sprints_page(request: Request, project: str | None = None):
     """Sprints list page."""
-    db = get_db()
+    storage = get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -280,11 +280,11 @@ async def sprints_page(request: Request, project: str | None = None):
             {"request": request, "projects": all_projects}
         )
 
-    sprints = db.list_sprints(current_project["id"])
+    sprints = storage.list_sprints(current_project["id"])
 
     # Add task counts to each sprint
     for sprint in sprints:
-        tasks = db.list_tasks_by_sprint(current_project["id"], sprint["id"])
+        tasks = storage.list_tasks_by_sprint(current_project["id"], sprint["id"])
         sprint["task_count"] = len(tasks)
         sprint["completed_count"] = sum(1 for t in tasks if t["status"] == "completed")
 
@@ -297,22 +297,22 @@ async def sprints_page(request: Request, project: str | None = None):
 @app.get("/sprints/{sprint_id}", response_class=HTMLResponse)
 async def sprint_detail(request: Request, sprint_id: str):
     """Sprint detail page."""
-    db = get_db()
-    sprint = db.get_sprint(sprint_id)
+    storage = get_storage()
+    sprint = storage.get_sprint(sprint_id)
 
     if not sprint:
         return HTMLResponse(content="<h1>Sprint not found</h1>", status_code=404)
 
     # Get PRDs in this sprint
-    prds = db.get_sprint_prds(sprint_id)
+    prds = storage.get_sprint_prds(sprint_id)
 
     # Add task counts to PRDs
     for prd in prds:
-        prd_tasks = db.list_tasks(sprint["project_id"], prd_id=prd["id"])
+        prd_tasks = storage.list_tasks(sprint["project_id"], prd_id=prd["id"])
         prd["task_count"] = len(prd_tasks)
 
     # Get tasks derived from sprint's PRDs
-    tasks = db.list_tasks_by_sprint(sprint["project_id"], sprint_id)
+    tasks = storage.list_tasks_by_sprint(sprint["project_id"], sprint_id)
 
     return templates.TemplateResponse(
         "sprint_detail.html",
@@ -323,11 +323,11 @@ async def sprint_detail(request: Request, sprint_id: str):
 @app.put("/sprints/{sprint_id}/status")
 async def update_sprint_status(sprint_id: str, request: Request):
     """Update sprint status."""
-    db = get_db()
+    storage = get_storage()
     data = await request.json()
     status = data.get("status", "planned")
 
-    sprint = db.update_sprint(sprint_id, status=status)
+    sprint = storage.update_sprint(sprint_id, status=status)
     if not sprint:
         return HTMLResponse(content="Sprint not found", status_code=404)
 
@@ -337,7 +337,7 @@ async def update_sprint_status(sprint_id: str, request: Request):
 @app.get("/prds", response_class=HTMLResponse)
 async def prds_page(request: Request, project: str | None = None):
     """PRDs list page."""
-    db = get_db()
+    storage = get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -347,7 +347,7 @@ async def prds_page(request: Request, project: str | None = None):
             {"request": request, "projects": all_projects}
         )
 
-    prds = db.list_prds(current_project["id"])
+    prds = storage.list_prds(current_project["id"])
 
     return templates.TemplateResponse(
         "prds.html",
@@ -414,17 +414,17 @@ def _generate_dependency_graph(tasks: list[dict[str, Any]]) -> dict[str, Any]:
 @app.get("/prds/{prd_id}", response_class=HTMLResponse)
 async def prd_detail(request: Request, prd_id: str):
     """PRD detail page."""
-    db = get_db()
-    prd = db.get_prd(prd_id)
+    storage = get_storage()
+    prd = storage.get_prd(prd_id)
 
     if not prd:
         return HTMLResponse(content="<h1>PRD not found</h1>", status_code=404)
 
     # Get sprints for the project to populate sprint selector
-    sprints = db.list_sprints(prd["project_id"])
+    sprints = storage.list_sprints(prd["project_id"])
 
     # Get tasks associated with this PRD
-    tasks = db.list_tasks(prd["project_id"], prd_id=prd_id)
+    tasks = storage.list_tasks(prd["project_id"], prd_id=prd_id)
 
     # Generate dependency graph
     graph_data = _generate_dependency_graph(tasks)
@@ -438,11 +438,11 @@ async def prd_detail(request: Request, prd_id: str):
 @app.put("/prds/{prd_id}/content")
 async def update_prd_content(prd_id: str, request: Request):
     """Update PRD content."""
-    db = get_db()
+    storage = get_storage()
     data = await request.json()
     content = data.get("content", "")
 
-    prd = db.update_prd(prd_id, content=content)
+    prd = storage.update_prd(prd_id, content=content)
     if not prd:
         return HTMLResponse(content="PRD not found", status_code=404)
 
@@ -452,7 +452,7 @@ async def update_prd_content(prd_id: str, request: Request):
 @app.put("/prds/{prd_id}/sprint")
 async def update_prd_sprint(prd_id: str, request: Request):
     """Update PRD sprint assignment."""
-    db = get_db()
+    storage = get_storage()
     data = await request.json()
     sprint_id = data.get("sprint_id")
 
@@ -460,7 +460,7 @@ async def update_prd_sprint(prd_id: str, request: Request):
     if sprint_id == "":
         sprint_id = None
 
-    prd = db.update_prd(prd_id, sprint_id=sprint_id)
+    prd = storage.update_prd(prd_id, sprint_id=sprint_id)
     if not prd:
         return HTMLResponse(content="PRD not found", status_code=404)
 
@@ -470,11 +470,11 @@ async def update_prd_sprint(prd_id: str, request: Request):
 @app.put("/prds/{prd_id}/status")
 async def update_prd_status(prd_id: str, request: Request):
     """Update PRD status."""
-    db = get_db()
+    storage = get_storage()
     data = await request.json()
     status = data.get("status", "draft")
 
-    prd = db.update_prd(prd_id, status=status)
+    prd = storage.update_prd(prd_id, status=status)
     if not prd:
         return HTMLResponse(content="PRD not found", status_code=404)
 
@@ -488,15 +488,15 @@ async def update_prd_status(prd_id: str, request: Request):
 
 def _get_integrations_dict(project_id: str) -> dict[str, Any]:
     """Get integrations as a dict keyed by system name."""
-    db = get_db()
-    configs = db.list_external_configs(project_id)
+    storage = get_storage()
+    configs = storage.list_external_configs(project_id)
     return {c["system"]: c for c in configs}
 
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, project: str | None = None, message: str | None = None, message_type: str | None = None):
     """Settings page with integrations management."""
-    db = get_db()
+    storage = get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -524,14 +524,14 @@ async def settings_page(request: Request, project: str | None = None, message: s
 @app.get("/settings/integrations/{system}/edit", response_class=HTMLResponse)
 async def integration_edit_form(request: Request, system: str, project: str | None = None):
     """Get the edit form for an integration (HTMX partial)."""
-    db = get_db()
+    storage = get_storage()
     current_project = _get_current_project(project)
 
     if not current_project:
         return HTMLResponse(content="Project not found", status_code=404)
 
     # Get existing config if any
-    existing = db.get_external_config(current_project["id"], system)
+    existing = storage.get_external_config(current_project["id"], system)
     config = existing["config"] if existing else None
 
     return templates.TemplateResponse(
@@ -560,7 +560,7 @@ async def save_linear_integration(
     default_project: str = Form(""),
 ):
     """Save Linear integration configuration."""
-    db = get_db()
+    storage = get_storage()
     current_project = _get_current_project(project)
 
     if not current_project:
@@ -573,7 +573,7 @@ async def save_linear_integration(
     if default_project:
         config["default_project"] = default_project
 
-    db.set_external_config(current_project["id"], "linear", config)
+    storage.set_external_config(current_project["id"], "linear", config)
 
     # Return updated integration card
     integrations = _get_integrations_dict(current_project["id"])
@@ -599,7 +599,7 @@ async def save_jira_integration(
     issue_type: str = Form("Task"),
 ):
     """Save Jira integration configuration."""
-    db = get_db()
+    storage = get_storage()
     current_project = _get_current_project(project)
 
     if not current_project:
@@ -613,7 +613,7 @@ async def save_jira_integration(
         "issue_type": issue_type or "Task",
     }
 
-    db.set_external_config(current_project["id"], "jira", config)
+    storage.set_external_config(current_project["id"], "jira", config)
 
     # Return updated integration card
     integrations = _get_integrations_dict(current_project["id"])
@@ -640,7 +640,7 @@ async def save_confluence_integration(
     page_title_prefix: str = Form(""),
 ):
     """Save Confluence integration configuration."""
-    db = get_db()
+    storage = get_storage()
     current_project = _get_current_project(project)
 
     if not current_project:
@@ -657,7 +657,7 @@ async def save_confluence_integration(
     if page_title_prefix:
         config["page_title_prefix"] = page_title_prefix
 
-    db.set_external_config(current_project["id"], "confluence", config)
+    storage.set_external_config(current_project["id"], "confluence", config)
 
     # Return updated integration card
     integrations = _get_integrations_dict(current_project["id"])
@@ -675,13 +675,13 @@ async def save_confluence_integration(
 @app.delete("/settings/integrations/{system}", response_class=HTMLResponse)
 async def delete_integration(request: Request, system: str, project: str):
     """Remove an integration configuration."""
-    db = get_db()
+    storage = get_storage()
     current_project = _get_current_project(project)
 
     if not current_project:
         return HTMLResponse(content="Project not found", status_code=404)
 
-    db.delete_external_config(current_project["id"], system)
+    storage.delete_external_config(current_project["id"], system)
 
     # Return empty integration card (not configured state)
     return templates.TemplateResponse(
