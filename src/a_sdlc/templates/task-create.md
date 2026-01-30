@@ -4,6 +4,22 @@
 
 Create a new task for the current project.
 
+---
+
+## Note: This Creates Persistent a-sdlc Tasks
+
+This command creates **database-backed tasks**, not Claude Code internal tasks.
+
+**a-sdlc tasks:**
+- Stored in `~/.a-sdlc/content/{project_id}/tasks/{task_id}.md`
+- Persist across sessions and restarts
+- Linkable to PRDs and Sprints
+- Syncable to Linear/Jira
+
+**Do not use** Claude Code's `TaskCreate` or `TodoWrite` for project work items.
+
+---
+
 ## Usage
 
 Use the MCP tool to create a task:

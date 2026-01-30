@@ -5,8 +5,6 @@ Handles synchronization between local hybrid storage (SQLite + markdown files)
 and external systems like Linear and Jira.
 """
 
-import re
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -527,6 +525,44 @@ class ExternalSyncService:
         self.db = db
         self.content_mgr = content_mgr
 
+    def _check_existing_sprint_mapping(
+        self,
+        project_id: str,
+        external_system: str,
+        external_id: str,
+    ) -> dict[str, Any] | None:
+        """Check if a sprint mapping already exists for the given external ID.
+
+        Args:
+            project_id: Local project ID
+            external_system: External system name ('linear' or 'jira')
+            external_id: External sprint/cycle ID
+
+        Returns:
+            Dict with existing sprint info and mapping if found, None otherwise.
+            If mapping exists but local sprint is missing (orphaned), cleans up
+            the mapping and returns None.
+        """
+        mapping = self.db.get_sync_mapping_by_external(
+            "sprint", external_system, external_id
+        )
+
+        if not mapping:
+            return None
+
+        local_sprint = self.db.get_sprint(mapping["local_id"])
+        if not local_sprint:
+            # Orphaned mapping - clean up
+            self.db.delete_sync_mapping("sprint", mapping["local_id"], external_system)
+            return None
+
+        return {
+            "existing_sprint": local_sprint,
+            "mapping": mapping,
+            "external_system": external_system,
+            "external_id": external_id,
+        }
+
     def _get_linear_client(self, project_id: str) -> LinearClient:
         """Get configured Linear client for project."""
         config = self.db.get_external_config(project_id, "linear")
@@ -569,8 +605,20 @@ class ExternalSyncService:
             cycle_id: Linear cycle ID
 
         Returns:
-            Dict with sprint and PRDs info
+            Dict with sprint and PRDs info, or already_exists status if
+            this cycle was previously imported.
         """
+        # Check for existing mapping before making API call
+        existing = self._check_existing_sprint_mapping(project_id, "linear", cycle_id)
+        if existing:
+            return {
+                "status": "already_exists",
+                "existing_sprint": existing["existing_sprint"],
+                "mapping": existing["mapping"],
+                "external_system": "linear",
+                "external_id": cycle_id,
+            }
+
         client = self._get_linear_client(project_id)
         cycle = client.get_cycle(cycle_id)
 
@@ -632,7 +680,7 @@ class ExternalSyncService:
                 content += children_content
 
             # Create PRD with sprint assignment
-            prd_id = self._slugify_linear_issue(issue, project_id)
+            prd_id = self.db.get_next_prd_id(project_id)
 
             # Write content file
             file_path = self.content_mgr.write_prd(
@@ -670,23 +718,6 @@ class ExternalSyncService:
             # Legacy field for backward compatibility
             "tasks_count": len(prds_created),
         }
-
-    def _slugify_linear_issue(self, issue: dict, project_id: str) -> str:
-        """Generate slug for Linear issue.
-
-        Args:
-            issue: Linear issue dict
-            project_id: Project ID to prefix for global uniqueness
-
-        Returns:
-            Project-prefixed slug ID
-        """
-        identifier = issue.get("identifier", "")
-        title = issue.get("title", "untitled")
-        slug = f"{identifier}-{title}".lower()
-        slug = re.sub(r"[^\w\s-]", "", slug)
-        slug = re.sub(r"[-\s]+", "-", slug)
-        return f"{project_id}-{slug.strip('-')[:64]}"
 
     def _fetch_and_format_linear_children(
         self, client: LinearClient, issue_id: str
@@ -925,7 +956,7 @@ class ExternalSyncService:
                     results["prds_updated"] += 1
                 else:
                     # Create new PRD
-                    prd_id = self._slugify_linear_issue(issue, project_id)
+                    prd_id = self.db.get_next_prd_id(project_id)
 
                     # Write content file
                     file_path = self.content_mgr.write_prd(
@@ -980,8 +1011,20 @@ class ExternalSyncService:
             board_id: Jira board ID (optional, for listing)
 
         Returns:
-            Dict with sprint and PRDs info
+            Dict with sprint and PRDs info, or already_exists status if
+            this sprint was previously imported.
         """
+        # Check for existing mapping before making API call
+        existing = self._check_existing_sprint_mapping(project_id, "jira", sprint_id)
+        if existing:
+            return {
+                "status": "already_exists",
+                "existing_sprint": existing["existing_sprint"],
+                "mapping": existing["mapping"],
+                "external_system": "jira",
+                "external_id": sprint_id,
+            }
+
         client = self._get_jira_client(project_id)
         jira_sprint = client.get_sprint(sprint_id)
 
@@ -1042,7 +1085,7 @@ class ExternalSyncService:
                 content += subtasks_content
 
             # Create PRD with sprint assignment
-            prd_id = self._slugify_jira_issue(issue, project_id)
+            prd_id = self.db.get_next_prd_id(project_id)
 
             # Write content file
             file_path = self.content_mgr.write_prd(
@@ -1080,23 +1123,6 @@ class ExternalSyncService:
             # Legacy field for backward compatibility
             "tasks_count": len(prds_created),
         }
-
-    def _slugify_jira_issue(self, issue: dict, project_id: str) -> str:
-        """Generate slug for Jira issue.
-
-        Args:
-            issue: Jira issue dict
-            project_id: Project ID to prefix for global uniqueness
-
-        Returns:
-            Project-prefixed slug ID
-        """
-        key = issue.get("key", "")
-        summary = issue.get("fields", {}).get("summary", "untitled")
-        slug = f"{key}-{summary}".lower()
-        slug = re.sub(r"[^\w\s-]", "", slug)
-        slug = re.sub(r"[-\s]+", "-", slug)
-        return f"{project_id}-{slug.strip('-')[:64]}"
 
     def _extract_jira_description(self, adf: dict | None) -> str:
         """Extract plain text from Jira ADF description."""
@@ -1337,7 +1363,7 @@ class ExternalSyncService:
                     )
                     results["prds_updated"] += 1
                 else:
-                    prd_id = self._slugify_jira_issue(issue, project_id)
+                    prd_id = self.db.get_next_prd_id(project_id)
 
                     # Write content file
                     file_path = self.content_mgr.write_prd(

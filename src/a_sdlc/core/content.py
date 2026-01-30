@@ -221,33 +221,62 @@ class ContentManager:
         prd_id: str | None = None,
         dependencies: list[str] | None = None,
         data: dict[str, Any] | None = None,
+        skip_if_exists: bool = False,
     ) -> Path:
         """Write task content to markdown file.
+
+        If the description contains rich markdown content (e.g., from multi-agent
+        workflow), it will be used as-is. Otherwise, a simple template is generated.
 
         Args:
             project_id: Project identifier
             task_id: Task identifier
             title: Task title
-            description: Task description
+            description: Task description (can be full markdown content)
             priority: Task priority
             status: Task status
             component: Optional component name
             prd_id: Optional parent PRD ID
             dependencies: Optional list of dependency task IDs
             data: Optional additional data
+            skip_if_exists: If True, skip writing if file already exists
 
         Returns:
             Path to the written file
         """
         file_path = self.get_task_path(project_id, task_id)
 
-        # Extract dependencies from data if not provided
-        if dependencies is None and data:
-            dependencies = data.get("dependencies", [])
+        # Skip if file exists and skip_if_exists is True
+        if skip_if_exists and file_path.exists():
+            return file_path
 
-        deps_str = ", ".join(dependencies) if dependencies else "None"
+        # Check if description is rich content (contains markdown headers)
+        # Rich content from Content Generation Agent will have ## headers
+        is_rich_content = description and (
+            "\n## " in description or
+            description.strip().startswith("## ") or
+            description.strip().startswith("# ")
+        )
 
-        content = f"""# {task_id}: {title}
+        if is_rich_content:
+            # Use the rich content as-is, ensuring proper header
+            if description.strip().startswith(f"# {task_id}:"):
+                content = description
+            elif description.strip().startswith("#"):
+                # Has a header but not the standard task ID format
+                content = description
+            else:
+                # Add standard task header
+                content = f"# {task_id}: {title}\n\n{description}"
+        else:
+            # Generate simple template content
+            # Extract dependencies from data if not provided
+            if dependencies is None and data:
+                dependencies = data.get("dependencies", [])
+
+            deps_str = ", ".join(dependencies) if dependencies else "None"
+
+            content = f"""# {task_id}: {title}
 
 **Status:** {status}
 **Priority:** {priority}
@@ -261,6 +290,41 @@ class ContentManager:
 """
 
         return self.write_content(file_path, content)
+
+    def write_task_content(
+        self,
+        project_id: str,
+        task_id: str,
+        content: str,
+    ) -> Path:
+        """Write raw task content directly to markdown file.
+
+        Use this for multi-agent workflows where the Content Generation Agent
+        produces the full task markdown content following the template.
+
+        Args:
+            project_id: Project identifier
+            task_id: Task identifier
+            content: Full markdown content for the task
+
+        Returns:
+            Path to the written file
+        """
+        file_path = self.get_task_path(project_id, task_id)
+        return self.write_content(file_path, content)
+
+    def task_file_exists(self, project_id: str, task_id: str) -> bool:
+        """Check if a task content file exists.
+
+        Args:
+            project_id: Project identifier
+            task_id: Task identifier
+
+        Returns:
+            True if the task file exists
+        """
+        file_path = self.get_task_path(project_id, task_id)
+        return file_path.exists()
 
     def read_task(self, project_id: str, task_id: str) -> str | None:
         """Read task content from markdown file.

@@ -27,6 +27,8 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:prd "<id>"             View PRD details
   /sdlc:prd-split "<id>"       Decompose PRD into tasks
   /sdlc:prd-update "<id>"      Update existing PRD
+  /sdlc:prd-delete <id>        Delete a PRD
+  /sdlc:investigate "<id>"     Discover patterns before splitting
 
 📋 Task Management
 
@@ -35,6 +37,7 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:task-create            Create a new task
   /sdlc:task-start <id>        Mark task as in-progress
   /sdlc:task-complete <id>     Mark task as completed
+  /sdlc:task-delete <id>       Delete a task
 
 🏃 Sprint Management
 
@@ -44,6 +47,7 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:sprint-start <id>      Activate a sprint
   /sdlc:sprint-run <id>        Execute tasks in order
   /sdlc:sprint-complete <id>   Close a sprint
+  /sdlc:sprint-delete <id>     Delete a sprint
 
 🔄 External Sync (Jira/Linear)
 
@@ -92,6 +96,7 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__complete_sprint(sprint_id)` - Complete sprint
 - `mcp__asdlc__add_tasks_to_sprint(sprint_id, task_ids)` - Add tasks
 - `mcp__asdlc__remove_tasks_from_sprint(sprint_id, task_ids)` - Remove tasks
+- `mcp__asdlc__delete_sprint(sprint_id)` - Delete sprint
 
 ## Quick Start Workflow
 
@@ -120,6 +125,38 @@ a-sdlc doctor       # Run system diagnostics
 a-sdlc tasks        # CLI task management
 a-sdlc ui           # Start web UI dashboard
 ```
+
+---
+
+## Important: a-sdlc Tasks vs Claude Code Internal Tasks
+
+When using a-sdlc, you will encounter two different "task" systems. Understanding the distinction is critical:
+
+### a-sdlc Tasks (Use These for Project Management)
+
+- **What:** Persistent work items stored in database + markdown files
+- **Location:** `~/.a-sdlc/content/{project_id}/tasks/{task_id}.md`
+- **Tools:** `mcp__asdlc__create_task()`, `mcp__asdlc__update_task()`, `mcp__asdlc__split_prd()`
+- **Commands:** `/sdlc:task-create`, `/sdlc:task-start`, `/sdlc:task-complete`
+- **Features:** PRD linking, sprint assignment, external sync (Linear/Jira)
+
+### Claude Code Internal Tasks (NOT for a-sdlc)
+
+- **What:** Temporary workflow tracking within a single Claude Code session
+- **Tools:** `TodoWrite`, `TaskCreate`, `TaskUpdate`, `TaskList`
+- **Use For:** Organizing multi-step coding operations, tracking implementation progress
+- **NOT For:** Creating a-sdlc project tasks, sprint planning, PRD breakdown
+
+### Quick Reference
+
+| Action | CORRECT Tool | WRONG Tool |
+|--------|--------------|------------|
+| Create task from PRD | `mcp__asdlc__split_prd()` | `TaskCreate` |
+| Mark task in progress | `mcp__asdlc__start_task()` | `TaskUpdate` |
+| List project tasks | `mcp__asdlc__list_tasks()` | `TaskList` |
+| Track coding steps | `TodoWrite` (OK for this) | - |
+
+---
 
 ## Notes
 

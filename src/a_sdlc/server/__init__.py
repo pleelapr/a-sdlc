@@ -515,6 +515,10 @@ def delete_prd(prd_id: str) -> dict[str, Any]:
     # Delete content file
     content_mgr.delete_prd(prd["project_id"], prd_id)
 
+    # Delete any sync mappings for this PRD
+    db.delete_sync_mapping("prd", prd_id, "linear")
+    db.delete_sync_mapping("prd", prd_id, "jira")
+
     # Delete from database
     db.delete_prd(prd_id)
 
@@ -867,6 +871,10 @@ def delete_task(task_id: str) -> dict[str, Any]:
     # Delete content file
     content_mgr.delete_task(task["project_id"], task_id)
 
+    # Delete any sync mappings for this task
+    db.delete_sync_mapping("task", task_id, "linear")
+    db.delete_sync_mapping("task", task_id, "jira")
+
     # Delete from database
     db.delete_task(task_id)
 
@@ -887,25 +895,40 @@ def split_prd(
     the agent session is interrupted. This is the recommended way to create
     tasks from a PRD breakdown.
 
+    Supports two workflows:
+    1. Simple: Provide title + description, tool generates task files
+    2. Multi-agent: Provide task_id for pre-written files (Content Generation Agent
+       writes files first via write_task_content(), then this tool persists to DB)
+
     Args:
         prd_id: The PRD to split.
         task_specs: List of task specifications. Each spec should contain:
             - title (required): Task title
-            - description (optional): Task description
+            - description (optional): Task description or full markdown content
             - priority (optional): low, medium, high, critical (default: medium)
             - component (optional): Component/module name
             - dependencies (optional): List of task IDs this task depends on
+            - task_id (optional): Pre-specified task ID for multi-agent workflow.
+              If provided and file exists, uses existing file instead of generating.
 
     Returns:
         Created task IDs and status.
 
-    Example:
+    Example (simple workflow):
         split_prd(
             prd_id="feature-auth",
             task_specs=[
                 {"title": "Set up OAuth config", "priority": "high", "component": "auth"},
                 {"title": "Implement login flow", "priority": "high", "component": "auth"},
-                {"title": "Add logout endpoint", "priority": "medium", "component": "auth"},
+            ]
+        )
+
+    Example (multi-agent workflow - files pre-written):
+        split_prd(
+            prd_id="feature-auth",
+            task_specs=[
+                {"task_id": "AUTH-T00001", "title": "Set up OAuth config", "priority": "high"},
+                {"task_id": "AUTH-T00002", "title": "Implement login flow", "priority": "high"},
             ]
         )
     """
@@ -947,12 +970,14 @@ def split_prd(
         return dep_str
 
     created_tasks = []
+    files_reused = 0
     try:
         for spec in task_specs:
             if not spec.get("title"):
                 return {"status": "error", "message": "Each task spec must have a 'title'"}
 
-            task_id = db.get_next_task_id(pid)
+            # Use pre-specified task_id if provided, otherwise auto-generate
+            task_id = spec.get("task_id") or db.get_next_task_id(pid)
 
             # Build data dict if dependencies provided, resolving shorthand IDs
             data = None
@@ -960,18 +985,26 @@ def split_prd(
                 resolved_deps = [resolve_dep_id(d) for d in spec["dependencies"]]
                 data = {"dependencies": resolved_deps}
 
-            # Write content to file
-            file_path = content_mgr.write_task(
-                project_id=pid,
-                task_id=task_id,
-                title=spec["title"],
-                description=spec.get("description", ""),
-                priority=spec.get("priority", "medium"),
-                status="pending",
-                component=spec.get("component"),
-                prd_id=prd_id,
-                data=data,
-            )
+            # Check if file was pre-written (multi-agent workflow)
+            file_path = content_mgr.get_task_path(pid, task_id)
+            file_existed = file_path.exists()
+
+            if file_existed:
+                # File was pre-written by Content Generation Agent
+                files_reused += 1
+            else:
+                # Write content to file (simple workflow or fallback)
+                file_path = content_mgr.write_task(
+                    project_id=pid,
+                    task_id=task_id,
+                    title=spec["title"],
+                    description=spec.get("description", ""),
+                    priority=spec.get("priority", "medium"),
+                    status="pending",
+                    component=spec.get("component"),
+                    prd_id=prd_id,
+                    data=data,
+                )
 
             # Register in database
             task = db.create_task(
@@ -989,12 +1022,13 @@ def split_prd(
                 "title": task["title"],
                 "priority": task["priority"],
                 "component": task.get("component"),
+                "file_reused": file_existed,
             })
 
         # Update PRD status to "split"
         db.update_prd(prd_id, status="split")
 
-        return {
+        result = {
             "status": "success",
             "message": f"Created {len(created_tasks)} tasks from PRD '{prd_id}'",
             "prd_id": prd_id,
@@ -1002,6 +1036,13 @@ def split_prd(
             "tasks_created": len(created_tasks),
             "tasks": created_tasks,
         }
+
+        # Add note if files were reused (multi-agent workflow)
+        if files_reused > 0:
+            result["files_reused"] = files_reused
+            result["note"] = f"{files_reused} task file(s) were pre-written and reused"
+
+        return result
     except Exception as e:
         return {"status": "error", "message": f"Failed to create tasks: {str(e)}"}
 
@@ -1184,6 +1225,47 @@ def complete_sprint(sprint_id: str) -> dict[str, Any]:
             "completed_tasks": completed,
             "completion_rate": f"{(completed / total * 100):.0f}%" if total > 0 else "N/A",
         },
+    }
+
+
+@mcp.tool()
+def delete_sprint(sprint_id: str) -> dict[str, Any]:
+    """Delete a sprint.
+
+    PRDs assigned to this sprint are unlinked (not deleted).
+    Tasks under those PRDs are preserved.
+
+    Args:
+        sprint_id: Sprint identifier.
+
+    Returns:
+        Deletion status.
+    """
+    db = get_db()
+
+    sprint = db.get_sprint(sprint_id)
+    if not sprint:
+        return {"status": "not_found", "message": f"Sprint not found: {sprint_id}"}
+
+    # Get stats before deletion
+    prds = db.get_sprint_prds(sprint_id)
+    prd_count = len(prds)
+
+    # Unlink PRDs from sprint (set sprint_id to NULL)
+    for prd in prds:
+        db.assign_prd_to_sprint(prd["id"], None)
+
+    # Delete any sync mappings
+    db.delete_sync_mapping("sprint", sprint_id, "linear")
+    db.delete_sync_mapping("sprint", sprint_id, "jira")
+
+    # Delete from database
+    db.delete_sprint(sprint_id)
+
+    return {
+        "status": "deleted",
+        "message": f"Sprint deleted: {sprint_id}",
+        "unlinked_prds": prd_count,
     }
 
 
@@ -1588,6 +1670,23 @@ def import_from_linear(
             sync = _get_sync_service()
             result = sync.import_linear_active_cycle(project_id)
 
+            # Handle already_exists status
+            if result.get("status") == "already_exists":
+                return {
+                    "status": "already_exists",
+                    "message": f"Sprint already imported as {result['existing_sprint']['id']}",
+                    "existing_sprint_id": result["existing_sprint"]["id"],
+                    "existing_sprint_title": result["existing_sprint"]["title"],
+                    "external_id": result["external_id"],
+                    "last_synced": result["mapping"].get("last_synced"),
+                    "options": [
+                        "use_existing: Use the existing sprint",
+                        "sync: Re-sync with /sdlc:sprint-sync",
+                        "reimport: Unlink first with /sdlc:sprint-unlink, then reimport",
+                        "cancel: Cancel the import",
+                    ],
+                }
+
             return {
                 "status": "imported",
                 "message": f"Imported active cycle as sprint {result['sprint']['id']}",
@@ -1626,6 +1725,23 @@ def import_from_linear(
     try:
         sync = _get_sync_service()
         result = sync.import_linear_cycle(project_id, cycle_id)
+
+        # Handle already_exists status
+        if result.get("status") == "already_exists":
+            return {
+                "status": "already_exists",
+                "message": f"Sprint already imported as {result['existing_sprint']['id']}",
+                "existing_sprint_id": result["existing_sprint"]["id"],
+                "existing_sprint_title": result["existing_sprint"]["title"],
+                "external_id": result["external_id"],
+                "last_synced": result["mapping"].get("last_synced"),
+                "options": [
+                    "use_existing: Use the existing sprint",
+                    "sync: Re-sync with /sdlc:sprint-sync",
+                    "reimport: Unlink first with /sdlc:sprint-unlink, then reimport",
+                    "cancel: Cancel the import",
+                ],
+            }
 
         return {
             "status": "imported",
@@ -1679,6 +1795,23 @@ def import_from_jira(
             sync = _get_sync_service()
             result = sync.import_jira_active_sprint(project_id, board_id)
 
+            # Handle already_exists status
+            if result.get("status") == "already_exists":
+                return {
+                    "status": "already_exists",
+                    "message": f"Sprint already imported as {result['existing_sprint']['id']}",
+                    "existing_sprint_id": result["existing_sprint"]["id"],
+                    "existing_sprint_title": result["existing_sprint"]["title"],
+                    "external_id": result["external_id"],
+                    "last_synced": result["mapping"].get("last_synced"),
+                    "options": [
+                        "use_existing: Use the existing sprint",
+                        "sync: Re-sync with /sdlc:sprint-sync",
+                        "reimport: Unlink first with /sdlc:sprint-unlink, then reimport",
+                        "cancel: Cancel the import",
+                    ],
+                }
+
             return {
                 "status": "imported",
                 "message": f"Imported active sprint as {result['sprint']['id']}",
@@ -1725,6 +1858,23 @@ def import_from_jira(
     try:
         sync = _get_sync_service()
         result = sync.import_jira_sprint(project_id, sprint_id, board_id)
+
+        # Handle already_exists status
+        if result.get("status") == "already_exists":
+            return {
+                "status": "already_exists",
+                "message": f"Sprint already imported as {result['existing_sprint']['id']}",
+                "existing_sprint_id": result["existing_sprint"]["id"],
+                "existing_sprint_title": result["existing_sprint"]["title"],
+                "external_id": result["external_id"],
+                "last_synced": result["mapping"].get("last_synced"),
+                "options": [
+                    "use_existing: Use the existing sprint",
+                    "sync: Re-sync with /sdlc:sprint-sync",
+                    "reimport: Unlink first with /sdlc:sprint-unlink, then reimport",
+                    "cancel: Cancel the import",
+                ],
+            }
 
         return {
             "status": "imported",

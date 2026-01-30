@@ -351,3 +351,341 @@ class TestExternalSyncService:
         # Sprint should have external_id cleared
         sprint = db.get_sprint("SPRINT-01")
         assert sprint["external_id"] is None
+
+
+class TestDuplicateSprintDetection:
+    """Test duplicate sprint detection during import."""
+
+    def test_check_existing_sprint_mapping_finds_duplicate(self, temp_storage):
+        """Test that _check_existing_sprint_mapping detects existing mappings."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+        from a_sdlc.server.sync import ExternalSyncService
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_sprint("SPRINT-01", project_id, "Sprint 1")
+        db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
+
+        # Create a sync mapping
+        db.create_sync_mapping("sprint", "SPRINT-01", "linear", "cycle-abc123")
+
+        service = ExternalSyncService(db, content_mgr)
+        result = service._check_existing_sprint_mapping(project_id, "linear", "cycle-abc123")
+
+        assert result is not None
+        assert result["existing_sprint"]["id"] == "SPRINT-01"
+        assert result["mapping"]["external_id"] == "cycle-abc123"
+        assert result["external_system"] == "linear"
+
+    def test_check_existing_sprint_mapping_returns_none_when_no_mapping(self, temp_storage):
+        """Test that _check_existing_sprint_mapping returns None when no mapping exists."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+        from a_sdlc.server.sync import ExternalSyncService
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        service = ExternalSyncService(db, content_mgr)
+        result = service._check_existing_sprint_mapping(project_id, "linear", "cycle-new")
+
+        assert result is None
+
+    def test_orphaned_mapping_is_cleaned_up(self, temp_storage):
+        """Test that orphaned mappings (sprint deleted but mapping remains) are cleaned up."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+        from a_sdlc.server.sync import ExternalSyncService
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        # Create a mapping without a corresponding sprint (orphaned)
+        db.create_sync_mapping("sprint", "SPRINT-DELETED", "linear", "cycle-orphan")
+
+        service = ExternalSyncService(db, content_mgr)
+        result = service._check_existing_sprint_mapping(project_id, "linear", "cycle-orphan")
+
+        # Should return None (orphaned mapping cleaned up)
+        assert result is None
+
+        # Mapping should have been deleted
+        mapping = db.get_sync_mapping("sprint", "SPRINT-DELETED", "linear")
+        assert mapping is None
+
+    def test_linear_import_returns_already_exists(self, temp_storage):
+        """Test that import_linear_cycle returns already_exists status for duplicates."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+        from a_sdlc.server.sync import ExternalSyncService
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_sprint("SPRINT-01", project_id, "Existing Sprint")
+        db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
+
+        # Create a sync mapping for the cycle
+        db.create_sync_mapping("sprint", "SPRINT-01", "linear", "cycle-abc123")
+
+        service = ExternalSyncService(db, content_mgr)
+        result = service.import_linear_cycle(project_id, "cycle-abc123")
+
+        assert result["status"] == "already_exists"
+        assert result["existing_sprint"]["id"] == "SPRINT-01"
+        assert result["external_id"] == "cycle-abc123"
+        assert result["external_system"] == "linear"
+
+    def test_jira_import_returns_already_exists(self, temp_storage):
+        """Test that import_jira_sprint returns already_exists status for duplicates."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+        from a_sdlc.server.sync import ExternalSyncService
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_sprint("SPRINT-02", project_id, "Existing Jira Sprint")
+        db.set_external_config(project_id, "jira", {
+            "base_url": "https://test.atlassian.net",
+            "email": "test@test.com",
+            "api_token": "test-token",
+            "project_key": "TEST",
+        })
+
+        # Create a sync mapping for the Jira sprint
+        db.create_sync_mapping("sprint", "SPRINT-02", "jira", "456")
+
+        service = ExternalSyncService(db, content_mgr)
+        result = service.import_jira_sprint(project_id, "456")
+
+        assert result["status"] == "already_exists"
+        assert result["existing_sprint"]["id"] == "SPRINT-02"
+        assert result["external_id"] == "456"
+        assert result["external_system"] == "jira"
+
+    def test_different_external_id_allows_new_import(self, temp_storage):
+        """Test that a different external_id allows a new import."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+        from a_sdlc.server.sync import ExternalSyncService
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_sprint("SPRINT-01", project_id, "Existing Sprint")
+        db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
+
+        # Create a sync mapping for a different cycle
+        db.create_sync_mapping("sprint", "SPRINT-01", "linear", "cycle-old")
+
+        service = ExternalSyncService(db, content_mgr)
+
+        # Checking for a different external_id should return None (no duplicate)
+        result = service._check_existing_sprint_mapping(project_id, "linear", "cycle-new")
+        assert result is None
+
+
+class TestDeleteSyncMappingCleanup:
+    """Test sync mapping cleanup on entity deletion."""
+
+    def test_delete_prd_cleans_up_sync_mappings(self, temp_storage):
+        """Test that deleting a PRD removes its sync mappings."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        # Create a PRD
+        prd_id = db.get_next_prd_id(project_id)
+        content_mgr.write_prd(project_id, prd_id, "Test PRD", "Test content")
+        db.create_prd(
+            prd_id=prd_id,
+            project_id=project_id,
+            title="Test PRD",
+            file_path=str(content_mgr.get_prd_path(project_id, prd_id)),
+        )
+
+        # Create sync mappings for Linear and Jira
+        db.create_sync_mapping("prd", prd_id, "linear", "linear-issue-123")
+        db.create_sync_mapping("prd", prd_id, "jira", "JIRA-456")
+
+        # Verify mappings exist
+        assert db.get_sync_mapping("prd", prd_id, "linear") is not None
+        assert db.get_sync_mapping("prd", prd_id, "jira") is not None
+
+        # Delete PRD using the server function
+        from a_sdlc.server import delete_prd
+        from unittest.mock import patch
+
+        with patch("a_sdlc.server.get_db", return_value=db), \
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+            result = delete_prd(prd_id)
+
+        assert result["status"] == "deleted"
+
+        # Verify sync mappings are cleaned up
+        assert db.get_sync_mapping("prd", prd_id, "linear") is None
+        assert db.get_sync_mapping("prd", prd_id, "jira") is None
+
+    def test_delete_task_cleans_up_sync_mappings(self, temp_storage):
+        """Test that deleting a task removes its sync mappings."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        # Create a task
+        task_id = db.get_next_task_id(project_id)
+        content_mgr.write_task(project_id, task_id, "Test Task", "Test description")
+        db.create_task(
+            task_id=task_id,
+            project_id=project_id,
+            title="Test Task",
+            file_path=str(content_mgr.get_task_path(project_id, task_id)),
+        )
+
+        # Create sync mappings for Linear and Jira
+        db.create_sync_mapping("task", task_id, "linear", "linear-task-789")
+        db.create_sync_mapping("task", task_id, "jira", "JIRA-101")
+
+        # Verify mappings exist
+        assert db.get_sync_mapping("task", task_id, "linear") is not None
+        assert db.get_sync_mapping("task", task_id, "jira") is not None
+
+        # Delete task using the server function
+        from a_sdlc.server import delete_task
+        from unittest.mock import patch
+
+        with patch("a_sdlc.server.get_db", return_value=db), \
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+            result = delete_task(task_id)
+
+        assert result["status"] == "deleted"
+
+        # Verify sync mappings are cleaned up
+        assert db.get_sync_mapping("task", task_id, "linear") is None
+        assert db.get_sync_mapping("task", task_id, "jira") is None
+
+    def test_delete_sprint_cleans_up_sync_mappings(self, temp_storage):
+        """Test that deleting a sprint removes its sync mappings (existing behavior)."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        # Create a sprint
+        sprint_id = db.get_next_sprint_id(project_id)
+        db.create_sprint(sprint_id, project_id, "Test Sprint", "Test goal")
+
+        # Create sync mappings for Linear and Jira
+        db.create_sync_mapping("sprint", sprint_id, "linear", "cycle-abc")
+        db.create_sync_mapping("sprint", sprint_id, "jira", "sprint-123")
+
+        # Verify mappings exist
+        assert db.get_sync_mapping("sprint", sprint_id, "linear") is not None
+        assert db.get_sync_mapping("sprint", sprint_id, "jira") is not None
+
+        # Delete sprint using the server function
+        from a_sdlc.server import delete_sprint
+        from unittest.mock import patch
+
+        with patch("a_sdlc.server.get_db", return_value=db), \
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+            result = delete_sprint(sprint_id)
+
+        assert result["status"] == "deleted"
+
+        # Verify sync mappings are cleaned up
+        assert db.get_sync_mapping("sprint", sprint_id, "linear") is None
+        assert db.get_sync_mapping("sprint", sprint_id, "jira") is None
+
+    def test_delete_prd_without_sync_mappings_succeeds(self, temp_storage):
+        """Test that deleting a PRD without sync mappings still works."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        # Create a PRD without sync mappings
+        prd_id = db.get_next_prd_id(project_id)
+        content_mgr.write_prd(project_id, prd_id, "Test PRD", "Test content")
+        db.create_prd(
+            prd_id=prd_id,
+            project_id=project_id,
+            title="Test PRD",
+            file_path=str(content_mgr.get_prd_path(project_id, prd_id)),
+        )
+
+        # Delete PRD (should not error even without mappings)
+        from a_sdlc.server import delete_prd
+        from unittest.mock import patch
+
+        with patch("a_sdlc.server.get_db", return_value=db), \
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+            result = delete_prd(prd_id)
+
+        assert result["status"] == "deleted"
+
+    def test_delete_task_without_sync_mappings_succeeds(self, temp_storage):
+        """Test that deleting a task without sync mappings still works."""
+        from a_sdlc.core.database import Database
+        from a_sdlc.core.content import ContentManager
+
+        db = Database(db_path=temp_storage / "data.db")
+        content_mgr = ContentManager(base_path=temp_storage / "content")
+
+        project_id = "test-project"
+        db.create_project(project_id, "Test Project", "/tmp/test")
+
+        # Create a task without sync mappings
+        task_id = db.get_next_task_id(project_id)
+        content_mgr.write_task(project_id, task_id, "Test Task", "Test description")
+        db.create_task(
+            task_id=task_id,
+            project_id=project_id,
+            title="Test Task",
+            file_path=str(content_mgr.get_task_path(project_id, task_id)),
+        )
+
+        # Delete task (should not error even without mappings)
+        from a_sdlc.server import delete_task
+        from unittest.mock import patch
+
+        with patch("a_sdlc.server.get_db", return_value=db), \
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+            result = delete_task(task_id)
+
+        assert result["status"] == "deleted"

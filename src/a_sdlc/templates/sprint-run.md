@@ -4,6 +4,24 @@
 
 Execute sprint tasks in parallel using multiple Claude Code Task agents. Independent tasks run concurrently while respecting dependency chains.
 
+---
+
+## Agent Execution vs Task Management
+
+This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
+
+- **Agent = Execution unit** (launched via Claude Code's `Task` tool)
+- **a-sdlc Task = Work item** (retrieved/updated via `mcp__asdlc__*` tools)
+
+**Each agent MUST:**
+1. Call `mcp__asdlc__get_task(task_id)` to fetch task details
+2. Execute the implementation steps from the task content
+3. Call `mcp__asdlc__update_task(task_id, status="completed")` when done
+
+**Do NOT** create intermediate Claude Code tasks (TodoWrite/TaskCreate). The a-sdlc task IS the work item.
+
+---
+
 ## Syntax
 
 ```

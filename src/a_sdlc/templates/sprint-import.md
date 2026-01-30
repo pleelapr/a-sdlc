@@ -156,6 +156,57 @@ Next steps:
 /sdlc:sprint-import jira --sprint-id 123
 ```
 
+## Handling Duplicate Imports
+
+### Sprint Already Imported
+
+When the MCP tool returns `status: "already_exists"`, the agent should present the user with clear options:
+
+**Response Format:**
+```json
+{
+  "status": "already_exists",
+  "message": "Sprint already imported as SPRINT-001",
+  "existing_sprint_id": "SPRINT-001",
+  "existing_sprint_title": "Q1 Auth Sprint",
+  "external_id": "ENG-Q1-2025",
+  "last_synced": "2025-01-15T10:30:00Z",
+  "options": [
+    "use_existing: Use the existing sprint",
+    "sync: Re-sync with /sdlc:sprint-sync",
+    "reimport: Unlink first with /sdlc:sprint-unlink, then reimport",
+    "cancel: Cancel the import"
+  ]
+}
+```
+
+**Agent Action:** Present the user with choices:
+
+```
+⚠️ Sprint Already Imported
+
+The external sprint {external_id} is already imported as local sprint {existing_sprint_id}.
+
+  Sprint: {existing_sprint_title}
+  Last Synced: {last_synced}
+
+What would you like to do?
+
+1. **Use existing** - Continue working with the existing sprint
+   → Run: /sdlc:sprint-show {existing_sprint_id}
+
+2. **Re-sync** - Pull latest changes from the external system
+   → Run: /sdlc:sprint-sync {existing_sprint_id}
+
+3. **Reimport** - Remove the link and import fresh
+   → Run: /sdlc:sprint-unlink {existing_sprint_id}
+   → Then reimport
+
+4. **Cancel** - Abort the import operation
+```
+
+**Wait for user input before proceeding.**
+
 ## Error Cases
 
 ### Integration Not Configured
@@ -177,14 +228,6 @@ Try:
   - Different status: --status upcoming
   - Check Linear directly
   - Verify team_id is correct
-```
-
-### Sprint Already Imported
-```
-Sprint ENG-Q1-2025 already imported as SPRINT-001.
-
-To re-sync: /sdlc:sprint-sync SPRINT-001
-To reimport: /sdlc:sprint-unlink SPRINT-001 first
 ```
 
 ## Notes
