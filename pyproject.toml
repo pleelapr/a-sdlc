@@ -60,8 +60,11 @@ linear = [
 atlassian = [
     "httpx>=0.25.0",
 ]
+sonarqube = [
+    "pysonar",
+]
 all = [
-    "a-sdlc[dev,linear,atlassian]",
+    "a-sdlc[dev,linear,atlassian,sonarqube]",
 ]
 
 [project.scripts]

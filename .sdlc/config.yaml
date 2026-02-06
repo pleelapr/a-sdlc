@@ -1,0 +1,7 @@
+sonarqube:
+  fix_severities:
+  - BLOCKER
+  - CRITICAL
+  - MAJOR
+  project_key: claude-code
+  sources: .

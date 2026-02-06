@@ -20,6 +20,7 @@ class ArtifactType(Enum):
     KEY_WORKFLOWS = "key-workflows"
     DIRECTORY_STRUCTURE = "directory-structure"
     REQUIREMENTS = "requirements"
+    CODE_QUALITY = "code-quality"
 
     @classmethod
     def from_filename(cls, filename: str) -> "ArtifactType | None":
@@ -38,6 +39,7 @@ class ArtifactType(Enum):
             "key-workflows": cls.KEY_WORKFLOWS,
             "directory-structure": cls.DIRECTORY_STRUCTURE,
             "requirements": cls.REQUIREMENTS,
+            "code-quality": cls.CODE_QUALITY,
         }
 
         # Handle both .md and without extension

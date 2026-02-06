@@ -33,6 +33,13 @@ from a_sdlc.monitoring_setup import (
     check_services_health,
     MONITORING_DIR,
 )
+from a_sdlc.sonarqube_setup import (
+    check_scanner_available,
+    generate_code_quality_artifact,
+    run_scanner,
+    setup_sonarqube,
+    verify_sonarqube_setup,
+)
 from a_sdlc.plugins import get_plugin_manager
 
 console = Console()
@@ -115,7 +122,12 @@ def serve(transport: str, host: str, port: int) -> None:
     is_flag=True,
     help="Set up monitoring stack (Langfuse + SigNoz)"
 )
-def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool) -> None:
+@click.option(
+    "--with-sonarqube",
+    is_flag=True,
+    help="Set up SonarQube code analysis integration"
+)
+def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool, with_sonarqube: bool) -> None:
     """Deploy skill templates to Claude Code.
 
     Installs the /sdlc:* commands into your Claude Code configuration,
@@ -165,6 +177,11 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
         if with_monitoring:
             console.print()
             _setup_monitoring(force=force)
+
+        # Set up SonarQube if requested
+        if with_sonarqube:
+            console.print()
+            _setup_sonarqube_interactive(force=force)
 
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")
@@ -693,6 +710,241 @@ def monitoring_status() -> None:
         console.print("[dim]Run [cyan]a-sdlc monitoring start[/cyan] to start services.[/dim]")
 
 
+# =============================================================================
+# SonarQube Commands
+# =============================================================================
+
+
+def _setup_sonarqube_interactive(force: bool = False) -> bool:
+    """Interactive SonarQube setup.
+
+    Returns:
+        True if setup succeeded, False otherwise.
+    """
+    # Install pysonar if not available
+    scanner_ok, _ = check_scanner_available()
+    if not scanner_ok:
+        import subprocess
+        console.print("[cyan]Installing pysonar scanner...[/cyan]")
+        result = subprocess.run(
+            ["uv", "tool", "install", "pysonar"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[red]Failed to install pysonar: {result.stderr.strip()}[/red]")
+            return False
+        console.print("[green]pysonar installed successfully.[/green]")
+        console.print()
+
+    console.print(Panel(
+        "[bold]Setting up SonarQube Integration[/bold]\n\n"
+        "This will configure code analysis with your SonarQube instance.\n"
+        "You'll need:\n"
+        "  - SonarQube host URL\n"
+        "  - Authentication token\n"
+        "  - Project key",
+        border_style="blue"
+    ))
+
+    host_url = click.prompt("SonarQube host URL", default="http://localhost:9000")
+    token = click.prompt("Authentication token", hide_input=True)
+    project_key = click.prompt("Project key")
+    sources = click.prompt("Source directories", default="src")
+    exclusions = click.prompt("Exclusion patterns (comma-separated, empty for none)", default="")
+    fix_input = click.prompt(
+        "Fix severity threshold",
+        default="BLOCKER,CRITICAL,MAJOR",
+    )
+    fix_severities = [s.strip() for s in fix_input.split(",") if s.strip()]
+
+    success, message, verification = setup_sonarqube(
+        host_url=host_url,
+        token=token,
+        project_key=project_key,
+        sources=sources,
+        exclusions=exclusions or None,
+        fix_severities=fix_severities,
+    )
+
+    if success:
+        console.print(f"[green]{message}[/green]")
+        console.print()
+
+        if verification:
+            table = Table(title="SonarQube Setup")
+            table.add_column("Check", style="cyan")
+            table.add_column("Status")
+
+            table.add_row(
+                "Scanner",
+                "[green]Available[/green]"
+                if verification.get("scanner_available")
+                else "[yellow]Not found[/yellow]"
+            )
+            table.add_row(
+                "Connection",
+                "[green]Connected[/green]"
+                if verification.get("sonarqube_reachable")
+                else "[yellow]Not reachable[/yellow]"
+            )
+            table.add_row(
+                "Project Key",
+                f"[green]{project_key}[/green]"
+                if verification.get("project_key_configured")
+                else "[yellow]Not set[/yellow]"
+            )
+
+            console.print(table)
+
+        console.print()
+        console.print("[bold]Next steps:[/bold]")
+        console.print("  1. Run scan:     [cyan]a-sdlc sonarqube scan[/cyan]")
+        console.print("  2. View results: [cyan]a-sdlc sonarqube results[/cyan]")
+        console.print("  3. Auto-fix:     [cyan]/sdlc:sonar-scan[/cyan] (in Claude Code)")
+
+        return True
+    else:
+        console.print(f"[red]{message}[/red]")
+        return False
+
+
+@main.group()
+def sonarqube() -> None:
+    """SonarQube code analysis integration.
+
+    Configure, run, and view SonarQube analysis results.
+    Use `/sdlc:sonar-scan` in Claude Code for automated scan + fix.
+    """
+    pass
+
+
+@sonarqube.command("configure")
+@click.option("--force", "-f", is_flag=True, help="Overwrite existing configuration")
+def sonarqube_configure(force: bool) -> None:
+    """Configure SonarQube connection and project settings.
+
+    Interactive setup that validates the connection before saving.
+
+    Examples:
+
+        a-sdlc sonarqube configure
+        a-sdlc sonarqube configure --force
+    """
+    _setup_sonarqube_interactive(force=force)
+
+
+@sonarqube.command("scan")
+def sonarqube_scan() -> None:
+    """Run pysonar to analyze the project.
+
+    Executes pysonar scanner with configured settings.
+
+    Examples:
+
+        a-sdlc sonarqube scan
+    """
+    console.print("[cyan]Running SonarQube scanner...[/cyan]")
+
+    success, message = run_scanner()
+
+    if success:
+        console.print(f"[green]{message}[/green]")
+        console.print()
+        console.print("Run [cyan]a-sdlc sonarqube results[/cyan] to fetch and view results.")
+    else:
+        console.print(f"[red]{message}[/red]")
+        sys.exit(1)
+
+
+@sonarqube.command("results")
+def sonarqube_results() -> None:
+    """Fetch analysis results and generate code-quality.md artifact.
+
+    Calls the SonarQube API to retrieve quality gate status, metrics,
+    and issues, then writes a formatted report to .sdlc/artifacts/code-quality.md.
+
+    Examples:
+
+        a-sdlc sonarqube results
+    """
+    console.print("[cyan]Fetching SonarQube results...[/cyan]")
+
+    success, message = generate_code_quality_artifact()
+
+    if success:
+        console.print(f"[green]{message}[/green]")
+    else:
+        console.print(f"[red]{message}[/red]")
+        sys.exit(1)
+
+
+@sonarqube.command("status")
+def sonarqube_status() -> None:
+    """Show SonarQube setup verification and analysis status.
+
+    Examples:
+
+        a-sdlc sonarqube status
+    """
+    console.print(Panel(
+        "[bold]SonarQube Integration Status[/bold]",
+        border_style="blue"
+    ))
+
+    verification = verify_sonarqube_setup()
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Check", style="cyan")
+    table.add_column("Status")
+    table.add_column("Details", style="dim")
+
+    scanner_ok = verification.get("scanner_available", False)
+    table.add_row(
+        "Scanner",
+        "[green]Available[/green]" if scanner_ok else "[yellow]Not found[/yellow]",
+        "pysonar" if scanner_ok else "Install with: uv tool install pysonar"
+    )
+
+    table.add_row(
+        "Host URL",
+        "[green]Configured[/green]" if verification.get("host_url_configured") else "[yellow]Not set[/yellow]",
+        ""
+    )
+
+    table.add_row(
+        "Token",
+        "[green]Configured[/green]" if verification.get("token_configured") else "[yellow]Not set[/yellow]",
+        ""
+    )
+
+    table.add_row(
+        "Project Key",
+        "[green]Configured[/green]" if verification.get("project_key_configured") else "[yellow]Not set[/yellow]",
+        ""
+    )
+
+    reachable = verification.get("sonarqube_reachable", False)
+    table.add_row(
+        "Connection",
+        "[green]Connected[/green]" if reachable else "[yellow]Not reachable[/yellow]",
+        str(verification.get("connection_message", ""))
+    )
+
+    ready = verification.get("ready", False)
+    table.add_row(
+        "Overall",
+        "[green]Ready[/green]" if ready else "[yellow]Not ready[/yellow]",
+        ""
+    )
+
+    console.print(table)
+
+    if not ready:
+        console.print()
+        console.print("[dim]Run [cyan]a-sdlc sonarqube configure[/cyan] to set up.[/dim]")
+
+
 @main.command()
 def doctor() -> None:
     """Run system diagnostics.
@@ -812,6 +1064,26 @@ def doctor() -> None:
             "status": "pass" if signoz_ok else "warn",
             "detail": "http://localhost:8080" if signoz_ok else "Not reachable. Run: a-sdlc monitoring start"
         })
+
+    # SonarQube checks
+    sq_verification = verify_sonarqube_setup()
+    sq_ready = sq_verification.get("ready", False)
+
+    if sq_ready:
+        sq_detail = "Configured (pysonar available)"
+        sq_status = "pass"
+    elif sq_verification.get("host_url_configured"):
+        sq_detail = "Partially configured. Run: a-sdlc sonarqube configure"
+        sq_status = "warn"
+    else:
+        sq_detail = "Not configured. Run: a-sdlc sonarqube configure"
+        sq_status = "warn"
+
+    checks.append({
+        "name": "SonarQube",
+        "status": sq_status,
+        "detail": sq_detail
+    })
 
     # Display results
     table = Table(show_header=True, header_style="bold")
