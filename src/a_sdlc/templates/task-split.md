@@ -27,10 +27,24 @@ Use `mcp__asdlc__get_prd()` to get the PRD requirements and parse:
 
 ### 2. Load Architecture Context
 
-Use the project's architecture context from the codebase to understand:
+Read codebase artifacts to understand the project structure:
+
+```
+Read: .sdlc/artifacts/architecture.md         → Component boundaries and dependencies
+Read: .sdlc/artifacts/directory-structure.md   → File locations and organization
+Read: .sdlc/artifacts/data-model.md            → Data entities and relationships
+```
+
+Use these to identify:
 - Component boundaries
-- File locations
-- Existing patterns
+- File locations for each component
+- Existing patterns and conventions
+
+If no artifacts are found in `.sdlc/artifacts/`:
+```
+⚠️ No codebase artifacts found. Run `/sdlc:scan` first for better task decomposition.
+   Proceeding with limited context...
+```
 
 ### 3. Decomposition Algorithm
 

@@ -1,3 +1,12 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|Bash|MultiEdit|NotebookEdit"
+      hooks:
+        - type: command
+          command: "~/.a-sdlc/hooks/block-source-edits.sh task-create"
+---
+
 # /sdlc:task-create
 
 ## Purpose
@@ -67,7 +76,38 @@ mcp__asdlc__create_task(
 
 ## Interactive Mode
 
-When invoked without arguments, prompt for task details:
+When invoked without arguments, prompt for task details interactively.
+
+**Component Suggestion from Architecture:**
+
+Before prompting, check for codebase artifacts:
+
+```
+context = mcp__asdlc__get_context()
+```
+
+If `context.artifacts.available` includes `"architecture"`:
+
+```
+Read: .sdlc/artifacts/architecture.md
+```
+
+Parse the component names from the architecture document. When the user provides a task title and description, suggest the most relevant component based on keyword matching against component descriptions.
+
+```
+Task title: Fix login timeout bug
+Priority [high/medium/low]: high
+
+Suggested component based on architecture: auth-service
+  (matches: authentication, login flows)
+Component [auth-service]: <Enter to accept or type different>
+
+PRD (optional): feature-auth
+Description:
+> The login process times out after 5 seconds...
+```
+
+If no artifacts are available, fall back to the standard prompt without suggestions:
 
 ```
 Task title: Fix login timeout bug

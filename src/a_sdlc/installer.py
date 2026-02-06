@@ -122,6 +122,14 @@ class Installer:
             shutil.copy2(template_file, target_file)
             installed.append(template_file.stem)
 
+        # Deploy hook scripts
+        hooks_dir = Path.home() / ".a-sdlc" / "hooks"
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        hook_script = self._get_hook_file("block-source-edits.sh")
+        if hook_script.exists():
+            shutil.copy2(hook_script, hooks_dir / "block-source-edits.sh")
+            (hooks_dir / "block-source-edits.sh").chmod(0o755)
+
         # Configure MCP server
         if configure_mcp:
             configure_mcp_server(force=force)
@@ -165,6 +173,21 @@ class Installer:
             self.target_dir.rmdir()
 
         return count
+
+    def _get_hook_file(self, filename: str) -> Path:
+        """Get the path to a bundled hook file.
+
+        Args:
+            filename: Name of the hook file.
+
+        Returns:
+            Path to the hook file.
+        """
+        try:
+            with resources.files("a_sdlc").joinpath("hook_files") as hook_path:
+                return Path(hook_path) / filename
+        except (TypeError, AttributeError):
+            return Path(__file__).parent / "hook_files" / filename
 
     def _get_template_dir(self) -> Path:
         """Get the path to bundled template files.

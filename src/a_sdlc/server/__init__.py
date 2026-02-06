@@ -92,6 +92,29 @@ def get_context() -> dict[str, Any]:
 
     active_sprint = next((s for s in sprints if s["status"] == "active"), None)
 
+    # Detect artifacts in .sdlc/artifacts/
+    artifact_names = [
+        "architecture",
+        "codebase-summary",
+        "data-model",
+        "directory-structure",
+        "key-workflows",
+    ]
+    artifacts_dir = Path(project["path"]) / ".sdlc" / "artifacts"
+    available_artifacts = []
+    if artifacts_dir.is_dir():
+        for name in artifact_names:
+            if (artifacts_dir / f"{name}.md").is_file():
+                available_artifacts.append(name)
+
+    artifact_count = len(available_artifacts)
+    if artifact_count == 0:
+        scan_status = "not_scanned"
+    elif artifact_count == len(artifact_names):
+        scan_status = "complete"
+    else:
+        scan_status = "partial"
+
     return {
         "status": "ok",
         "project": {
@@ -110,6 +133,10 @@ def get_context() -> dict[str, Any]:
             "id": active_sprint["id"],
             "title": active_sprint["title"],
         } if active_sprint else None,
+        "artifacts": {
+            "available": available_artifacts,
+            "scan_status": scan_status,
+        },
     }
 
 

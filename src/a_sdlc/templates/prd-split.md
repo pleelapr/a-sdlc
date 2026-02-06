@@ -1,3 +1,12 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|Bash|MultiEdit|NotebookEdit"
+      hooks:
+        - type: command
+          command: "~/.a-sdlc/hooks/block-source-edits.sh prd-split"
+---
+
 # /sdlc:prd-split
 
 ## Purpose
@@ -123,11 +132,23 @@ Investigate the codebase to gather context for implementing this PRD.
 
 ## Investigation Tasks
 
-1. **Read Project Artifacts** (if available)
-   - `.sdlc/artifacts/architecture.md` - Components and patterns
-   - `.sdlc/artifacts/directory-structure.md` - File organization
-   - `.sdlc/artifacts/codebase-summary.md` - Tech stack and conventions
-   - `.sdlc/artifacts/data-model.md` - Entities and relationships
+1. **Read Project Artifacts** (CRITICAL for task quality)
+   Read ALL available artifacts — these provide essential context for accurate component
+   assignments, file paths, and pattern adherence in generated tasks:
+   ```
+   Read: .sdlc/artifacts/architecture.md         → Components, boundaries, dependencies
+   Read: .sdlc/artifacts/directory-structure.md   → File organization and placement
+   Read: .sdlc/artifacts/codebase-summary.md      → Tech stack, conventions, patterns
+   Read: .sdlc/artifacts/data-model.md            → Entities, relationships, schemas
+   Read: .sdlc/artifacts/key-workflows.md         → Existing flows to integrate with
+   ```
+   If NO artifacts are found:
+   ```
+   ⚠️ WARNING: No codebase artifacts found in .sdlc/artifacts/.
+   Task generation quality will be significantly lower without codebase context.
+   Recommendation: Run `/sdlc:scan` first, then re-run `/sdlc:prd-split`.
+   Proceeding with limited context...
+   ```
 
 2. **Find Similar Implementations**
    Search for 2-3 examples of similar features in the codebase.

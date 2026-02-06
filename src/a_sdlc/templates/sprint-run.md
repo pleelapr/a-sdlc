@@ -98,6 +98,31 @@ Estimated execution batches: 2
 Proceed with execution? [Y/n]
 ```
 
+### 3.5. Load Codebase Context for Agents
+
+Before launching task agents, read project artifacts to build a shared context summary that each agent receives:
+
+```
+context = mcp__asdlc__get_context()
+```
+
+If `context.artifacts.scan_status` is `"complete"` or `"partial"`:
+
+```
+Read: .sdlc/artifacts/codebase-summary.md    → Tech stack, conventions, main patterns
+Read: .sdlc/artifacts/key-workflows.md       → Existing flows agents must integrate with
+```
+
+Extract key points into a concise `codebase_context` string:
+- Tech stack and language versions
+- Naming conventions and code style
+- Key architectural patterns (e.g., "uses repository pattern", "Click CLI framework")
+- Import conventions and module structure
+
+This context is injected into each agent's prompt (see Step 4) so agents follow project patterns instead of guessing.
+
+If no artifacts are available, agents proceed without codebase context (they can still read individual files as needed).
+
 ### 4. Launch Parallel Agents
 
 **CRITICAL**: Use Claude Code's Task tool with **multiple tool calls in a single message** to achieve parallelism.
@@ -109,21 +134,21 @@ Launch agents in parallel by including multiple Task tool calls in ONE message:
 
 Task(
   description="Execute TASK-001",
-  prompt="Execute task TASK-001: Set up OAuth config. Fetch task details using mcp__asdlc__get_task(task_id='TASK-001'). Follow the implementation steps exactly. When complete, use mcp__asdlc__update_task to set status to completed.",
+  prompt="Execute task TASK-001: Set up OAuth config.\n\n## Codebase Context\n{codebase_context}\n\nFetch task details using mcp__asdlc__get_task(task_id='TASK-001'). Follow the implementation steps exactly. Follow the project patterns described in the codebase context above. When complete, use mcp__asdlc__update_task to set status to completed.",
   subagent_type="general-purpose",
   run_in_background=true
 )
 
 Task(
   description="Execute TASK-002",
-  prompt="Execute task TASK-002: Create login endpoint. Fetch task details using mcp__asdlc__get_task(task_id='TASK-002'). Follow the implementation steps exactly. When complete, use mcp__asdlc__update_task to set status to completed.",
+  prompt="Execute task TASK-002: Create login endpoint.\n\n## Codebase Context\n{codebase_context}\n\nFetch task details using mcp__asdlc__get_task(task_id='TASK-002'). Follow the implementation steps exactly. Follow the project patterns described in the codebase context above. When complete, use mcp__asdlc__update_task to set status to completed.",
   subagent_type="general-purpose",
   run_in_background=true
 )
 
 Task(
   description="Execute TASK-003",
-  prompt="Execute task TASK-003: Add user model fields. Fetch task details using mcp__asdlc__get_task(task_id='TASK-003'). Follow the implementation steps exactly. When complete, use mcp__asdlc__update_task to set status to completed.",
+  prompt="Execute task TASK-003: Add user model fields.\n\n## Codebase Context\n{codebase_context}\n\nFetch task details using mcp__asdlc__get_task(task_id='TASK-003'). Follow the implementation steps exactly. Follow the project patterns described in the codebase context above. When complete, use mcp__asdlc__update_task to set status to completed.",
   subagent_type="general-purpose",
   run_in_background=true
 )

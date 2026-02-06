@@ -44,8 +44,22 @@ mcp__asdlc__start_task(task_id="TASK-001")
 
 ## Display Format
 
+After starting the task, check for relevant codebase context:
+
 ```
-Task Started: TASK-001 ⏳
+context = mcp__asdlc__get_context()
+```
+
+If `context.artifacts.scan_status` is `"complete"` or `"partial"` AND the task has a `component`:
+
+```
+Read: .sdlc/artifacts/architecture.md
+```
+
+Extract the section relevant to the task's component (its description, key files, dependencies) and display it alongside the task details.
+
+```
+Task Started: TASK-001
 
 "Implement authentication"
 
@@ -56,8 +70,15 @@ Sprint: SPRINT-01
 Description:
 Add JWT-based authentication to the API endpoints.
 
+Component Context (from architecture.md):
+  auth-service: Handles authentication and authorization
+  Key files: src/auth/handlers.py, src/auth/models.py
+  Dependencies: database, config-service
+
 Good luck! Run /sdlc:task-complete TASK-001 when done.
 ```
+
+If no artifacts are available or the task has no component, display the standard format without the component context section.
 
 ## Examples
 

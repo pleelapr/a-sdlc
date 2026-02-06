@@ -1,3 +1,12 @@
+---
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|Bash|MultiEdit|NotebookEdit"
+      hooks:
+        - type: command
+          command: "~/.a-sdlc/hooks/block-source-edits.sh prd-generate"
+---
+
 # /sdlc:prd-generate "<description>"
 
 ## Purpose
@@ -28,6 +37,32 @@ Create a Product Requirements Document interactively from a brief description. U
 - Extract key entities and change type
 - Identify potential affected areas
 - Determine scope of the change
+
+### 1.5. Load Codebase Context (if available)
+
+Before asking clarifying questions, check for existing codebase artifacts to make questions codebase-aware:
+
+```
+context = mcp__asdlc__get_context()
+```
+
+If `context.artifacts.scan_status` is `"complete"` or `"partial"`:
+
+```
+Read: .sdlc/artifacts/codebase-summary.md    → Tech stack, conventions
+Read: .sdlc/artifacts/architecture.md         → Components and patterns
+```
+
+Use this context to:
+- Reference real component names in questions (e.g., "This will affect `AuthService` — what changes to the login flow?")
+- Understand existing patterns before asking about implementation approach
+- Identify affected areas more precisely
+
+If `context.artifacts.scan_status` is `"not_scanned"`:
+```
+⚠️ No codebase artifacts found. Run `/sdlc:scan` first for codebase-aware PRD generation.
+   Continuing without codebase context...
+```
 
 ### 2. Ask Clarifying Questions (Interactive)
 
