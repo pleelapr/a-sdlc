@@ -1543,3 +1543,218 @@ class ExternalSyncService:
             "pull": pull_result,
             "push": push_result,
         }
+
+    # =========================================================================
+    # PRD-Level Operations
+    # =========================================================================
+
+    def link_prd(
+        self, project_id: str, prd_id: str, system: str, external_id: str
+    ) -> dict[str, Any]:
+        """Link a local PRD to an external issue.
+
+        Args:
+            project_id: Local project ID
+            prd_id: Local PRD ID
+            system: External system ('linear' or 'jira')
+            external_id: External issue ID/key (e.g., 'PROJ-123')
+
+        Returns:
+            Created mapping
+        """
+        prd = self.db.get_prd(prd_id)
+        if not prd:
+            raise RuntimeError(f"PRD not found: {prd_id}")
+
+        # Verify config exists
+        config = self.db.get_external_config(project_id, system)
+        if not config:
+            raise RuntimeError(f"{system.title()} not configured for this project")
+
+        # Create mapping
+        mapping = self.db.create_sync_mapping(
+            entity_type="prd",
+            local_id=prd_id,
+            external_system=system,
+            external_id=external_id,
+        )
+
+        return mapping
+
+    def unlink_prd(self, prd_id: str) -> bool:
+        """Remove external system link from a PRD.
+
+        Returns:
+            True if unlinked, False if no link existed.
+        """
+        prd = self.db.get_prd(prd_id)
+        if not prd:
+            raise RuntimeError(f"PRD not found: {prd_id}")
+
+        deleted_linear = self.db.delete_sync_mapping("prd", prd_id, "linear")
+        deleted_jira = self.db.delete_sync_mapping("prd", prd_id, "jira")
+
+        return deleted_linear or deleted_jira
+
+    def sync_prd_to_jira(self, project_id: str, prd_id: str) -> dict[str, Any]:
+        """Push a single PRD to its linked Jira issue.
+
+        Returns:
+            Sync result with update/create status
+        """
+        client = self._get_jira_client(project_id)
+        prd = self.db.get_prd(prd_id)
+
+        if not prd:
+            raise RuntimeError(f"PRD not found: {prd_id}")
+
+        prd_mapping = self.db.get_sync_mapping("prd", prd_id, "jira")
+
+        # Map PRD status to Jira status
+        prd_status = prd.get("status", "draft")
+        if prd_status == "split":
+            jira_status = "Done"
+        elif prd_status == "ready":
+            jira_status = "In Progress"
+        else:
+            jira_status = "To Do"
+
+        # Read content from file
+        content = ""
+        if prd.get("file_path"):
+            content = self.content_mgr.read_content(prd["file_path"]) or ""
+
+        if prd_mapping:
+            # Update existing issue
+            client.transition_issue(prd_mapping["external_id"], jira_status)
+            client.update_issue(
+                prd_mapping["external_id"],
+                {"summary": prd["title"], "description": content}
+            )
+            self.db.update_sync_mapping("prd", prd_id, "jira", sync_status="synced")
+
+            return {
+                "action": "updated",
+                "prd_id": prd_id,
+                "jira_key": prd_mapping["external_id"],
+            }
+        else:
+            raise RuntimeError(
+                f"PRD {prd_id} is not linked to Jira. Use link_prd first."
+            )
+
+    def sync_prd_from_jira(self, project_id: str, prd_id: str) -> dict[str, Any]:
+        """Pull changes from linked Jira issue to PRD.
+
+        Returns:
+            Sync result with update status
+        """
+        client = self._get_jira_client(project_id)
+        prd = self.db.get_prd(prd_id)
+
+        if not prd:
+            raise RuntimeError(f"PRD not found: {prd_id}")
+
+        prd_mapping = self.db.get_sync_mapping("prd", prd_id, "jira")
+
+        if not prd_mapping:
+            raise RuntimeError(
+                f"PRD {prd_id} is not linked to Jira. Use link_prd first."
+            )
+
+        # Fetch issue from Jira
+        issues = client.search_issues(f"key = {prd_mapping['external_id']}", max_results=1)
+        if not issues:
+            raise RuntimeError(f"Jira issue not found: {prd_mapping['external_id']}")
+
+        issue = issues[0]
+        fields = issue.get("fields", {})
+
+        # Map Jira status to PRD status
+        jira_status = fields.get("status", {}).get("name", "To Do")
+        if jira_status in ("Done", "Closed", "Resolved"):
+            prd_status = "split"
+        elif jira_status == "In Progress":
+            prd_status = "ready"
+        else:
+            prd_status = "draft"
+
+        # Update PRD
+        self.db.update_prd(
+            prd_id,
+            title=fields.get("summary", prd["title"]),
+            status=prd_status,
+        )
+
+        # Update content file if description changed
+        description = self._extract_jira_description(fields.get("description"))
+        if description and prd.get("file_path"):
+            self.content_mgr.write_prd(
+                project_id=project_id,
+                prd_id=prd_id,
+                title=fields.get("summary", prd["title"]),
+                content=description,
+            )
+
+        self.db.update_sync_mapping("prd", prd_id, "jira", sync_status="synced")
+
+        return {
+            "action": "updated",
+            "prd_id": prd_id,
+            "jira_key": prd_mapping["external_id"],
+            "status": prd_status,
+        }
+
+    def bidirectional_sync_prd(
+        self,
+        project_id: str,
+        prd_id: str,
+        strategy: str = "local-wins",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Bidirectional sync between local PRD and external issue.
+
+        Args:
+            project_id: Local project ID
+            prd_id: Local PRD ID
+            strategy: Conflict resolution ('local-wins' or 'external-wins')
+            dry_run: If True, only report what would change
+
+        Returns:
+            Sync results
+        """
+        linear_mapping = self.db.get_sync_mapping("prd", prd_id, "linear")
+        jira_mapping = self.db.get_sync_mapping("prd", prd_id, "jira")
+
+        if not linear_mapping and not jira_mapping:
+            raise RuntimeError(f"PRD {prd_id} is not linked to any external system")
+
+        system = "linear" if linear_mapping else "jira"
+
+        if dry_run:
+            return {
+                "status": "dry_run",
+                "prd_id": prd_id,
+                "system": system,
+                "strategy": strategy,
+            }
+
+        if system == "jira":
+            if strategy == "external-wins":
+                pull_result = self.sync_prd_from_jira(project_id, prd_id)
+                push_result = self.sync_prd_to_jira(project_id, prd_id)
+            else:
+                push_result = self.sync_prd_to_jira(project_id, prd_id)
+                pull_result = self.sync_prd_from_jira(project_id, prd_id)
+        else:
+            # Linear support would go here
+            raise RuntimeError("Linear PRD sync not yet implemented")
+
+        return {
+            "status": "synced",
+            "prd_id": prd_id,
+            "system": system,
+            "strategy": strategy,
+            "pull": pull_result,
+            "push": push_result,
+        }

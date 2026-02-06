@@ -1,0 +1,17 @@
+# Claude Code Monitoring Stack (SigNoz)
+#
+# Usage:
+#   docker compose up -d        # Start all services
+#   docker compose down          # Stop all services
+#   docker compose ps            # Check status
+#   docker compose down -v       # Stop and delete all data
+#
+# After starting, configure Claude Code by sourcing the env file:
+#   source ./claude-code-env.sh
+#
+# Dashboard: http://localhost:8080
+# OTLP gRPC: localhost:4317
+# OTLP HTTP: localhost:4318
+
+include:
+  - path: signoz/deploy/docker/docker-compose.yaml

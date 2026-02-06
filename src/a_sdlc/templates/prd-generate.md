@@ -8,6 +8,19 @@ Create a Product Requirements Document interactively from a brief description. U
 
 - **description**: Brief statement of the proposed change or feature (e.g., "Add OAuth authentication", "Migrate to PostgreSQL")
 
+## CRITICAL: Scope Boundaries
+
+**This skill ONLY creates PRD documents. It does NOT implement features.**
+
+- **NEVER** proceed to task creation or splitting automatically
+- **NEVER** write source code or make code changes
+- **NEVER** use TaskCreate, TodoWrite, or Edit tools
+- **NEVER** call `mcp__asdlc__create_task()` or split PRD
+- **ALWAYS** stop after PRD creation and wait for user's next command
+
+**RIGHT**: Create PRD → Display summary → STOP
+**WRONG**: Create PRD → Split into tasks → Start implementing
+
 ## Execution Steps
 
 ### 1. Parse User Description
@@ -89,7 +102,26 @@ Build markdown content with structure:
 {Unresolved items from interactive session}
 ```
 
-### 4. Save PRD to Database
+### 4. Confirm Before Saving
+
+Present generated PRD content to user for review:
+
+```
+📝 PRD Ready for Review
+
+[Display generated PRD content]
+
+Options:
+1. ✅ **Save** - Create this PRD in a-sdlc
+2. ✏️ **Edit** - Revise specific sections
+3. ❌ **Cancel** - Discard without saving
+
+Waiting for your choice...
+```
+
+**Wait for explicit user approval before saving.**
+
+### 5. Save PRD to Database
 
 ```
 mcp__asdlc__create_prd(
@@ -116,7 +148,7 @@ Returns:
 }
 ```
 
-### 5. Display Summary
+### 6. Display Summary
 
 ```
 ✅ PRD created: feature-auth
@@ -127,11 +159,22 @@ Returns:
 - 3 acceptance criteria
 - 2 affected components
 
-🔗 Next steps:
+🔗 Next steps for user:
 - View PRD: /sdlc:prd-list
 - Mark ready: /sdlc:prd-update "feature-auth" --status ready
 - Split into tasks: /sdlc:prd-split "feature-auth"
 ```
+
+## ⛔ STOP HERE
+
+**Do NOT proceed further.** The PRD generation workflow is complete.
+
+The user must explicitly run one of these commands to continue:
+- `/sdlc:prd-update` - To edit the PRD
+- `/sdlc:prd-split` - To create tasks from the PRD
+- `/sdlc:investigate` - To analyze codebase before splitting
+
+**Wait for user's next instruction.**
 
 ## Example Session
 
@@ -178,7 +221,7 @@ Returns:
 - 3 acceptance criteria
 - 3 affected components
 
-🔗 Next steps:
+🔗 Next steps for user:
 - View: /sdlc:prd-list
 - Split: /sdlc:prd-split "model-downgrade-gpt4"
 ```
@@ -205,3 +248,6 @@ New PRDs are created with status `draft`. Use `/sdlc:prd-update` to change statu
 - Questions adapt based on the type of change
 - Generated PRD can be edited with `/sdlc:prd-update`
 - PRDs can optionally be assigned to a sprint after creation
+- **PRD Creation Only:** This skill creates PRD documents ONLY.
+  It does NOT split into tasks or implement features.
+  Use `/sdlc:prd-split` separately after PRD approval.

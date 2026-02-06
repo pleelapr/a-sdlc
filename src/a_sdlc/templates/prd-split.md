@@ -34,6 +34,21 @@ mcp__asdlc__split_prd(prd_id="PROJ-P0001", task_specs=[...])  # CORRECT!
 
 ---
 
+## CRITICAL: Scope Boundaries
+
+**This skill ONLY creates task documentation. It does NOT implement tasks.**
+
+- **NEVER** proceed to task implementation automatically
+- **NEVER** write source code or make code changes
+- **NEVER** use Edit, Write, or Bash tools to modify project files
+- **NEVER** call `/sdlc:task-start` or begin task execution
+- **ALWAYS** stop after task creation and wait for user's next command
+
+**RIGHT**: Generate tasks → Create task files → Call split_prd() → Display results → STOP
+**WRONG**: Generate tasks → Start implementing first task → Write code
+
+---
+
 ## Usage
 
 ```
@@ -472,11 +487,22 @@ PRD status updated to: **split**
 **Dependency Graph:**
 {visual dependency graph}
 
-**Next steps:**
+**Next steps for user:**
 - View tasks: `/sdlc:task-list`
 - See task details: `/sdlc:task-show {task_id}`
 - Start working: `/sdlc:task-start {task_id}`
 ```
+
+## ⛔ STOP HERE
+
+**Do NOT proceed further.** The task creation workflow is complete.
+
+The user must explicitly run one of these commands to continue:
+- `/sdlc:task-list` - View all tasks
+- `/sdlc:task-show {task_id}` - See task details
+- `/sdlc:task-start {task_id}` - Begin implementing a specific task
+
+**Wait for user's next instruction.**
 
 ---
 
@@ -566,4 +592,4 @@ Solution: Check directory permissions.
 
 5. **Template Flexibility:** Users can customize `.sdlc/templates/task.template.md` for project-specific task structure.
 
-6. **No Implementation:** This skill creates task documentation only. It does NOT write source code.
+6. **No Implementation:** This skill creates task documentation only. It does NOT write source code, modify project files, or execute tasks. Wait for user's explicit instruction to proceed.

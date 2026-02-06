@@ -23,12 +23,18 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
 📋 PRD Management
 
   /sdlc:prd-generate "<desc>"  Create PRD via interactive Q&A
+  /sdlc:prd-import jira <key>  Import Jira issue as PRD
   /sdlc:prd-list               List all PRDs
   /sdlc:prd "<id>"             View PRD details
   /sdlc:prd-split "<id>"       Decompose PRD into tasks
   /sdlc:prd-update "<id>"      Update existing PRD
   /sdlc:prd-delete <id>        Delete a PRD
-  /sdlc:investigate "<id>"     Discover patterns before splitting
+  /sdlc:prd-investigate "<id>" Validate PRD against codebase
+
+🔍 Investigation & Debugging
+
+  /sdlc:investigate "<problem>"     Root cause analysis for bugs/errors
+  /sdlc:investigate --error "<msg>" Analyze error message or stack trace
 
 📋 Task Management
 
@@ -55,6 +61,9 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:sprint-link            Link local sprint to external
   /sdlc:sprint-sync            Bidirectional sync
   /sdlc:sprint-unlink          Remove external link
+  /sdlc:prd-link               Link PRD to Jira issue
+  /sdlc:prd-sync               Sync single PRD to/from Jira
+  /sdlc:prd-unlink             Remove PRD external link
 
 📖 Help
 
@@ -97,6 +106,13 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__add_tasks_to_sprint(sprint_id, task_ids)` - Add tasks
 - `mcp__asdlc__remove_tasks_from_sprint(sprint_id, task_ids)` - Remove tasks
 - `mcp__asdlc__delete_sprint(sprint_id)` - Delete sprint
+
+### PRD Sync Operations
+- `mcp__asdlc__link_prd(prd_id, system, external_id)` - Link PRD to Jira issue
+- `mcp__asdlc__unlink_prd(prd_id)` - Remove PRD link
+- `mcp__asdlc__sync_prd(prd_id, strategy?, dry_run?)` - Bidirectional sync
+- `mcp__asdlc__sync_prd_to(prd_id)` - Push PRD to Jira
+- `mcp__asdlc__sync_prd_from(prd_id)` - Pull from Jira to PRD
 
 ## Quick Start Workflow
 

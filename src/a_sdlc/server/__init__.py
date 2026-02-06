@@ -2090,7 +2090,7 @@ def list_sync_mappings(
     """List all sync mappings for external systems.
 
     Args:
-        entity_type: Filter by type ('sprint' or 'task').
+        entity_type: Filter by type ('sprint', 'prd', or 'task').
         external_system: Filter by system ('linear' or 'jira').
 
     Returns:
@@ -2105,6 +2105,203 @@ def list_sync_mappings(
         "count": len(mappings),
         "mappings": mappings,
     }
+
+
+# =============================================================================
+# PRD Sync Operations
+# =============================================================================
+
+
+@mcp.tool()
+def link_prd(
+    prd_id: str,
+    system: str,
+    external_id: str,
+) -> dict[str, Any]:
+    """Link a local PRD to an external system issue.
+
+    Args:
+        prd_id: Local PRD identifier.
+        system: External system ('linear' or 'jira').
+        external_id: External issue ID/key (e.g., 'PROJ-123').
+
+    Returns:
+        Link status.
+    """
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    if system not in ["linear", "jira"]:
+        return {"status": "error", "message": f"Unknown system: {system}. Use 'linear' or 'jira'."}
+
+    try:
+        sync = _get_sync_service()
+        mapping = sync.link_prd(project_id, prd_id, system, external_id)
+
+        return {
+            "status": "linked",
+            "message": f"PRD {prd_id} linked to {system} {external_id}",
+            "prd_id": prd_id,
+            "system": system,
+            "external_id": external_id,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def unlink_prd(prd_id: str) -> dict[str, Any]:
+    """Remove external system link from a PRD.
+
+    Args:
+        prd_id: Local PRD identifier.
+
+    Returns:
+        Unlink status.
+    """
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    try:
+        sync = _get_sync_service()
+        unlinked = sync.unlink_prd(prd_id)
+
+        if unlinked:
+            return {
+                "status": "unlinked",
+                "message": f"PRD {prd_id} unlinked from external system",
+                "prd_id": prd_id,
+            }
+        else:
+            return {
+                "status": "not_linked",
+                "message": f"PRD {prd_id} was not linked to any external system",
+            }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def sync_prd(
+    prd_id: str,
+    strategy: str = "local-wins",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Bidirectional sync between local PRD and external issue.
+
+    Args:
+        prd_id: Local PRD identifier.
+        strategy: Conflict resolution ('local-wins' or 'external-wins').
+        dry_run: If True, only report what would change.
+
+    Returns:
+        Sync results.
+    """
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    if strategy not in ["local-wins", "external-wins"]:
+        return {
+            "status": "error",
+            "message": "Strategy must be 'local-wins' or 'external-wins'.",
+        }
+
+    try:
+        sync = _get_sync_service()
+        result = sync.bidirectional_sync_prd(project_id, prd_id, strategy, dry_run)
+        return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def sync_prd_from(prd_id: str) -> dict[str, Any]:
+    """Pull changes from external issue to local PRD.
+
+    Args:
+        prd_id: Local PRD identifier.
+
+    Returns:
+        Sync results.
+    """
+    db = get_db()
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    linear_mapping = db.get_sync_mapping("prd", prd_id, "linear")
+    jira_mapping = db.get_sync_mapping("prd", prd_id, "jira")
+
+    if not linear_mapping and not jira_mapping:
+        return {
+            "status": "error",
+            "message": f"PRD {prd_id} is not linked to any external system. Use link_prd first.",
+        }
+
+    try:
+        sync = _get_sync_service()
+
+        if jira_mapping:
+            result = sync.sync_prd_from_jira(project_id, prd_id)
+        else:
+            return {"status": "error", "message": "Linear PRD sync not yet implemented"}
+
+        return {
+            "status": "synced",
+            "message": "Pulled changes from external system",
+            **result,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def sync_prd_to(prd_id: str) -> dict[str, Any]:
+    """Push local PRD changes to external issue.
+
+    Args:
+        prd_id: Local PRD identifier.
+
+    Returns:
+        Sync results.
+    """
+    db = get_db()
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    linear_mapping = db.get_sync_mapping("prd", prd_id, "linear")
+    jira_mapping = db.get_sync_mapping("prd", prd_id, "jira")
+
+    if not linear_mapping and not jira_mapping:
+        return {
+            "status": "error",
+            "message": f"PRD {prd_id} is not linked to any external system. Use link_prd first.",
+        }
+
+    try:
+        sync = _get_sync_service()
+
+        if jira_mapping:
+            result = sync.sync_prd_to_jira(project_id, prd_id)
+        else:
+            return {"status": "error", "message": "Linear PRD sync not yet implemented"}
+
+        return {
+            "status": "synced",
+            "message": "Pushed changes to external system",
+            **result,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # =============================================================================

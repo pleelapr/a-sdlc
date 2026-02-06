@@ -1,0 +1,4 @@
+[submodule "monitoring/signoz"]
+	path = monitoring/signoz
+	url = https://github.com/SigNoz/signoz.git
+	branch = main

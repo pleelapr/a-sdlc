@@ -1,399 +1,643 @@
-# /sdlc:investigate
+# /sdlc:investigate - Problem-Centric Root Cause Analysis
 
 ## Purpose
 
-Discover existing codebase patterns and prepare context for high-quality task generation.
-Ensures tasks follow project conventions AND coding best practices.
+Systematically analyze bugs, errors, and problems using:
+- All accumulated SDLC data (tasks, PRDs, sprints, artifacts)
+- Codebase analysis
+- Online documentation and web search
+- Historical retrospective analysis
+
+**Key Difference from Other Commands:**
+
+| Command | Input | Purpose | Searches Web |
+|---------|-------|---------|--------------|
+| **`/sdlc:investigate "<problem>"`** | Problem description OR error | Root cause analysis | Yes |
+| `/sdlc:prd-investigate <prd_id>` | PRD ID | PRD validation against codebase | No |
+
+---
+
+## CRITICAL: Scope Boundaries
+
+**This skill ONLY investigates problems. It does NOT implement fixes.**
+
+- **NEVER** proceed to code fixes or implementation automatically
+- **NEVER** write source code or make code changes
+- **NEVER** use Edit, Write, or Bash tools to modify project files
+- **NEVER** automatically create tasks or split PRDs (only with `--create-prd` after user approval)
+- **ALWAYS** stop after report generation and wait for user's next command
+
+**RIGHT**: Investigate → Generate report → STOP (or create PRD if `--create-prd`)
+**WRONG**: Investigate → Start fixing code → Create tasks → Implement
 
 ---
 
 ## Usage
 
 ```
-/sdlc:investigate <prd_id> [options]
+/sdlc:investigate "<problem_description>" [options]
+/sdlc:investigate --error "<paste_error_or_stack_trace>" [options]
 ```
 
 **Arguments:**
-- `prd_id` - ID of PRD to investigate context for
+- `problem_description` - Natural language description of the bug/error/issue
+- `--error` - Flag to indicate input is an error message/stack trace
 
 **Options:**
-- `--depth <level>` - Analysis depth: quick, thorough (default: thorough)
-- `--save` - Save investigation report to `.sdlc/investigation/`
+- `--depth <quick|thorough>` - Analysis depth (default: thorough)
+- `--retrospect` - Enable historical pattern analysis across past sprints/tasks
+- `--create-prd` - Generate a fix PRD after investigation
+- `--save` - Save investigation report to `.sdlc/investigations/`
+- `--no-web` - Disable online search (offline mode)
 
 ## Examples
 
 ```
-/sdlc:investigate PROJ-P0001
-/sdlc:investigate PROJ-P0001 --depth quick
-/sdlc:investigate PROJ-P0001 --save
+/sdlc:investigate "API returns 500 error on user login"
+/sdlc:investigate "Memory leak in background worker process"
+/sdlc:investigate --error "TypeError: Cannot read property 'id' of undefined at UserService.ts:42"
+/sdlc:investigate "Database connection timeout under load" --retrospect
+/sdlc:investigate "OAuth callback failing" --create-prd
 ```
 
 ---
 
 ## Execution Steps
 
-### Phase 1: Project Pattern Discovery
+### Phase 1: Parse Input & Extract Signals
 
-Analyze the existing codebase to understand its conventions:
+**For problem descriptions:**
+1. Extract keywords (components, errors, behaviors)
+2. Identify affected areas (auth, database, API, etc.)
+3. Detect technology references (libraries, frameworks)
 
-**1. Coding Style & Conventions**
+**For error messages/stack traces (`--error` flag):**
+1. Parse error type and message
+2. Extract file paths and line numbers
+3. Identify library/framework from stack frames
+4. Detect error codes or status codes
 
-Search for patterns in the codebase:
-
-```
-# Naming conventions
-- Look for consistent casing: camelCase, snake_case, PascalCase
-- Function naming patterns: getUser, fetch_user, retrieveUser
-- File naming: user.service.ts, UserService.ts, user_service.py
-
-# Documentation style
-- Comment patterns: JSDoc, docstrings, inline comments
-- README structure and conventions
-```
-
-**2. Architecture Patterns**
-
-Use artifacts if available, otherwise analyze directly:
+**Signal Extraction Pattern:**
 
 ```
-# Read architecture context
-- .sdlc/artifacts/architecture.md (if exists)
-- .sdlc/artifacts/directory-structure.md (if exists)
+Input: "TypeError: Cannot read property 'id' of undefined at UserService.ts:42"
 
-# Identify patterns
-- Layer separation (controllers, services, repositories)
-- Dependency injection approach
-- Configuration management
-- Error handling patterns
-```
-
-**3. Testing Patterns**
-
-```
-# Find test files
-- Location: tests/, __tests__/, *.test.ts, *_test.py
-- Framework: Jest, pytest, Mocha, etc.
-- Patterns: mocks, fixtures, factories
-
-# Coverage expectations
-- Look for coverage config in package.json, pytest.ini, etc.
-```
-
-**4. Existing Utilities & Abstractions**
-
-```
-# Search for reusable code
-- Common utilities: src/utils/, lib/, helpers/
-- Base classes: BaseService, AbstractController
-- Shared validation: validators/, schemas/
-- Error handling: errors/, exceptions/
-```
-
-### Phase 2: Best Practices Assessment
-
-Evaluate how well the codebase follows best practices:
-
-**Code Quality Principles**
-
-| Principle | What to Look For | Assessment |
-|-----------|------------------|------------|
-| **DRY** | Duplicate code patterns, copy-pasted logic | Note violations for task guidance |
-| **SOLID** | Large classes, mixed responsibilities | Identify refactoring opportunities |
-| **KISS** | Over-engineered solutions, unnecessary abstraction | Note for simplification |
-| **YAGNI** | Unused features, speculative code | Identify dead code |
-
-**Code Organization**
-
-- Separation of concerns: Are layers properly isolated?
-- Module boundaries: Clear interfaces between modules?
-- Cohesion: Are related functions grouped together?
-- Coupling: Are modules loosely coupled?
-
-**Security Practices**
-
-- Input validation patterns in place?
-- Authentication/authorization approach?
-- Secret management (env vars, vaults)?
-- Data sanitization patterns?
-
-**Performance Patterns**
-
-- Caching strategies used?
-- Database query patterns (N+1 issues)?
-- Async/await usage?
-- Resource management (connections, files)?
-
-### Phase 3: PRD-Specific Analysis
-
-For the given PRD, identify:
-
-**1. Affected Components**
-```
-Based on PRD requirements:
-- Which existing components will be modified?
-- What new components need to be created?
-- What integration points exist?
-```
-
-**2. Existing Code to Leverage**
-```
-Search for:
-- Similar functionality already implemented
-- Utilities that can be reused
-- Patterns to follow for consistency
-- Base classes to extend
-```
-
-**3. Potential Anti-Patterns to Avoid**
-```
-Based on codebase analysis:
-- Common mistakes in this area
-- Patterns that lead to bugs
-- Over-engineering tendencies
+Extracted Signals:
+- Error Type: TypeError
+- Error Message: Cannot read property 'id' of undefined
+- File: UserService.ts
+- Line: 42
+- Keywords: id, undefined, UserService
+- Component Area: User/Service layer
 ```
 
 ---
 
-## Investigation Report Format
+### Phase 2: Search SDLC History
 
-Generate a markdown report with the following structure:
+Query all SDLC data for related context:
+
+**1. Get Project Context**
+
+```
+mcp__asdlc__get_context()
+```
+
+Returns project info including shortname, statistics, and current state.
+
+**2. Search Tasks for Related Work**
+
+```
+mcp__asdlc__list_tasks(status="completed")  # Past implementations
+mcp__asdlc__list_tasks(status="blocked")    # Known blockers
+```
+
+For each potentially related task:
+```
+mcp__asdlc__get_task(task_id)
+```
+
+**3. Search PRDs for Requirements Context**
+
+```
+mcp__asdlc__list_prds()
+```
+
+For each potentially related PRD:
+```
+mcp__asdlc__get_prd(prd_id)
+```
+
+**4. Search Sprints for Timeline Context**
+
+```
+mcp__asdlc__list_sprints()
+```
+
+**5. Check External System Context**
+
+```
+mcp__asdlc__list_sync_mappings()
+```
+
+**Build Correlation Report:**
+- Tasks that touched affected components
+- PRDs that defined related requirements
+- Sprints where similar issues occurred
+- External issues (Jira/Linear) with related context
+
+---
+
+### Phase 3: Analyze Codebase
+
+**1. Read Artifacts for Context**
+
+```
+Read: .sdlc/artifacts/architecture.md
+Read: .sdlc/artifacts/data-model.md
+Read: .sdlc/artifacts/key-workflows.md
+Read: .sdlc/artifacts/codebase-summary.md
+Read: .sdlc/artifacts/directory-structure.md
+```
+
+**2. Search for Affected Code**
+
+From error stack trace or extracted keywords:
+
+```
+Grep: Search for error patterns in codebase
+Glob: Find affected files by name patterns
+Read: Examine suspect code sections
+```
+
+**3. Trace Dependencies (if Serena available)**
+
+```
+mcp__serena__find_symbol(symbol_name)
+mcp__serena__find_referencing_symbols(symbol_name)
+```
+
+---
+
+### Phase 4: Search Online Resources
+
+**Always enabled unless `--no-web` is specified.**
+
+**1. Search Official Documentation via Context7**
+
+```
+mcp__context7__resolve-library-id(library_name)
+mcp__context7__query-docs(library_id, query)
+```
+
+**2. Web Search for Error Messages and Solutions**
+
+```
+WebSearch: "<error_message>" + <library> + "solution"
+WebSearch: "known issues" + <library> + <version>
+WebSearch: <error_code> + <framework> + "fix"
+```
+
+**3. Fetch Specific Documentation Pages**
+
+```
+WebFetch: Official docs for affected libraries
+WebFetch: GitHub issues for relevant repos
+```
+
+**Search Targets:**
+- Official library documentation
+- Stack Overflow solutions
+- GitHub issues for related libraries
+- Known CVEs for dependencies
+- Framework migration guides (if version mismatch suspected)
+
+---
+
+### Phase 5: Retrospective Analysis (--retrospect)
+
+**Only executed when `--retrospect` flag is provided.**
+
+**1. Analyze Completed Sprints**
+
+- When did similar issues appear?
+- What tasks addressed related areas?
+- What was the resolution pattern?
+
+**2. Track Recurring Issues**
+
+- Same component failing repeatedly?
+- Pattern of related bugs?
+- Incomplete previous fixes?
+
+**3. Identify Contributing Factors**
+
+- Recent changes to affected areas
+- Dependencies updated recently
+- Configuration changes
+
+**Retrospective Query Pattern:**
+
+```
+# Find tasks that modified affected files
+mcp__asdlc__list_tasks(status="completed")
+# Filter by: component matches affected area
+
+# Find sprints with related work
+mcp__asdlc__list_sprints()
+# Check sprint goals and completed task patterns
+```
+
+---
+
+### Phase 6: Root Cause Synthesis
+
+Combine all findings into systematic analysis:
+
+**Evidence Matrix Format:**
+
+| Source | Finding | Confidence | Relevance |
+|--------|---------|------------|-----------|
+| SDLC History | Task X modified this code | High | Direct |
+| Codebase | Missing null check at line 42 | High | Direct |
+| Web Search | Known issue in library v2.3 | Medium | Related |
+| Retrospect | Similar bug fixed in Sprint 3 | High | Pattern |
+
+**Root Cause Candidates:**
+1. **Primary hypothesis** with supporting evidence
+2. **Alternative hypothesis** with evidence
+3. **Contributing factors** that may exacerbate the issue
+
+**Recommended Fix:**
+- Immediate actions to resolve
+- Long-term improvements to prevent recurrence
+- Prevention measures for similar issues
+
+---
+
+### Phase 7: Generate Investigation Report
+
+**Report Format:**
 
 ```markdown
-# Investigation Report: [PRD Title]
+# Investigation Report: {Problem Summary}
 
-**PRD ID:** [prd_id]
-**Date:** [timestamp]
-**Depth:** [quick|thorough]
-
----
-
-## Project Conventions (Follow These)
-
-| Aspect | Observed Pattern | Example |
-|--------|------------------|---------|
-| Naming | [convention] | `getUserById`, `user_service.py` |
-| File Structure | [pattern] | `src/services/`, `tests/unit/` |
-| Error Handling | [pattern] | `throw new AppError()`, try/except |
-| Testing | [pattern] | `*.test.ts`, pytest fixtures |
-| Config | [pattern] | `.env`, `config/` module |
-| Logging | [pattern] | `logger.info()`, structured logs |
+**Date:** {timestamp}
+**Depth:** {quick|thorough}
+**Retrospect:** {enabled|disabled}
+**Web Search:** {enabled|disabled}
 
 ---
 
-## Existing Code to Leverage
+## Problem Statement
 
-| Functionality | Location | Reuse Strategy |
-|---------------|----------|----------------|
-| [utility] | `path/file` | Import and use directly |
-| [base class] | `path/file` | Extend for new functionality |
-| [pattern] | `path/file` | Follow same approach |
-| [validation] | `path/file` | Reuse validation logic |
+{Original problem description or parsed error}
 
----
-
-## Architecture Context
-
-### Affected Components
-
-Based on PRD requirements, these components are affected:
-
-| Component | Impact | Notes |
-|-----------|--------|-------|
-| [component] | [modify/extend/create] | [details] |
-
-### Integration Points
-
-| Integration | Type | Consideration |
-|-------------|------|---------------|
-| [service] | [API/event/direct] | [notes] |
+**Extracted Signals:**
+- Error Type: {type}
+- Affected Component: {component}
+- Keywords: {keyword1, keyword2, ...}
 
 ---
 
-## Best Practices Checklist for This PRD
+## Executive Summary
 
-### Must Follow (Project Conventions)
-
-- [ ] Use [naming convention] for new code
-- [ ] Place files in [correct directories]
-- [ ] Follow [error handling pattern]
-- [ ] Write tests in [testing style]
-- [ ] Use [logging pattern] for observability
-- [ ] Follow [config pattern] for settings
-
-### Must Follow (Universal Best Practices)
-
-- [ ] No code duplication - extract shared logic
-- [ ] Single responsibility per function/class
-- [ ] Meaningful names that reveal intent
-- [ ] Keep functions small and focused (< 20 lines typical)
-- [ ] Handle errors appropriately at boundaries
-- [ ] Validate inputs at system boundaries
-- [ ] Write tests for new functionality
-- [ ] Document complex logic with comments explaining WHY
+{Brief findings: root cause identified, confidence level, recommended action}
 
 ---
 
-## Anti-Patterns to Avoid
+## Evidence from SDLC History
 
-Based on codebase analysis and this PRD's scope:
+### Related Tasks
 
-| Anti-Pattern | Why to Avoid | Alternative |
-|--------------|--------------|-------------|
-| [pattern] | [reason] | [better approach] |
+| Task ID | Title | Status | Relevance |
+|---------|-------|--------|-----------|
+| {id} | {title} | {status} | {how it relates} |
 
-### Common Mistakes in This Area
+### Related PRDs
 
-- [Specific anti-pattern relevant to PRD domain]
-- [Another specific anti-pattern]
-- [Over-engineering warning]
+| PRD ID | Title | Connection |
+|--------|-------|------------|
+| {id} | {title} | {how it relates} |
+
+### Sprint Context
+
+{When this area was last modified, by whom, what changed}
 
 ---
 
-## Recommended Task Structure
+## Codebase Analysis
 
-Based on investigation, tasks should:
+### Affected Files
 
-1. **Start with:** [foundational work first]
-2. **Follow dependency order:** [suggested flow]
-3. **Include quality gates:** [specific checks for this PRD]
-4. **Avoid scope creep:** [what to explicitly exclude]
+| File | Issue Found | Severity |
+|------|-------------|----------|
+| {path:line} | {description} | {High/Medium/Low} |
+
+### Architecture Impact
+
+{How this issue relates to system architecture}
+
+### Code Patterns Observed
+
+{Relevant patterns or anti-patterns found in affected code}
+
+---
+
+## Online Research Findings
+
+### Official Documentation
+
+- **{Library}**: {Relevant finding from docs}
+
+### Known Issues
+
+- **{Source}**: {GitHub issue or SO answer with solution}
+
+### Security Advisories
+
+- {Any CVEs or security notes, or "None found"}
+
+---
+
+## Retrospective Patterns (if --retrospect)
+
+### Historical Occurrences
+
+{Similar issues found in past sprints}
+
+### Pattern Analysis
+
+{Recurring theme or systemic issue}
+
+### Timeline of Related Changes
+
+{When affected code was last modified and by which tasks}
+
+---
+
+## Root Cause Analysis
+
+### Primary Cause
+
+{Description with evidence}
+
+**Evidence:**
+1. {Evidence point 1}
+2. {Evidence point 2}
+
+### Contributing Factors
+
+1. {Factor 1 with explanation}
+2. {Factor 2 with explanation}
+
+### Confidence Level
+
+**{High/Medium/Low}**
+
+{Reasoning for confidence assessment}
+
+---
+
+## Recommendations
+
+### Immediate Fix
+
+{What to do now - specific steps}
+
+### Prevention
+
+{How to prevent recurrence}
+
+### Follow-up Tasks
+
+{Suggested additional work}
+
+---
+
+## Recommended Next Steps (For User to Execute)
+
+1. [ ] Review findings and decide on approach
+2. [ ] Apply immediate fix
+3. [ ] Verify fix resolves the issue
+4. [ ] Create fix PRD if needed: `/sdlc:investigate "..." --create-prd`
+5. [ ] Update related documentation
+6. [ ] Add regression tests
 ```
 
 ---
 
-## Output Options
+### Phase 8: Save Report (--save)
 
-**Default:** Display report in conversation
+**When `--save` flag is used:**
 
-**With `--save`:** Save to `.sdlc/investigation/<prd_id>.md`
-- Creates `.sdlc/investigation/` directory if needed
-- Report can be referenced by `/sdlc:prd-split`
+1. Create `.sdlc/investigations/` directory if needed
+2. Save report as `{timestamp}_{sanitized_problem_summary}.md`
+3. Confirm save location to user
+
+```
+✅ Investigation saved: .sdlc/investigations/2025-01-28_api-500-error-login.md
+```
+
+---
+
+### Phase 9: Optional PRD Creation (--create-prd)
+
+**When `--create-prd` flag is used:**
+
+1. Generate PRD content from investigation findings
+2. Structure PRD with fix requirements
+3. Call MCP tool to create PRD
+
+```
+mcp__asdlc__create_prd(
+    title="Fix: {Problem Summary}",
+    content="{Generated PRD from findings}"
+)
+```
+
+**Generated PRD Structure:**
+
+```markdown
+# Fix: {Problem Summary}
+
+## Overview
+
+This PRD addresses the issue identified through investigation: {problem description}
+
+**Investigation Date:** {date}
+**Root Cause:** {primary cause summary}
+
+## Goals
+
+1. Resolve the immediate issue: {specific goal}
+2. Prevent recurrence through: {prevention goal}
+3. Add safeguards: {safeguard goal}
+
+## Functional Requirements
+
+### FR-1: {Fix Requirement}
+
+{Description of what needs to be fixed}
+
+**Acceptance Criteria:**
+- [ ] {Specific testable criterion}
+- [ ] {Another criterion}
+
+### FR-2: {Prevention Requirement}
+
+{Description of preventive measure}
+
+## Technical Considerations
+
+- Affected files: {list from investigation}
+- Dependencies: {relevant dependencies}
+- Risk areas: {identified risks}
+
+## Out of Scope
+
+- {What this fix explicitly does NOT address}
+
+## Success Metrics
+
+- Issue no longer reproducible
+- {Additional metrics from investigation}
+```
+
+**Confirmation Output:**
+
+```
+✅ Fix PRD Created: {PRD_ID}
+
+Title: Fix: {Problem Summary}
+Status: draft
+
+Next Steps:
+1. Review PRD: /sdlc:prd "{PRD_ID}"
+2. Split into tasks: /sdlc:prd-split "{PRD_ID}"
+```
+
+## ⛔ STOP HERE
+
+**Do NOT proceed further.** The investigation workflow is complete.
+
+The user must explicitly decide next steps:
+- Review findings and apply fix manually
+- Run `/sdlc:investigate "..." --create-prd` to generate a fix PRD
+- Run `/sdlc:prd-split {prd_id}` if PRD was created
+
+**Wait for user's next instruction.**
 
 ---
 
 ## MCP Tools Used
 
-- `mcp__asdlc__get_context()` - Get project info
-- `mcp__asdlc__get_prd(prd_id)` - Read PRD content
-- `Read` - Read source files and artifacts
-- `Grep` - Search for patterns
-- `Glob` - Find files by pattern
+| Tool | Purpose |
+|------|---------|
+| `mcp__asdlc__get_context()` | Project info and statistics |
+| `mcp__asdlc__list_tasks()` | Historical task search |
+| `mcp__asdlc__get_task()` | Task details |
+| `mcp__asdlc__list_prds()` | PRD search |
+| `mcp__asdlc__get_prd()` | PRD content |
+| `mcp__asdlc__list_sprints()` | Sprint history |
+| `mcp__asdlc__list_sync_mappings()` | External system context |
+| `mcp__asdlc__create_prd()` | Generate fix PRD |
+| `mcp__context7__resolve-library-id()` | Find library documentation |
+| `mcp__context7__query-docs()` | Query official documentation |
+| `WebSearch` | Online solutions search |
+| `WebFetch` | Fetch specific pages |
+| `Read` | Read artifacts and source files |
+| `Grep` | Pattern search in codebase |
+| `Glob` | File discovery |
+| `mcp__serena__find_symbol()` | Symbol analysis (if available) |
+| `mcp__serena__find_referencing_symbols()` | Reference tracing (if available) |
 
 ---
 
-## Integration with prd-split
+## CRITICAL: Scope Boundaries
 
-When `/sdlc:prd-split` is executed:
+**This skill ONLY investigates problems. It does NOT implement fixes.**
 
-1. Check for `.sdlc/investigation/<prd_id>.md`
-2. If exists, load and apply:
-   - Project conventions → Task "Patterns to Follow" section
-   - Existing code → Task "Existing Code to Leverage" section
-   - Anti-patterns → Task "Anti-Patterns to Avoid" section
-   - Quality checklist → Task "Best Practices Checklist" section
-3. If missing, perform inline discovery (abbreviated)
+### ALWAYS:
+- Present findings and wait for user decision
+- Stop after report generation (or PRD creation if `--create-prd`)
+- Ask for approval before creating PRD
+
+### NEVER:
+- Automatically fix code without user approval
+- Create tasks directly (only PRDs with `--create-prd`)
+- Modify existing source files during investigation
+- Assume permission to implement changes
+
+**RIGHT**: Investigate → Report findings → STOP (or create PRD if `--create-prd`)
+**WRONG**: Investigate → Start fixing code → Create tasks
 
 ---
 
 ## Quick Investigation (--depth quick)
 
-When time is limited, perform abbreviated analysis:
+When using `--depth quick`:
 
 1. Read artifacts only (no deep codebase search)
-2. Identify naming conventions from 2-3 sample files
-3. Find test directory location
-4. List obvious utilities
-5. Generate abbreviated report
+2. Search SDLC data by keyword match only
+3. Perform single web search per keyword
+4. Generate abbreviated report
+5. Skip retrospective analysis even if flag present
 
 **Use quick depth for:**
-- Simple PRDs with limited scope
-- Well-documented codebases with good artifacts
-- When artifacts are fresh and comprehensive
+- Initial triage of new issues
+- Simple error messages with clear solutions
+- Well-documented errors with known fixes
 
 **Use thorough depth for:**
-- Complex PRDs spanning multiple components
-- Unfamiliar codebases
-- When artifacts are stale or missing
+- Complex bugs spanning multiple components
+- Intermittent or hard-to-reproduce issues
+- Security-related concerns
+- Performance problems
 
 ---
 
-## Example Output
+## Error Handling
 
-```markdown
-# Investigation Report: OAuth Authentication
+**No Project Initialized:**
+```
+❌ No project context found
 
-**PRD ID:** AUTH-P0001
-**Date:** 2025-01-28
-**Depth:** thorough
+Initialize a project first:
+  /sdlc:init
 
----
+Or switch to existing project:
+  /sdlc:status
+```
 
-## Project Conventions (Follow These)
+**No SDLC History:**
+```
+⚠️ No SDLC history available for this project
 
-| Aspect | Observed Pattern | Example |
-|--------|------------------|---------|
-| Naming | camelCase functions, PascalCase classes | `getUserById`, `AuthService` |
-| File Structure | Feature folders under `src/` | `src/auth/`, `src/users/` |
-| Error Handling | Custom AppError class | `throw new AppError('NOT_FOUND', 404)` |
-| Testing | Jest with `*.test.ts` | `auth.service.test.ts` |
-| Config | Environment via `config/` module | `config.get('oauth.clientId')` |
+Investigation will proceed with:
+- Codebase analysis
+- Online research
 
----
+Consider running /sdlc:scan to generate artifacts first.
+```
 
-## Existing Code to Leverage
+**Web Search Disabled/Failed:**
+```
+⚠️ Web search skipped (--no-web flag or connectivity issue)
 
-| Functionality | Location | Reuse Strategy |
-|---------------|----------|----------------|
-| Config loader | `src/config/index.ts` | Use for OAuth config |
-| Session manager | `src/auth/session.ts` | Extend for OAuth sessions |
-| User model | `src/models/user.ts` | Add OAuth fields |
-| HTTP client | `src/utils/http.ts` | Use for OAuth API calls |
-| Validation | `src/utils/validators.ts` | Use for token validation |
+Investigation proceeding with:
+- SDLC history
+- Local codebase analysis
 
----
-
-## Best Practices Checklist for This PRD
-
-### Must Follow (Project Conventions)
-
-- [ ] Use camelCase for functions, PascalCase for classes
-- [ ] Place OAuth files in `src/auth/oauth/`
-- [ ] Use AppError for all error conditions
-- [ ] Write Jest tests in `tests/auth/`
-- [ ] Use config module for OAuth credentials
-
-### Must Follow (Universal Best Practices)
-
-- [ ] Single OAuth service class, not multiple utilities
-- [ ] Extract token validation to reusable function
-- [ ] Keep OAuth flow functions small and focused
-- [ ] Validate all external OAuth responses
-- [ ] Test happy path AND error scenarios
-- [ ] Document OAuth state parameter security
-
----
-
-## Anti-Patterns to Avoid
-
-| Anti-Pattern | Why to Avoid | Alternative |
-|--------------|--------------|-------------|
-| Hardcoded OAuth URLs | Breaks in different environments | Use config module |
-| Silent token failures | Security risk, hard to debug | Log and throw AppError |
-| Mixed session logic | Violates SRP | Separate OAuth from session |
-
-### Common Mistakes in OAuth
-
-- Storing tokens in plain cookies (use httpOnly, secure)
-- Not validating state parameter (CSRF risk)
-- Catching all errors silently (masks issues)
-- Creating multiple HTTP clients (use shared util)
+For complete analysis, ensure internet connectivity and remove --no-web flag.
 ```
 
 ---
 
 ## Notes
 
-1. **Run before prd-split:** Best results when investigation is done before splitting
-2. **Saves time overall:** Upfront investigation prevents rework
-3. **Promotes consistency:** Ensures new code follows established patterns
-4. **Catches issues early:** Identifies anti-patterns before they're coded
+1. **Run early in debugging:** Use this tool as first step when encountering issues
+2. **Preserves context:** Investigation findings help inform fix implementation
+3. **Non-destructive:** Only reads and analyzes, never modifies
+4. **Builds on SDLC data:** More SDLC history = better investigation results
+5. **Web search enhances:** Online resources provide broader solution context
