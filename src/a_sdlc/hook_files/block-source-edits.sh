@@ -37,8 +37,12 @@ get_guidance() {
   esac
 }
 
-# For Bash: always block (planning commands should use MCP tools)
+# For Bash: allow for investigation templates with reminder, block for others
 if [ "$TOOL_NAME" = "Bash" ]; then
+  if [ "$TEMPLATE_NAME" = "investigate" ] || [ "$TEMPLATE_NAME" = "prd-investigate" ]; then
+    echo "REMINDER: Bash allowed for read-only investigation only. Do NOT modify, create, or delete any files. Do NOT run git commit, npm install, pip install, or any command that changes project state." >&2
+    exit 0
+  fi
   GUIDANCE=$(get_guidance "$TEMPLATE_NAME")
   echo "BLOCKED: /sdlc:${TEMPLATE_NAME} does not modify source code. ${GUIDANCE}. Stop and wait for user's next command." >&2
   exit 2

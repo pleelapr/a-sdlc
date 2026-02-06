@@ -3,34 +3,66 @@
 {% block title %}Sprints - {{ project.name }}{% endblock %}
 
 {% block content %}
-<h1 style="margin-top: 1rem;">Sprints</h1>
+<div class="breadcrumbs">
+    <a href="/">Home</a> <span class="sep">/</span>
+    <a href="/projects/{{ project.id }}">{{ project.name }}</a> <span class="sep">/</span>
+    <span>Sprints</span>
+</div>
+
+<h1>Sprints</h1>
+
+<div class="filters">
+    <select onchange="window.location.href='?project={{ project.id }}&status=' + this.value">
+        <option value="">All Status</option>
+        <option value="planned" {% if filter_status == 'planned' %}selected{% endif %}>Planned</option>
+        <option value="active" {% if filter_status == 'active' %}selected{% endif %}>Active</option>
+        <option value="completed" {% if filter_status == 'completed' %}selected{% endif %}>Completed</option>
+    </select>
+</div>
 
 <div class="card">
     {% if sprints %}
-    <table>
+    <div class="table-search">
+        <input type="text" id="sprint-search" placeholder="Search sprints...">
+        <span class="search-count"></span>
+    </div>
+    <table id="sprints-table">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Status</th>
+                <th data-sort="text">ID</th>
+                <th data-sort="text">Title</th>
+                <th data-sort="status">Status</th>
                 <th>Progress</th>
-                <th>Created</th>
+                <th data-sort="date">Created</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for sprint in sprints %}
             <tr>
                 <td><a href="/sprints/{{ sprint.id }}">{{ sprint.id }}</a></td>
-                <td>{{ sprint.title }}</td>
+                <td class="cell-title" title="{{ sprint.title }}">{{ sprint.title }}</td>
                 <td><span class="status-{{ sprint.status }}">{{ sprint.status.title() }}</span></td>
                 <td>
                     {% if sprint.task_count > 0 %}
-                    {{ sprint.completed_count }}/{{ sprint.task_count }} tasks
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div class="progress-bar" style="width: 80px;">
+                            <div class="progress-bar-fill" style="width: {{ ((sprint.completed_count / sprint.task_count) * 100) | int }}%;"></div>
+                        </div>
+                        <span style="font-size: 0.8rem;">{{ sprint.completed_count }}/{{ sprint.task_count }}</span>
+                    </div>
                     {% else %}
-                    No tasks
+                    <span style="color: var(--text-muted);">No tasks</span>
                     {% endif %}
                 </td>
                 <td>{{ sprint.created_at[:10] if sprint.created_at else '-' }}</td>
+                <td>
+                    {% if sprint.status == 'active' %}
+                    <button class="btn-copy-sm" onclick="copyCommand('/sdlc:sprint-run {{ sprint.id }}')" title="Copy run command">
+                        Run
+                    </button>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -38,8 +70,10 @@
     {% else %}
     <div class="empty-state">
         <p>No sprints yet</p>
-        <p style="margin-top: 0.5rem; font-size: 0.875rem;">Create one with <code>/sdlc:sprint-create</code> in Claude Code</p>
+        <p style="margin-top: 0.75rem; font-size: 0.875rem;">Create one in Claude Code:</p>
+        <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-create')" style="margin-top: 0.5rem;">/sdlc:sprint-create</button>
     </div>
     {% endif %}
 </div>
+<script>document.addEventListener('DOMContentLoaded', function() { initTableSearch('sprint-search', 'sprints-table'); });</script>
 {% endblock %}

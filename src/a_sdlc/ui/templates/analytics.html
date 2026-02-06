@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+{% block title %}Analytics - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="breadcrumbs">
+    <a href="/">Home</a>
+    <span class="sep">/</span>
+    <a href="/projects/{{ project.id }}">{{ project.name }}</a>
+    <span class="sep">/</span>
+    <span>Analytics</span>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+    <h1>Developer Analytics</h1>
+    <div style="display: flex; gap: 0.5rem;">
+        {% for w in [7, 14, 30, 90] %}
+        <a href="/analytics?project={{ project.id }}&days={{ w }}"
+           class="btn {% if days == w %}btn-primary{% endif %}">{{ w }}d</a>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Task Summary Stats -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--success);">{{ metrics.summary.total_completed }}</div>
+        <div class="stat-label">Completed Tasks</div>
+    </div>
+    <div class="stat-card" title="Time from task creation to completion">
+        <div class="stat-value" style="color: var(--accent);">{{ metrics.summary.avg_lead_time }}</div>
+        <div class="stat-label">Avg Task Lead Time</div>
+    </div>
+    <div class="stat-card" title="Time from task start to completion">
+        <div class="stat-value" style="color: var(--warning);">{{ metrics.summary.avg_cycle_time }}</div>
+        <div class="stat-label">Avg Task Cycle Time</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--text);">{{ metrics.summary.completion_rate }}%</div>
+        <div class="stat-label">Completion Rate</div>
+    </div>
+</div>
+
+<!-- PRD & Sprint Duration Stats -->
+<div class="stats-grid" style="margin-top: 0.5rem;">
+    <div class="stat-card" title="Time from PRD creation to completion">
+        <div class="stat-value" style="color: var(--accent);">{{ metrics.prd_avg_duration }}</div>
+        <div class="stat-label">Avg PRD Duration</div>
+    </div>
+    <div class="stat-card" title="Time from sprint start to completion">
+        <div class="stat-value" style="color: var(--success);">{{ metrics.sprint_avg_duration }}</div>
+        <div class="stat-label">Avg Sprint Duration</div>
+    </div>
+</div>
+
+<!-- Charts Row 1 -->
+<div class="charts-row">
+    <div class="card">
+        <h2>Task Completion Trend</h2>
+        <div style="position: relative; height: 300px;">
+            <canvas id="completionTrendChart"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <h2>Sprint Velocity (Task Throughput)</h2>
+        <p style="color: var(--muted); font-size: 0.85rem; margin-top: -0.5rem;">Completed vs total tasks per sprint</p>
+        <div style="position: relative; height: 300px;">
+            {% if metrics.sprint_velocity %}
+            <canvas id="sprintVelocityChart"></canvas>
+            {% else %}
+            <div class="empty-state" style="padding: 4rem 1rem;">
+                <p>No completed sprints yet</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row 2 -->
+<div class="charts-row">
+    <div class="card">
+        <h2>Status Distribution</h2>
+        <div style="position: relative; height: 300px;">
+            <canvas id="statusChart"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <h2>Priority Distribution</h2>
+        <div style="position: relative; height: 300px;">
+            <canvas id="priorityChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row 3: Duration Charts -->
+<div class="charts-row">
+    <div class="card">
+        <h2>PRD Completion Time</h2>
+        <p style="color: var(--muted); font-size: 0.85rem; margin-top: -0.5rem;">Phase breakdown: Drafting → Planning → Execution</p>
+        <div style="position: relative; height: 300px;">
+            {% if metrics.prd_durations %}
+            <canvas id="prdDurationChart"></canvas>
+            {% else %}
+            <div class="empty-state" style="padding: 4rem 1rem;">
+                <p>No completed PRDs yet</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <h2>Sprint Duration</h2>
+        <div style="position: relative; height: 300px;">
+            {% if metrics.sprint_durations %}
+            <canvas id="sprintDurationChart"></canvas>
+            {% else %}
+            <div class="empty-state" style="padding: 4rem 1rem;">
+                <p>No completed sprints yet</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<style>
+    .charts-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    @media (max-width: 768px) {
+        .charts-row { grid-template-columns: 1fr; }
+    }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    // Theme colors from CSS variables
+    const colors = {
+        accent: '#58a6ff',
+        success: '#3fb950',
+        warning: '#d29922',
+        danger: '#f85149',
+        muted: '#8b949e',
+        border: '#30363d',
+        bg: '#0d1117'
+    };
+
+    const chartDefaults = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: { color: colors.muted, font: { size: 12 } }
+            }
+        }
+    };
+
+    // Completion Trend (Bar)
+    const trendData = {{ metrics.completion_trend | tojson }};
+    new Chart(document.getElementById('completionTrendChart'), {
+        type: 'bar',
+        data: {
+            labels: trendData.map(d => {
+                const dt = new Date(d.date);
+                return dt.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+            }),
+            datasets: [{
+                label: 'Completed',
+                data: trendData.map(d => d.count),
+                backgroundColor: colors.success + 'cc',
+                borderColor: colors.success,
+                borderWidth: 1,
+                borderRadius: 3
+            }]
+        },
+        options: {
+            ...chartDefaults,
+            scales: {
+                x: {
+                    ticks: { color: colors.muted, maxRotation: 45, maxTicksLimit: 15 },
+                    grid: { color: colors.border + '40' }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: colors.muted, stepSize: 1 },
+                    grid: { color: colors.border + '40' }
+                }
+            },
+            plugins: { ...chartDefaults.plugins, legend: { display: false } }
+        }
+    });
+
+    // Sprint Velocity (Grouped Bar)
+    {% if metrics.sprint_velocity %}
+    const velocityData = {{ metrics.sprint_velocity | tojson }};
+    new Chart(document.getElementById('sprintVelocityChart'), {
+        type: 'bar',
+        data: {
+            labels: velocityData.map(d => d.sprint_title),
+            datasets: [
+                {
+                    label: 'Completed',
+                    data: velocityData.map(d => d.completed),
+                    backgroundColor: colors.success + 'cc',
+                    borderColor: colors.success,
+                    borderWidth: 1,
+                    borderRadius: 3
+                },
+                {
+                    label: 'Total',
+                    data: velocityData.map(d => d.total),
+                    backgroundColor: colors.accent + '66',
+                    borderColor: colors.accent,
+                    borderWidth: 1,
+                    borderRadius: 3
+                }
+            ]
+        },
+        options: {
+            ...chartDefaults,
+            scales: {
+                x: {
+                    ticks: { color: colors.muted },
+                    grid: { color: colors.border + '40' }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { color: colors.muted, stepSize: 1 },
+                    grid: { color: colors.border + '40' }
+                }
+            }
+        }
+    });
+    {% endif %}
+
+    // Status Distribution (Doughnut)
+    const statusData = {{ metrics.status_distribution | tojson }};
+    new Chart(document.getElementById('statusChart'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Pending', 'In Progress', 'Completed', 'Blocked'],
+            datasets: [{
+                data: [statusData.pending, statusData.in_progress, statusData.completed, statusData.blocked],
+                backgroundColor: [colors.warning, colors.accent, colors.success, colors.danger],
+                borderColor: colors.bg,
+                borderWidth: 3
+            }]
+        },
+        options: {
+            ...chartDefaults,
+            cutout: '60%',
+            plugins: {
+                ...chartDefaults.plugins,
+                legend: {
+                    position: 'bottom',
+                    labels: { color: colors.muted, padding: 15, font: { size: 12 } }
+                }
+            }
+        }
+    });
+
+    // Priority Distribution (Doughnut)
+    const priorityData = {{ metrics.priority_distribution | tojson }};
+    new Chart(document.getElementById('priorityChart'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Critical', 'High', 'Medium', 'Low'],
+            datasets: [{
+                data: [priorityData.critical, priorityData.high, priorityData.medium, priorityData.low],
+                backgroundColor: [colors.danger, '#da3633', colors.warning, colors.muted],
+                borderColor: colors.bg,
+                borderWidth: 3
+            }]
+        },
+        options: {
+            ...chartDefaults,
+            cutout: '60%',
+            plugins: {
+                ...chartDefaults.plugins,
+                legend: {
+                    position: 'bottom',
+                    labels: { color: colors.muted, padding: 15, font: { size: 12 } }
+                }
+            }
+        }
+    });
+
+    // Duration formatter helper
+    function _formatDuration(hours) {
+        if (hours < 1) return Math.max(1, Math.round(hours * 60)) + 'm';
+        if (hours < 48) return hours.toFixed(1) + 'h';
+        return (hours / 24).toFixed(1) + 'd';
+    }
+
+    // PRD Completion Time (Stacked Horizontal Bar with phase breakdown)
+    {% if metrics.prd_durations %}
+    const prdDurationData = {{ metrics.prd_durations | tojson }};
+    const hasPhaseData = prdDurationData.some(d => d.drafting_hours !== null);
+
+    if (hasPhaseData) {
+        // Stacked bar with 3 phases
+        new Chart(document.getElementById('prdDurationChart'), {
+            type: 'bar',
+            data: {
+                labels: prdDurationData.map(d => d.title.length > 30 ? d.title.substring(0, 30) + '...' : d.title),
+                datasets: [
+                    {
+                        label: 'Drafting',
+                        data: prdDurationData.map(d => d.drafting_hours),
+                        backgroundColor: colors.warning + 'cc',
+                        borderColor: colors.warning,
+                        borderWidth: 1,
+                        borderRadius: 0
+                    },
+                    {
+                        label: 'Planning',
+                        data: prdDurationData.map(d => d.planning_hours),
+                        backgroundColor: colors.accent + 'cc',
+                        borderColor: colors.accent,
+                        borderWidth: 1,
+                        borderRadius: 0
+                    },
+                    {
+                        label: 'Execution',
+                        data: prdDurationData.map(d => d.execution_hours),
+                        backgroundColor: colors.success + 'cc',
+                        borderColor: colors.success,
+                        borderWidth: 1,
+                        borderRadius: 3
+                    }
+                ]
+            },
+            options: {
+                ...chartDefaults,
+                indexAxis: 'y',
+                scales: {
+                    x: {
+                        stacked: true,
+                        beginAtZero: true,
+                        ticks: { color: colors.muted },
+                        grid: { color: colors.border + '40' },
+                        title: { display: true, text: 'Hours', color: colors.muted }
+                    },
+                    y: {
+                        stacked: true,
+                        ticks: { color: colors.muted },
+                        grid: { color: colors.border + '40' }
+                    }
+                },
+                plugins: {
+                    ...chartDefaults.plugins,
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const val = ctx.raw;
+                                if (val === null || val === undefined) return null;
+                                return ctx.dataset.label + ': ' + _formatDuration(val);
+                            },
+                            afterBody: function(items) {
+                                const idx = items[0].dataIndex;
+                                return 'Total: ' + prdDurationData[idx].duration_label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    } else {
+        // Fallback: single bar when phase data unavailable (backfilled PRDs)
+        new Chart(document.getElementById('prdDurationChart'), {
+            type: 'bar',
+            data: {
+                labels: prdDurationData.map(d => d.title.length > 30 ? d.title.substring(0, 30) + '...' : d.title),
+                datasets: [{
+                    label: 'Total Duration',
+                    data: prdDurationData.map(d => d.duration_hours),
+                    backgroundColor: colors.accent + 'cc',
+                    borderColor: colors.accent,
+                    borderWidth: 1,
+                    borderRadius: 3
+                }]
+            },
+            options: {
+                ...chartDefaults,
+                indexAxis: 'y',
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        ticks: { color: colors.muted },
+                        grid: { color: colors.border + '40' },
+                        title: { display: true, text: 'Hours', color: colors.muted }
+                    },
+                    y: {
+                        ticks: { color: colors.muted },
+                        grid: { color: colors.border + '40' }
+                    }
+                },
+                plugins: {
+                    ...chartDefaults.plugins,
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                return prdDurationData[ctx.dataIndex].duration_label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+    {% endif %}
+
+    // Sprint Duration (Horizontal Bar)
+    {% if metrics.sprint_durations %}
+    const sprintDurationData = {{ metrics.sprint_durations | tojson }};
+    new Chart(document.getElementById('sprintDurationChart'), {
+        type: 'bar',
+        data: {
+            labels: sprintDurationData.map(d => d.title.length > 30 ? d.title.substring(0, 30) + '...' : d.title),
+            datasets: [{
+                label: 'Duration',
+                data: sprintDurationData.map(d => d.duration_hours),
+                backgroundColor: colors.success + 'cc',
+                borderColor: colors.success,
+                borderWidth: 1,
+                borderRadius: 3
+            }]
+        },
+        options: {
+            ...chartDefaults,
+            indexAxis: 'y',
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    ticks: { color: colors.muted },
+                    grid: { color: colors.border + '40' },
+                    title: { display: true, text: 'Hours', color: colors.muted }
+                },
+                y: {
+                    ticks: { color: colors.muted },
+                    grid: { color: colors.border + '40' }
+                }
+            },
+            plugins: {
+                ...chartDefaults.plugins,
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            return sprintDurationData[ctx.dataIndex].duration_label;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    {% endif %}
+</script>
+{% endblock %}

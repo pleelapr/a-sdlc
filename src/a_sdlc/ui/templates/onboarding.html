@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Getting Started - a-sdlc{% endblock %}
+
+{% block content %}
+<div style="max-width: 700px; margin: 2rem auto; text-align: center;">
+    <h1 style="margin-bottom: 0.5rem;">Welcome to a-sdlc</h1>
+    <p style="color: var(--text-muted); margin-bottom: 2.5rem;">
+        Get started by running these commands in Claude Code. Each step builds on the previous one.
+    </p>
+
+    <div style="text-align: left;">
+        <!-- Step 1 -->
+        <div class="card" style="display: flex; gap: 1rem; align-items: flex-start;">
+            <div style="background: var(--accent); color: var(--bg); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;">1</div>
+            <div style="flex: 1;">
+                <h3 style="margin-bottom: 0.25rem;">Initialize Project</h3>
+                <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Register your repository with a-sdlc to start tracking work.</p>
+                <button class="btn-copy" onclick="copyCommand('/sdlc:init')" >/sdlc:init</button>
+            </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="card" style="display: flex; gap: 1rem; align-items: flex-start;">
+            <div style="background: var(--border); color: var(--text); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;">2</div>
+            <div style="flex: 1;">
+                <h3 style="margin-bottom: 0.25rem;">Scan Codebase</h3>
+                <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Analyze your repository to generate architecture artifacts.</p>
+                <button class="btn-copy" onclick="copyCommand('/sdlc:scan')" >/sdlc:scan</button>
+            </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="card" style="display: flex; gap: 1rem; align-items: flex-start;">
+            <div style="background: var(--border); color: var(--text); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;">3</div>
+            <div style="flex: 1;">
+                <h3 style="margin-bottom: 0.25rem;">Generate PRD</h3>
+                <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Create a Product Requirements Document interactively.</p>
+                <button class="btn-copy" onclick="copyCommand('/sdlc:prd-generate')" >/sdlc:prd-generate</button>
+            </div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="card" style="display: flex; gap: 1rem; align-items: flex-start;">
+            <div style="background: var(--border); color: var(--text); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;">4</div>
+            <div style="flex: 1;">
+                <h3 style="margin-bottom: 0.25rem;">Split PRD into Tasks</h3>
+                <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Break down your PRD into implementable tasks with dependencies.</p>
+                <button class="btn-copy" onclick="copyCommand('/sdlc:prd-split')" >/sdlc:prd-split</button>
+            </div>
+        </div>
+
+        <!-- Step 5 -->
+        <div class="card" style="display: flex; gap: 1rem; align-items: flex-start;">
+            <div style="background: var(--border); color: var(--text); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;">5</div>
+            <div style="flex: 1;">
+                <h3 style="margin-bottom: 0.25rem;">Create & Run Sprint</h3>
+                <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">Organize tasks into a sprint and start executing.</p>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-create')" >/sdlc:sprint-create</button>
+                    <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-run')" >/sdlc:sprint-run</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

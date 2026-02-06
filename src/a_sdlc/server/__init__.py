@@ -14,12 +14,14 @@ Usage:
 """
 
 import atexit
+import json
 import os
 import re
 import signal
 import socket
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1396,7 +1398,11 @@ def get_sprint_prds(sprint_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_sprint_tasks(sprint_id: str, status: str | None = None) -> dict[str, Any]:
+def get_sprint_tasks(
+    sprint_id: str,
+    status: str | None = None,
+    group_by_prd: bool = False,
+) -> dict[str, Any]:
     """Get all tasks for a sprint (derived from sprint's PRDs).
 
     This returns all tasks whose parent PRD is assigned to the sprint.
@@ -1404,9 +1410,11 @@ def get_sprint_tasks(sprint_id: str, status: str | None = None) -> dict[str, Any
     Args:
         sprint_id: Sprint identifier.
         status: Optional status filter.
+        group_by_prd: If True, return tasks grouped by PRD instead of flat list.
 
     Returns:
-        List of tasks in the sprint.
+        List of tasks in the sprint. When group_by_prd is True, returns
+        prd_groups with tasks nested under each PRD.
     """
     db = get_db()
     sprint = db.get_sprint(sprint_id)
@@ -1415,6 +1423,42 @@ def get_sprint_tasks(sprint_id: str, status: str | None = None) -> dict[str, Any
         return {"status": "not_found", "message": f"Sprint not found: {sprint_id}"}
 
     tasks = db.list_tasks_by_sprint(sprint["project_id"], sprint_id, status)
+
+    if group_by_prd:
+        # Group tasks by PRD
+        prds = db.get_sprint_prds(sprint_id)
+        prd_map = {p["id"]: p for p in prds}
+
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for t in tasks:
+            prd_id = t.get("prd_id", "unassigned")
+            if prd_id not in groups:
+                groups[prd_id] = []
+            groups[prd_id].append({
+                "id": t["id"],
+                "title": t["title"],
+                "status": t["status"],
+                "priority": t["priority"],
+                "prd_id": prd_id,
+            })
+
+        prd_groups = []
+        for prd_id, prd_tasks in groups.items():
+            prd_info = prd_map.get(prd_id, {})
+            prd_groups.append({
+                "prd_id": prd_id,
+                "prd_title": prd_info.get("title", "Unknown PRD"),
+                "prd_status": prd_info.get("status", "unknown"),
+                "tasks": prd_tasks,
+            })
+
+        return {
+            "status": "ok",
+            "sprint_id": sprint_id,
+            "filters": {"status": status, "group_by_prd": True},
+            "count": len(tasks),
+            "prd_groups": prd_groups,
+        }
 
     return {
         "status": "ok",
@@ -1437,6 +1481,350 @@ def get_sprint_tasks(sprint_id: str, status: str | None = None) -> dict[str, Any
 # Alias for backward compatibility
 add_tasks_to_sprint = add_prd_to_sprint
 remove_tasks_from_sprint = remove_prd_from_sprint
+
+
+# =============================================================================
+# PRD Worktree Isolation Tools
+# =============================================================================
+
+
+def _get_worktree_state_path() -> Path:
+    """Get path to .worktrees/.state.json in current working directory."""
+    return Path(os.getcwd()) / ".worktrees" / ".state.json"
+
+
+def _load_worktree_state() -> dict[str, Any]:
+    """Load worktree state from .state.json, returning empty state if missing."""
+    state_path = _get_worktree_state_path()
+    if state_path.exists():
+        return json.loads(state_path.read_text())
+    return {"sprint_id": None, "created_at": None, "worktrees": {}}
+
+
+def _save_worktree_state(state: dict[str, Any]) -> None:
+    """Save worktree state to .state.json."""
+    state_path = _get_worktree_state_path()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, indent=2))
+
+
+def _ensure_gitignore_entry(repo_root: Path, entry: str) -> None:
+    """Ensure an entry exists in .gitignore."""
+    gitignore = repo_root / ".gitignore"
+    if gitignore.exists():
+        content = gitignore.read_text()
+        if entry not in content.splitlines():
+            with open(gitignore, "a") as f:
+                if not content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"{entry}\n")
+    else:
+        gitignore.write_text(f"{entry}\n")
+
+
+@mcp.tool()
+def setup_prd_worktree(
+    prd_id: str,
+    sprint_id: str,
+    base_branch: str | None = None,
+    port_offset: int = 0,
+) -> dict[str, Any]:
+    """Set up an isolated git worktree for a PRD's tasks.
+
+    Creates a git worktree with its own branch for isolated PRD execution.
+    Writes environment overrides for Docker namespace isolation.
+
+    Args:
+        prd_id: PRD identifier (e.g., PROJ-P0001).
+        sprint_id: Sprint identifier for branch naming.
+        base_branch: Branch to base worktree on. Defaults to current HEAD.
+        port_offset: Port offset for Docker service isolation (0, 100, 200...).
+
+    Returns:
+        Worktree details including path, branch name, and environment config.
+    """
+    repo_root = Path(os.getcwd())
+    worktree_dir = repo_root / ".worktrees"
+    worktree_path = worktree_dir / prd_id
+    branch_name = f"sprint/{sprint_id}/{prd_id}"
+
+    # Check if worktree already exists
+    state = _load_worktree_state()
+    if prd_id in state.get("worktrees", {}):
+        existing = state["worktrees"][prd_id]
+        if Path(existing["path"]).exists():
+            return {
+                "status": "exists",
+                "message": f"Worktree for {prd_id} already exists",
+                "worktree": existing,
+            }
+
+    # Ensure .worktrees/ is in .gitignore
+    _ensure_gitignore_entry(repo_root, ".worktrees/")
+
+    # Get project shortname for compose naming
+    db = get_db()
+    project_id = _get_current_project_id()
+    project = db.get_project(project_id) if project_id else None
+    shortname = project["shortname"].lower() if project else "proj"
+
+    # Create branch from base
+    base = base_branch or "HEAD"
+    try:
+        subprocess.run(
+            ["git", "branch", branch_name, base],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        # Branch may already exist (resume scenario)
+        if "already exists" not in e.stderr:
+            return {
+                "status": "error",
+                "message": f"Failed to create branch: {e.stderr.strip()}",
+            }
+
+    # Create worktree
+    try:
+        subprocess.run(
+            ["git", "worktree", "add", str(worktree_path), branch_name],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to create worktree: {e.stderr.strip()}",
+        }
+
+    # Ensure worktree directory exists (git worktree add creates it,
+    # but we ensure it for robustness)
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Write .env.prd-override in worktree
+    compose_name = f"{shortname}-{prd_id.lower()}"
+    env_content = (
+        f"COMPOSE_PROJECT_NAME={compose_name}\n"
+        f"A_SDLC_PORT_OFFSET={port_offset}\n"
+        f"A_SDLC_PRD_ID={prd_id}\n"
+    )
+    env_path = worktree_path / ".env.prd-override"
+    env_path.write_text(env_content)
+
+    # Update state file
+    now = datetime.now(timezone.utc).isoformat()
+    state["sprint_id"] = sprint_id
+    if not state.get("created_at"):
+        state["created_at"] = now
+    state.setdefault("worktrees", {})[prd_id] = {
+        "branch": branch_name,
+        "path": str(worktree_path),
+        "port_offset": port_offset,
+        "compose_name": compose_name,
+        "status": "active",
+        "pr_url": None,
+        "created_at": now,
+    }
+    _save_worktree_state(state)
+
+    return {
+        "status": "created",
+        "message": f"Worktree created for {prd_id}",
+        "worktree": {
+            "prd_id": prd_id,
+            "branch": branch_name,
+            "path": str(worktree_path),
+            "port_offset": port_offset,
+            "compose_name": compose_name,
+            "env_file": str(env_path),
+        },
+    }
+
+
+@mcp.tool()
+def cleanup_prd_worktree(
+    prd_id: str,
+    remove_branch: bool = False,
+    docker_cleanup: bool = True,
+) -> dict[str, Any]:
+    """Clean up a PRD's git worktree and optionally its Docker resources.
+
+    Args:
+        prd_id: PRD identifier.
+        remove_branch: If True, also delete the worktree's branch.
+        docker_cleanup: If True, run docker compose down for the PRD's namespace.
+
+    Returns:
+        Cleanup status.
+    """
+    repo_root = Path(os.getcwd())
+    state = _load_worktree_state()
+    worktree_info = state.get("worktrees", {}).get(prd_id)
+
+    if not worktree_info:
+        return {
+            "status": "not_found",
+            "message": f"No worktree found for {prd_id}",
+        }
+
+    worktree_path = Path(worktree_info["path"])
+    branch_name = worktree_info["branch"]
+    compose_name = worktree_info.get("compose_name", "")
+
+    errors = []
+
+    # Docker cleanup
+    if docker_cleanup and compose_name:
+        try:
+            subprocess.run(
+                ["docker", "compose", "-p", compose_name, "down", "-v"],
+                cwd=str(worktree_path) if worktree_path.exists() else str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            errors.append(f"Docker cleanup warning: {e}")
+
+    # Remove worktree
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", str(worktree_path), "--force"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        errors.append(f"Worktree removal warning: {e.stderr.strip()}")
+
+    # Remove branch if requested
+    if remove_branch:
+        try:
+            subprocess.run(
+                ["git", "branch", "-D", branch_name],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            errors.append(f"Branch deletion warning: {e.stderr.strip()}")
+
+    # Update state
+    state["worktrees"][prd_id]["status"] = "removed"
+    _save_worktree_state(state)
+
+    result: dict[str, Any] = {
+        "status": "cleaned",
+        "message": f"Worktree for {prd_id} cleaned up",
+        "branch_removed": remove_branch,
+        "docker_cleaned": docker_cleanup,
+    }
+    if errors:
+        result["warnings"] = errors
+
+    return result
+
+
+@mcp.tool()
+def create_prd_pr(
+    prd_id: str,
+    sprint_id: str,
+    base_branch: str | None = None,
+    title: str | None = None,
+    body: str | None = None,
+) -> dict[str, Any]:
+    """Create a pull request for a PRD's worktree branch.
+
+    Pushes the PRD branch to remote and creates a PR via gh CLI.
+
+    Args:
+        prd_id: PRD identifier.
+        sprint_id: Sprint identifier (for branch name lookup).
+        base_branch: Target branch for the PR. Defaults to repo default branch.
+        title: PR title. Auto-generated from PRD metadata if not provided.
+        body: PR body. Auto-generated if not provided.
+
+    Returns:
+        PR URL and details.
+    """
+    repo_root = Path(os.getcwd())
+    state = _load_worktree_state()
+    worktree_info = state.get("worktrees", {}).get(prd_id)
+
+    if not worktree_info:
+        return {
+            "status": "not_found",
+            "message": f"No worktree found for {prd_id}. Run setup_prd_worktree first.",
+        }
+
+    branch_name = worktree_info["branch"]
+
+    # Get PRD metadata for auto-generated title/body
+    db = get_db()
+    prd = db.get_prd(prd_id)
+    prd_title = prd["title"] if prd else prd_id
+
+    pr_title = title or f"[{sprint_id}] {prd_title}"
+    pr_body = body or (
+        f"## Summary\n\n"
+        f"Implementation for PRD **{prd_id}**: {prd_title}\n\n"
+        f"Sprint: {sprint_id}\n"
+        f"Branch: `{branch_name}`\n"
+    )
+
+    # Push branch to remote
+    try:
+        subprocess.run(
+            ["git", "push", "-u", "origin", branch_name],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to push branch: {e.stderr.strip()}",
+        }
+
+    # Create PR via gh CLI
+    gh_cmd = ["gh", "pr", "create", "--title", pr_title, "--body", pr_body, "--head", branch_name]
+    if base_branch:
+        gh_cmd.extend(["--base", base_branch])
+
+    try:
+        result = subprocess.run(
+            gh_cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        pr_url = result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to create PR: {e.stderr.strip()}",
+        }
+
+    # Update state with PR URL
+    state["worktrees"][prd_id]["pr_url"] = pr_url
+    state["worktrees"][prd_id]["status"] = "pr_created"
+    _save_worktree_state(state)
+
+    return {
+        "status": "created",
+        "message": f"PR created for {prd_id}",
+        "pr_url": pr_url,
+        "branch": branch_name,
+        "title": pr_title,
+    }
 
 
 # =============================================================================
@@ -2368,16 +2756,37 @@ def _find_executable(name: str) -> str | None:
     return None
 
 
+def _open_browser_when_ready(port: int, timeout: float = 5.0) -> None:
+    """Poll until the UI port is ready, then open the browser.
+
+    Runs in a daemon thread so it doesn't block the MCP server.
+    """
+    import time
+    import webbrowser
+
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        if _is_port_in_use(port):
+            webbrowser.open(f"http://127.0.0.1:{port}")
+            return
+        time.sleep(0.3)
+
+
 def _start_ui_server() -> subprocess.Popen | None:
     """Start the UI server in the background if not already running.
 
     Returns None if UI is already running or if dependencies are not available.
     The UI server lifecycle is tied to the MCP server - it will be terminated
     when the MCP server exits.
+
+    Auto-opens the browser when the UI is ready unless A_SDLC_NO_BROWSER=1.
     """
+    import threading
+
     global _ui_process
 
-    if _is_port_in_use(UI_PORT):
+    already_running = _is_port_in_use(UI_PORT)
+    if already_running:
         # UI already running
         return None
 
@@ -2397,19 +2806,26 @@ def _start_ui_server() -> subprocess.Popen | None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        return _ui_process
+    else:
+        # Try uvx as fallback
+        uvx_path = _find_executable("uvx")
+        if uvx_path:
+            _ui_process = subprocess.Popen(
+                [uvx_path, "a-sdlc", "ui"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
-    # Try uvx as fallback
-    uvx_path = _find_executable("uvx")
-    if uvx_path:
-        _ui_process = subprocess.Popen(
-            [uvx_path, "a-sdlc", "ui"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+    # Auto-open browser if we started the UI and opt-out is not set
+    if _ui_process is not None and not os.environ.get("A_SDLC_NO_BROWSER"):
+        t = threading.Thread(
+            target=_open_browser_when_ready,
+            args=(UI_PORT,),
+            daemon=True,
         )
-        return _ui_process
+        t.start()
 
-    return None
+    return _ui_process
 
 
 def _stop_ui_server() -> None:

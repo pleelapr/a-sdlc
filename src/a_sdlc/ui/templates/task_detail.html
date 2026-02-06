@@ -3,30 +3,39 @@
 {% block title %}{{ task.id }} - {{ task.title }}{% endblock %}
 
 {% block content %}
-<div style="margin-top: 1rem;">
-    <a href="/tasks" style="color: var(--text-muted);">← Back to Tasks</a>
+<div class="breadcrumbs">
+    <a href="/">Home</a> <span class="sep">/</span>
+    <a href="/tasks?project={{ task.project_id }}">Tasks</a> <span class="sep">/</span>
+    <span>{{ task.id }}</span>
 </div>
 
-<div class="card" style="margin-top: 1rem;">
+<div class="card" style="margin-top: 0.5rem;">
     <div class="card-header">
         <h1 style="margin: 0;">{{ task.id }}</h1>
-        <select id="status-select" onchange="updateStatus(this.value)" style="
-            padding: 0.4rem 0.75rem;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: var(--bg);
-            color: var(--text);
-            font-size: 0.875rem;
-            cursor: pointer;
-        ">
-            <option value="pending" {% if task.status == 'pending' %}selected{% endif %}>Pending</option>
-            <option value="in_progress" {% if task.status == 'in_progress' %}selected{% endif %}>In Progress</option>
-            <option value="completed" {% if task.status == 'completed' %}selected{% endif %}>Completed</option>
-            <option value="blocked" {% if task.status == 'blocked' %}selected{% endif %}>Blocked</option>
-        </select>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            {% if task.status == 'pending' %}
+            <button class="btn-copy" onclick="copyCommand('/sdlc:task-start {{ task.id }}')" title="Copy start command">
+                Start in Claude Code
+            </button>
+            {% endif %}
+            <select id="status-select" onchange="updateStatus(this.value)" style="
+                padding: 0.4rem 0.75rem;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: var(--bg);
+                color: var(--text);
+                font-size: 0.875rem;
+                cursor: pointer;
+            ">
+                <option value="pending" {% if task.status == 'pending' %}selected{% endif %}>Pending</option>
+                <option value="in_progress" {% if task.status == 'in_progress' %}selected{% endif %}>In Progress</option>
+                <option value="completed" {% if task.status == 'completed' %}selected{% endif %}>Completed</option>
+                <option value="blocked" {% if task.status == 'blocked' %}selected{% endif %}>Blocked</option>
+            </select>
+        </div>
     </div>
 
-    <h2 style="margin-bottom: 1rem;">{{ task.title }}</h2>
+    <h2 class="title-full" style="margin-bottom: 1rem;">{{ task.title }}</h2>
 
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
         <div>
@@ -105,12 +114,14 @@
                 method: 'POST'
             });
 
-            if (!response.ok) {
-                alert('Failed to update status');
+            if (response.ok) {
+                showToast('Status updated to ' + status.replace('_', ' '));
+            } else {
+                showToast('Failed to update status', 'error');
             }
         } catch (error) {
             console.error('Update status error:', error);
-            alert('Failed to update status');
+            showToast('Failed to update status', 'error');
         }
     }
 
@@ -158,12 +169,13 @@
                 originalContent = content;
                 renderMarkdown(content);
                 toggleEdit();
+                showToast('Content saved');
             } else {
-                alert('Failed to save content');
+                showToast('Failed to save content', 'error');
             }
         } catch (error) {
             console.error('Save error:', error);
-            alert('Failed to save content');
+            showToast('Failed to save content', 'error');
         }
     }
 </script>

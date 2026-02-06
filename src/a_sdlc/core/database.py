@@ -20,7 +20,7 @@ from typing import Any, Generator
 
 # Schema version for fresh start (hybrid storage with file_path design)
 # Version 2: Added shortname column to projects table
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def get_data_dir() -> Path:
@@ -112,6 +112,9 @@ class Database:
                 version TEXT DEFAULT '1.0.0',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ready_at TIMESTAMP,
+                split_at TIMESTAMP,
+                completed_at TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
                 FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE SET NULL
             );
@@ -131,6 +134,7 @@ class Database:
                 component TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
                 completed_at TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
                 FOREIGN KEY (prd_id) REFERENCES prds(id) ON DELETE SET NULL
@@ -192,9 +196,20 @@ class Database:
         if current_version == SCHEMA_VERSION:
             return
 
-        # Handle migration from version 1 to version 2
-        if current_version == 1 and SCHEMA_VERSION == 2:
+        # Chained migrations
+        if current_version == 1:
             self._migrate_v1_to_v2(conn)
+            current_version = 2
+
+        if current_version == 2:
+            self._migrate_v2_to_v3(conn)
+            current_version = 3
+
+        if current_version == 3:
+            self._migrate_v3_to_v4(conn)
+            current_version = 4
+
+        if current_version == SCHEMA_VERSION:
             return
 
         # Unknown version - can't migrate
@@ -230,7 +245,41 @@ class Database:
         conn.execute("CREATE UNIQUE INDEX idx_projects_shortname ON projects(shortname)")
 
         # Update schema version
-        conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+        conn.execute("UPDATE schema_version SET version = 2")
+
+    def _migrate_v2_to_v3(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 2 to version 3 (add started_at to tasks)."""
+        conn.execute("ALTER TABLE tasks ADD COLUMN started_at TIMESTAMP")
+        # Backfill: approximate started_at from created_at for active/completed tasks
+        conn.execute("""
+            UPDATE tasks SET started_at = created_at
+            WHERE status IN ('in_progress', 'completed') AND started_at IS NULL
+        """)
+        conn.execute("UPDATE schema_version SET version = 3")
+
+    def _migrate_v3_to_v4(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 3 to version 4 (add PRD phase timestamps)."""
+        conn.execute("ALTER TABLE prds ADD COLUMN ready_at TIMESTAMP")
+        conn.execute("ALTER TABLE prds ADD COLUMN split_at TIMESTAMP")
+        conn.execute("ALTER TABLE prds ADD COLUMN completed_at TIMESTAMP")
+
+        # Backfill: approximate from available data
+        # ready → ready_at = updated_at
+        conn.execute("""
+            UPDATE prds SET ready_at = updated_at
+            WHERE status = 'ready' AND ready_at IS NULL
+        """)
+        # split → ready_at = created_at, split_at = updated_at
+        conn.execute("""
+            UPDATE prds SET ready_at = created_at, split_at = updated_at
+            WHERE status = 'split' AND split_at IS NULL
+        """)
+        # completed → all three approximated
+        conn.execute("""
+            UPDATE prds SET ready_at = created_at, split_at = created_at, completed_at = updated_at
+            WHERE status = 'completed' AND completed_at IS NULL
+        """)
+        conn.execute("UPDATE schema_version SET version = 4")
 
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -492,6 +541,51 @@ class Database:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_all_projects_with_stats(self) -> list[dict[str, Any]]:
+        """Get all projects with aggregated task/PRD/sprint counts.
+
+        Returns projects ordered by last accessed, each with:
+        - task counts by status (pending, in_progress, completed, blocked)
+        - total PRDs, total sprints
+        - active sprint title (if any)
+        """
+        with self.connection() as conn:
+            cursor = conn.execute("""
+                SELECT
+                    p.*,
+                    COALESCE(t_counts.total_tasks, 0) AS total_tasks,
+                    COALESCE(t_counts.pending, 0) AS tasks_pending,
+                    COALESCE(t_counts.in_progress, 0) AS tasks_in_progress,
+                    COALESCE(t_counts.completed, 0) AS tasks_completed,
+                    COALESCE(t_counts.blocked, 0) AS tasks_blocked,
+                    COALESCE(prd_counts.total_prds, 0) AS total_prds,
+                    COALESCE(sprint_counts.total_sprints, 0) AS total_sprints,
+                    active_sprint.title AS active_sprint_title,
+                    active_sprint.id AS active_sprint_id
+                FROM projects p
+                LEFT JOIN (
+                    SELECT project_id,
+                           COUNT(*) AS total_tasks,
+                           SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+                           SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress,
+                           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                           SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked
+                    FROM tasks GROUP BY project_id
+                ) t_counts ON p.id = t_counts.project_id
+                LEFT JOIN (
+                    SELECT project_id, COUNT(*) AS total_prds
+                    FROM prds GROUP BY project_id
+                ) prd_counts ON p.id = prd_counts.project_id
+                LEFT JOIN (
+                    SELECT project_id, COUNT(*) AS total_sprints
+                    FROM sprints GROUP BY project_id
+                ) sprint_counts ON p.id = sprint_counts.project_id
+                LEFT JOIN sprints active_sprint
+                    ON p.id = active_sprint.project_id AND active_sprint.status = 'active'
+                ORDER BY p.last_accessed DESC
+            """)
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_most_recent_project(self) -> dict[str, Any] | None:
         """Get the most recently accessed project."""
         with self.connection() as conn:
@@ -596,11 +690,39 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
 
     def update_prd(self, prd_id: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Update PRD fields."""
+        """Update PRD fields with status transition timestamp tracking."""
         if not kwargs:
             return self.get_prd(prd_id)
 
         kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        new_status = kwargs.get("status")
+        if new_status:
+            now = kwargs["updated_at"]
+            current = self.get_prd(prd_id)
+
+            if new_status == "draft":
+                # Full reset: clear all phase timestamps
+                kwargs.setdefault("ready_at", None)
+                kwargs.setdefault("split_at", None)
+                kwargs.setdefault("completed_at", None)
+            elif new_status == "ready":
+                # Set ready_at on first transition (NULL = not yet set)
+                if current and not current.get("ready_at"):
+                    kwargs["ready_at"] = now
+                # Clear downstream timestamps
+                kwargs.setdefault("split_at", None)
+                kwargs.setdefault("completed_at", None)
+            elif new_status == "split":
+                # Preserve ready_at, set split_at on first transition
+                if current and not current.get("split_at"):
+                    kwargs["split_at"] = now
+                # Clear completed_at
+                kwargs.setdefault("completed_at", None)
+            elif new_status == "completed":
+                # Preserve all prior, set completed_at
+                kwargs.setdefault("completed_at", now)
+
         fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
         values = list(kwargs.values()) + [prd_id]
 
@@ -753,9 +875,26 @@ class Database:
 
         kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        # Handle completed_at for status changes
-        if kwargs.get("status") == "completed" and "completed_at" not in kwargs:
-            kwargs["completed_at"] = kwargs["updated_at"]
+        # Handle timestamps for status transitions
+        new_status = kwargs.get("status")
+        if new_status:
+            now = kwargs["updated_at"]
+            if new_status == "in_progress":
+                # Set started_at only on first start
+                current = self.get_task(task_id)
+                if current and not current.get("started_at"):
+                    kwargs["started_at"] = now
+                # Clear completed_at if reopening
+                kwargs.setdefault("completed_at", None)
+            elif new_status == "completed":
+                kwargs.setdefault("completed_at", now)
+            elif new_status == "pending":
+                # Full reset: clear both timestamps
+                kwargs.setdefault("started_at", None)
+                kwargs.setdefault("completed_at", None)
+            elif new_status == "blocked":
+                # Keep started_at but clear completed_at
+                kwargs.setdefault("completed_at", None)
 
         fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
         values = list(kwargs.values()) + [task_id]
@@ -862,10 +1001,17 @@ class Database:
             return self.get_sprint(sprint_id)
 
         # Handle status changes with timestamps
-        if kwargs.get("status") == "active" and "started_at" not in kwargs:
-            kwargs["started_at"] = datetime.now(timezone.utc).isoformat()
-        elif kwargs.get("status") == "completed" and "completed_at" not in kwargs:
-            kwargs["completed_at"] = datetime.now(timezone.utc).isoformat()
+        new_status = kwargs.get("status")
+        if new_status:
+            now = datetime.now(timezone.utc).isoformat()
+            if new_status == "active":
+                kwargs.setdefault("started_at", now)
+                kwargs.setdefault("completed_at", None)
+            elif new_status == "completed":
+                kwargs.setdefault("completed_at", now)
+            elif new_status == "planned":
+                kwargs.setdefault("started_at", None)
+                kwargs.setdefault("completed_at", None)
 
         fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
         values = list(kwargs.values()) + [sprint_id]

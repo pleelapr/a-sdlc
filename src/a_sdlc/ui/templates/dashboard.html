@@ -3,7 +3,12 @@
 {% block title %}{{ project.name }} - a-sdlc Dashboard{% endblock %}
 
 {% block content %}
-<h1 style="margin-top: 1rem;">{{ project.name }}</h1>
+<div class="breadcrumbs">
+    <a href="/">Home</a> <span class="sep">/</span>
+    <span>{{ project.name }}</span>
+</div>
+
+<h1>{{ project.name }}</h1>
 <p style="color: var(--text-muted); margin-bottom: 2rem;">{{ project.path }}</p>
 
 <div class="stats-grid">
@@ -29,24 +34,30 @@
     <div class="card">
         <div class="card-header">
             <h2>Active Sprint</h2>
-            <a href="/sprints" class="btn">View All</a>
+            <a href="/sprints?project={{ project.id }}" class="btn">View All</a>
         </div>
         {% if active_sprint %}
         <div>
             <h3><a href="/sprints/{{ active_sprint.id }}">{{ active_sprint.title }}</a></h3>
             <p style="color: var(--text-muted);">{{ active_sprint.goal or 'No goal set' }}</p>
+            <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-run {{ active_sprint.id }}')" style="margin-top: 0.75rem;">/sdlc:sprint-run {{ active_sprint.id }}</button>
         </div>
         {% else %}
-        <div class="empty-state">
+        <div class="empty-state" style="padding: 1.5rem;">
             <p>No active sprint</p>
+            {% if sprints %}
+            <p style="font-size: 0.875rem; margin-top: 0.5rem; color: var(--text-muted);">Start an existing sprint from the Sprints page</p>
+            {% else %}
+            <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-create')" style="margin-top: 0.5rem;">/sdlc:sprint-create</button>
+            {% endif %}
         </div>
         {% endif %}
     </div>
-    
+
     <div class="card">
         <div class="card-header">
             <h2>PRDs</h2>
-            <a href="/prds" class="btn">View All</a>
+            <a href="/prds?project={{ project.id }}" class="btn">View All</a>
         </div>
         {% if prds %}
         <ul style="list-style: none;">
@@ -60,17 +71,31 @@
             {% endfor %}
         </ul>
         {% else %}
-        <div class="empty-state">
+        <div class="empty-state" style="padding: 1.5rem;">
             <p>No PRDs yet</p>
+            <button class="btn-copy" onclick="copyCommand('/sdlc:prd-generate')" style="margin-top: 0.5rem;">/sdlc:prd-generate</button>
         </div>
         {% endif %}
     </div>
 </div>
 
+<!-- Contextual hints -->
+{% if prds and not tasks %}
+<div class="card" style="background: rgba(88, 166, 255, 0.05); border-color: var(--accent);">
+    <p style="margin: 0;">You have PRDs but no tasks yet. Split a PRD into tasks:</p>
+    <button class="btn-copy" onclick="copyCommand('/sdlc:prd-split')" style="margin-top: 0.5rem;">/sdlc:prd-split</button>
+</div>
+{% elif tasks and not sprints %}
+<div class="card" style="background: rgba(88, 166, 255, 0.05); border-color: var(--accent);">
+    <p style="margin: 0;">You have tasks but no sprints. Create a sprint to organize your work:</p>
+    <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-create')" style="margin-top: 0.5rem;">/sdlc:sprint-create</button>
+</div>
+{% endif %}
+
 <div class="card">
     <div class="card-header">
         <h2>Recent Tasks</h2>
-        <a href="/tasks" class="btn">View All</a>
+        <a href="/tasks?project={{ project.id }}" class="btn">View All</a>
     </div>
     {% if tasks %}
     <table>
@@ -87,7 +112,7 @@
             {% for task in tasks[:10] %}
             <tr>
                 <td><a href="/tasks/{{ task.id }}">{{ task.id }}</a></td>
-                <td>{{ task.title[:50] }}{% if task.title|length > 50 %}...{% endif %}</td>
+                <td class="cell-title" title="{{ task.title }}">{{ task.title }}</td>
                 <td><span class="status-{{ task.status }}">{{ task.status.replace('_', ' ').title() }}</span></td>
                 <td><span class="priority-{{ task.priority }}">{{ task.priority.title() }}</span></td>
                 <td>{% if task.prd_id %}<a href="/prds/{{ task.prd_id }}">{{ task.prd_id }}</a>{% else %}-{% endif %}</td>

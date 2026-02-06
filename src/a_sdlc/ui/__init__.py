@@ -14,12 +14,14 @@ import atexit
 import os
 import signal
 import sys
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 try:
     from fastapi import FastAPI, Form, Request
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import HTMLResponse, RedirectResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.templating import Jinja2Templates
     import uvicorn
@@ -147,17 +149,47 @@ def _get_all_projects() -> list[dict[str, Any]]:
     return storage.list_projects()
 
 
+# =============================================================================
+# Cross-Project Home
+# =============================================================================
+
+
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, project: str | None = None):
-    """Main dashboard showing project overview."""
+async def home(request: Request, project: str | None = None):
+    """Cross-project home page or redirect for backward compatibility."""
+    # Backward compat: /?project=X redirects to /projects/X
+    if project:
+        return RedirectResponse(url=f"/projects/{project}", status_code=302)
+
+    storage = get_storage()
+    projects_with_stats = storage.get_all_projects_with_stats()
+
+    if not projects_with_stats:
+        return templates.TemplateResponse(
+            "onboarding.html",
+            {"request": request}
+        )
+
+    return templates.TemplateResponse(
+        "home.html",
+        {
+            "request": request,
+            "projects": projects_with_stats,
+        }
+    )
+
+
+@app.get("/projects/{project_id}", response_class=HTMLResponse)
+async def project_dashboard(request: Request, project_id: str):
+    """Per-project dashboard (moved from /)."""
     storage = get_storage()
     all_projects = _get_all_projects()
-    current_project = _get_current_project(project)
+    current_project = storage.get_project(project_id)
 
     if not current_project:
         return templates.TemplateResponse(
-            "no_project.html",
-            {"request": request, "projects": all_projects}
+            "onboarding.html",
+            {"request": request}
         )
 
     # Get stats
@@ -190,6 +222,11 @@ async def dashboard(request: Request, project: str | None = None):
     )
 
 
+# =============================================================================
+# Task Pages
+# =============================================================================
+
+
 @app.get("/tasks", response_class=HTMLResponse)
 async def tasks_page(request: Request, project: str | None = None, status: str | None = None, sprint_id: str | None = None):
     """Tasks list page."""
@@ -199,8 +236,8 @@ async def tasks_page(request: Request, project: str | None = None, status: str |
 
     if not current_project:
         return templates.TemplateResponse(
-            "no_project.html",
-            {"request": request, "projects": all_projects}
+            "onboarding.html",
+            {"request": request}
         )
 
     # Get tasks - use sprint-specific method if filtering by sprint
@@ -267,8 +304,13 @@ async def update_task_content(task_id: str, request: Request):
     return {"success": True}
 
 
+# =============================================================================
+# Sprint Pages
+# =============================================================================
+
+
 @app.get("/sprints", response_class=HTMLResponse)
-async def sprints_page(request: Request, project: str | None = None):
+async def sprints_page(request: Request, project: str | None = None, status: str | None = None):
     """Sprints list page."""
     storage = get_storage()
     all_projects = _get_all_projects()
@@ -276,11 +318,15 @@ async def sprints_page(request: Request, project: str | None = None):
 
     if not current_project:
         return templates.TemplateResponse(
-            "no_project.html",
-            {"request": request, "projects": all_projects}
+            "onboarding.html",
+            {"request": request}
         )
 
     sprints = storage.list_sprints(current_project["id"])
+
+    # Filter by status (Python-side since list_sprints doesn't support it)
+    if status:
+        sprints = [s for s in sprints if s["status"] == status]
 
     # Add task counts to each sprint
     for sprint in sprints:
@@ -290,7 +336,13 @@ async def sprints_page(request: Request, project: str | None = None):
 
     return templates.TemplateResponse(
         "sprints.html",
-        {"request": request, "project": current_project, "projects": all_projects, "sprints": sprints}
+        {
+            "request": request,
+            "project": current_project,
+            "projects": all_projects,
+            "sprints": sprints,
+            "filter_status": status,
+        }
     )
 
 
@@ -311,13 +363,42 @@ async def sprint_detail(request: Request, sprint_id: str):
         prd_tasks = storage.list_tasks(sprint["project_id"], prd_id=prd["id"])
         prd["task_count"] = len(prd_tasks)
 
+    # Get backlog PRDs (unassigned to any sprint)
+    available_prds = storage.list_prds(sprint["project_id"], sprint_id="")
+
     # Get tasks derived from sprint's PRDs
     tasks = storage.list_tasks_by_sprint(sprint["project_id"], sprint_id)
 
+    # Calculate task stats for progress bar
+    task_stats = {"pending": 0, "in_progress": 0, "completed": 0, "blocked": 0}
+    for task in tasks:
+        s = task["status"]
+        if s in task_stats:
+            task_stats[s] += 1
+
     return templates.TemplateResponse(
         "sprint_detail.html",
-        {"request": request, "sprint": sprint, "prds": prds, "tasks": tasks}
+        {"request": request, "sprint": sprint, "prds": prds, "tasks": tasks, "task_stats": task_stats, "available_prds": available_prds}
     )
+
+
+@app.post("/sprints/{sprint_id}/prds")
+async def add_prd_to_sprint(sprint_id: str, request: Request):
+    """Add a PRD to this sprint."""
+    storage = get_storage()
+    form = await request.form()
+    prd_id = form.get("prd_id")
+    if prd_id:
+        storage.assign_prd_to_sprint(prd_id, sprint_id)
+    return RedirectResponse(url=f"/sprints/{sprint_id}", status_code=303)
+
+
+@app.post("/sprints/{sprint_id}/prds/{prd_id}/remove")
+async def remove_prd_from_sprint(sprint_id: str, prd_id: str):
+    """Remove a PRD from this sprint (unassign to backlog)."""
+    storage = get_storage()
+    storage.assign_prd_to_sprint(prd_id, None)
+    return RedirectResponse(url=f"/sprints/{sprint_id}", status_code=303)
 
 
 @app.put("/sprints/{sprint_id}/status")
@@ -334,8 +415,13 @@ async def update_sprint_status(sprint_id: str, request: Request):
     return {"success": True}
 
 
+# =============================================================================
+# PRD Pages
+# =============================================================================
+
+
 @app.get("/prds", response_class=HTMLResponse)
-async def prds_page(request: Request, project: str | None = None):
+async def prds_page(request: Request, project: str | None = None, status: str | None = None, sprint_id: str | None = None):
     """PRDs list page."""
     storage = get_storage()
     all_projects = _get_all_projects()
@@ -343,15 +429,24 @@ async def prds_page(request: Request, project: str | None = None):
 
     if not current_project:
         return templates.TemplateResponse(
-            "no_project.html",
-            {"request": request, "projects": all_projects}
+            "onboarding.html",
+            {"request": request}
         )
 
-    prds = storage.list_prds(current_project["id"])
+    prds = storage.list_prds(current_project["id"], status=status, sprint_id=sprint_id)
+    sprints = storage.list_sprints(current_project["id"])
 
     return templates.TemplateResponse(
         "prds.html",
-        {"request": request, "project": current_project, "projects": all_projects, "prds": prds}
+        {
+            "request": request,
+            "project": current_project,
+            "projects": all_projects,
+            "prds": prds,
+            "sprints": sprints,
+            "filter_status": status,
+            "filter_sprint": sprint_id,
+        }
     )
 
 
@@ -482,6 +577,236 @@ async def update_prd_status(prd_id: str, request: Request):
 
 
 # =============================================================================
+# Analytics
+# =============================================================================
+
+
+def _parse_timestamp(ts_str: str | None) -> datetime | None:
+    """Safely parse an ISO timestamp string to datetime."""
+    if not ts_str:
+        return None
+    try:
+        # Handle both with and without timezone
+        if ts_str.endswith("Z"):
+            ts_str = ts_str[:-1] + "+00:00"
+        return datetime.fromisoformat(ts_str)
+    except (ValueError, TypeError):
+        return None
+
+
+def _format_duration(hours: float) -> str:
+    """Format duration with smart units: <1h -> Xm, <48h -> X.Xh, else -> X.Xd."""
+    if hours < 1:
+        return f"{max(1, round(hours * 60))}m"
+    elif hours < 48:
+        return f"{hours:.1f}h"
+    else:
+        return f"{hours / 24:.1f}d"
+
+
+def _compute_analytics(project_id: str, days: int = 30) -> dict[str, Any]:
+    """Compute analytics metrics for a project over a time window."""
+    storage = get_storage()
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=days)
+    window_start_iso = window_start.isoformat()
+
+    # Get all tasks for the project
+    all_tasks = storage.list_tasks(project_id)
+
+    # Status distribution
+    status_dist: dict[str, int] = {"pending": 0, "in_progress": 0, "completed": 0, "blocked": 0}
+    for t in all_tasks:
+        s = t.get("status", "pending")
+        if s in status_dist:
+            status_dist[s] += 1
+
+    # Priority distribution
+    priority_dist: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for t in all_tasks:
+        p = t.get("priority", "medium")
+        if p in priority_dist:
+            priority_dist[p] += 1
+
+    # Completed tasks in window
+    completed_in_window = []
+    for t in all_tasks:
+        if t.get("status") == "completed":
+            completed_at = _parse_timestamp(t.get("completed_at"))
+            if completed_at and completed_at >= window_start:
+                completed_in_window.append(t)
+
+    # Completion trend: daily counts
+    completion_trend = []
+    day_counts: dict[str, int] = defaultdict(int)
+    for t in completed_in_window:
+        completed_at = _parse_timestamp(t.get("completed_at"))
+        if completed_at:
+            day_key = completed_at.strftime("%Y-%m-%d")
+            day_counts[day_key] += 1
+
+    # Fill in all days in the window
+    for i in range(days):
+        d = (window_start + timedelta(days=i + 1)).strftime("%Y-%m-%d")
+        completion_trend.append({"date": d, "count": day_counts.get(d, 0)})
+
+    # Lead time and cycle time
+    lead_times = []
+    cycle_times = []
+    for t in completed_in_window:
+        completed_at = _parse_timestamp(t.get("completed_at"))
+        created_at = _parse_timestamp(t.get("created_at"))
+        started_at = _parse_timestamp(t.get("started_at"))
+
+        if completed_at and created_at:
+            lead_days = (completed_at - created_at).total_seconds() / 86400
+            lead_times.append(lead_days)
+
+        if completed_at and started_at:
+            cycle_days = (completed_at - started_at).total_seconds() / 86400
+            cycle_times.append(cycle_days)
+
+    total_completed = len(completed_in_window)
+    avg_lead_hours = sum(lead_times) / len(lead_times) * 24 if lead_times else 0
+    avg_cycle_hours = sum(cycle_times) / len(cycle_times) * 24 if cycle_times else 0
+    completion_rate = round(total_completed / len(all_tasks) * 100) if all_tasks else 0
+
+    # Sprint velocity: last 10 completed sprints
+    sprints = storage.list_sprints(project_id)
+    completed_sprints = [s for s in sprints if s.get("status") == "completed"]
+    # Sort by completed_at descending, take last 10
+    completed_sprints.sort(
+        key=lambda s: s.get("completed_at") or "", reverse=True
+    )
+    completed_sprints = completed_sprints[:10]
+    completed_sprints.reverse()  # oldest first for chart
+
+    sprint_velocity = []
+    for s in completed_sprints:
+        sprint_tasks = storage.list_tasks_by_sprint(project_id, s["id"])
+        total = len(sprint_tasks)
+        done = sum(1 for t in sprint_tasks if t.get("status") == "completed")
+        sprint_velocity.append({
+            "sprint_id": s["id"],
+            "sprint_title": s.get("title", s["id"]),
+            "completed": done,
+            "total": total,
+        })
+
+    # Sprint durations: wall-clock time for completed sprints
+    sprint_durations = []
+    for s in completed_sprints:
+        started = _parse_timestamp(s.get("started_at"))
+        completed = _parse_timestamp(s.get("completed_at"))
+        if started and completed:
+            hours = (completed - started).total_seconds() / 3600
+            sprint_durations.append({
+                "sprint_id": s["id"],
+                "title": s.get("title", s["id"]),
+                "duration_hours": round(hours, 1),
+                "duration_label": _format_duration(hours),
+            })
+
+    sprint_avg_hours = (
+        sum(d["duration_hours"] for d in sprint_durations) / len(sprint_durations)
+        if sprint_durations else 0
+    )
+
+    # PRD durations: use real PRD phase timestamps
+    all_prds = storage.list_prds(project_id)
+    prd_durations = []
+    for prd in all_prds:
+        if prd.get("status") != "completed":
+            continue
+        prd_created = _parse_timestamp(prd.get("created_at"))
+        prd_completed = _parse_timestamp(prd.get("completed_at"))
+        if not prd_created or not prd_completed:
+            continue
+
+        total_hours = (prd_completed - prd_created).total_seconds() / 3600
+
+        # Per-phase durations (available when timestamps exist)
+        ready_at = _parse_timestamp(prd.get("ready_at"))
+        split_at = _parse_timestamp(prd.get("split_at"))
+
+        drafting_hours = (ready_at - prd_created).total_seconds() / 3600 if ready_at else None
+        planning_hours = (split_at - ready_at).total_seconds() / 3600 if split_at and ready_at else None
+        execution_hours = (prd_completed - split_at).total_seconds() / 3600 if split_at else None
+
+        prd_durations.append({
+            "prd_id": prd["id"],
+            "title": prd.get("title", prd["id"]),
+            "duration_hours": round(total_hours, 1),
+            "duration_label": _format_duration(total_hours),
+            "drafting_hours": round(drafting_hours, 1) if drafting_hours is not None else None,
+            "planning_hours": round(planning_hours, 1) if planning_hours is not None else None,
+            "execution_hours": round(execution_hours, 1) if execution_hours is not None else None,
+        })
+
+    # Sort by duration descending, take last 10
+    prd_durations.sort(key=lambda d: d["duration_hours"])
+    prd_durations = prd_durations[:10]
+
+    prd_avg_hours = (
+        sum(d["duration_hours"] for d in prd_durations) / len(prd_durations)
+        if prd_durations else 0
+    )
+
+    return {
+        "summary": {
+            "total_completed": total_completed,
+            "avg_lead_time": _format_duration(avg_lead_hours) if avg_lead_hours else "0m",
+            "avg_cycle_time": _format_duration(avg_cycle_hours) if avg_cycle_hours else "0m",
+            "completion_rate": completion_rate,
+        },
+        "task_durations": {
+            "avg_lead_time_hours": round(avg_lead_hours, 1),
+            "avg_cycle_time_hours": round(avg_cycle_hours, 1),
+        },
+        "prd_durations": prd_durations,
+        "prd_avg_duration": _format_duration(prd_avg_hours) if prd_avg_hours else "N/A",
+        "sprint_durations": sprint_durations,
+        "sprint_avg_duration": _format_duration(sprint_avg_hours) if sprint_avg_hours else "N/A",
+        "completion_trend": completion_trend,
+        "sprint_velocity": sprint_velocity,
+        "status_distribution": status_dist,
+        "priority_distribution": priority_dist,
+        "time_window": days,
+    }
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request, project: str | None = None, days: int = 30):
+    """Developer analytics page with Chart.js visualizations."""
+    storage = get_storage()
+    all_projects = _get_all_projects()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return templates.TemplateResponse(
+            "onboarding.html",
+            {"request": request}
+        )
+
+    # Validate days parameter
+    if days not in (7, 14, 30, 90):
+        days = 30
+
+    metrics = _compute_analytics(current_project["id"], days)
+
+    return templates.TemplateResponse(
+        "analytics.html",
+        {
+            "request": request,
+            "project": current_project,
+            "projects": all_projects,
+            "metrics": metrics,
+            "days": days,
+        }
+    )
+
+
+# =============================================================================
 # Settings & Integrations
 # =============================================================================
 
@@ -502,8 +827,8 @@ async def settings_page(request: Request, project: str | None = None, message: s
 
     if not current_project:
         return templates.TemplateResponse(
-            "no_project.html",
-            {"request": request, "projects": all_projects}
+            "onboarding.html",
+            {"request": request}
         )
 
     integrations = _get_integrations_dict(current_project["id"])

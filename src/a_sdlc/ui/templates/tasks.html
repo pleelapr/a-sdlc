@@ -3,18 +3,24 @@
 {% block title %}Tasks - {{ project.name }}{% endblock %}
 
 {% block content %}
-<h1 style="margin-top: 1rem;">Tasks</h1>
+<div class="breadcrumbs">
+    <a href="/">Home</a> <span class="sep">/</span>
+    <a href="/projects/{{ project.id }}">{{ project.name }}</a> <span class="sep">/</span>
+    <span>Tasks</span>
+</div>
+
+<h1>Tasks</h1>
 
 <div class="filters">
-    <select onchange="window.location.href='?status=' + this.value + '{% if filter_sprint %}&sprint_id={{ filter_sprint }}{% endif %}'">
+    <select onchange="window.location.href='?project={{ project.id }}&status=' + this.value + '{% if filter_sprint %}&sprint_id={{ filter_sprint }}{% endif %}'">
         <option value="">All Status</option>
         <option value="pending" {% if filter_status == 'pending' %}selected{% endif %}>Pending</option>
         <option value="in_progress" {% if filter_status == 'in_progress' %}selected{% endif %}>In Progress</option>
         <option value="completed" {% if filter_status == 'completed' %}selected{% endif %}>Completed</option>
         <option value="blocked" {% if filter_status == 'blocked' %}selected{% endif %}>Blocked</option>
     </select>
-    
-    <select onchange="window.location.href='?sprint_id=' + this.value + '{% if filter_status %}&status={{ filter_status }}{% endif %}'">
+
+    <select onchange="window.location.href='?project={{ project.id }}&sprint_id=' + this.value + '{% if filter_status %}&status={{ filter_status }}{% endif %}'">
         <option value="">All Sprints</option>
         {% for sprint in sprints %}
         <option value="{{ sprint.id }}" {% if filter_sprint == sprint.id %}selected{% endif %}>{{ sprint.title }}</option>
@@ -24,14 +30,18 @@
 
 <div class="card">
     {% if tasks %}
-    <table>
+    <div class="table-search">
+        <input type="text" id="task-search" placeholder="Search tasks...">
+        <span class="search-count"></span>
+    </div>
+    <table id="tasks-table">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Priority</th>
-                <th>Component</th>
+                <th data-sort="text">ID</th>
+                <th data-sort="text">Title</th>
+                <th data-sort="status">Status</th>
+                <th data-sort="priority">Priority</th>
+                <th data-sort="text">Component</th>
                 <th>PRD</th>
                 <th>Actions</th>
             </tr>
@@ -40,7 +50,7 @@
             {% for task in tasks %}
             <tr>
                 <td><a href="/tasks/{{ task.id }}">{{ task.id }}</a></td>
-                <td>{{ task.title[:50] }}{% if task.title|length > 50 %}...{% endif %}</td>
+                <td class="cell-title" title="{{ task.title }}">{{ task.title }}</td>
                 <td>
                     <span id="status-{{ task.id }}" class="status-{{ task.status }}">
                         {{ task.status.replace('_', ' ').title() }}
@@ -51,17 +61,15 @@
                 <td>{% if task.prd_id %}<a href="/prds/{{ task.prd_id }}">{{ task.prd_id }}</a>{% else %}-{% endif %}</td>
                 <td>
                     {% if task.status == 'pending' %}
-                    <button class="btn" 
-                            hx-post="/tasks/{{ task.id }}/status?status=in_progress"
-                            hx-target="#status-{{ task.id }}"
-                            hx-swap="outerHTML">
+                    <button class="btn-copy-sm" onclick="copyCommand('/sdlc:task-start {{ task.id }}')" title="Copy start command to clipboard">
                         Start
                     </button>
                     {% elif task.status == 'in_progress' %}
                     <button class="btn btn-primary"
                             hx-post="/tasks/{{ task.id }}/status?status=completed"
                             hx-target="#status-{{ task.id }}"
-                            hx-swap="outerHTML">
+                            hx-swap="outerHTML"
+                            style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
                         Complete
                     </button>
                     {% endif %}
@@ -73,7 +81,10 @@
     {% else %}
     <div class="empty-state">
         <p>No tasks found</p>
+        <p style="margin-top: 0.75rem; font-size: 0.875rem;">Generate tasks from a PRD:</p>
+        <button class="btn-copy" onclick="copyCommand('/sdlc:prd-split')" style="margin-top: 0.5rem;">/sdlc:prd-split</button>
     </div>
     {% endif %}
 </div>
+<script>document.addEventListener('DOMContentLoaded', function() { initTableSearch('task-search', 'tasks-table'); });</script>
 {% endblock %}

@@ -412,6 +412,144 @@ class TestTemplateOperations:
         assert path is None
 
 
+class TestMigrationV3ToV4:
+    """Test v3→v4 migration: PRD phase timestamp backfill."""
+
+    def test_migration_backfills_prd_timestamps(self, tmp_path):
+        """Migrating a v3 database backfills ready_at, split_at, completed_at."""
+        from a_sdlc.core.database import Database
+        import sqlite3
+
+        db_path = tmp_path / "test_migrate.db"
+
+        # Create a v3 database manually
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript("""
+            CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+            INSERT INTO schema_version (version) VALUES (3);
+
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                shortname TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX idx_projects_shortname ON projects(shortname);
+
+            CREATE TABLE sprints (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                goal TEXT,
+                status TEXT DEFAULT 'planned',
+                external_id TEXT,
+                external_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE prds (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                sprint_id TEXT,
+                title TEXT NOT NULL,
+                file_path TEXT,
+                status TEXT DEFAULT 'draft',
+                source TEXT,
+                version TEXT DEFAULT '1.0.0',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                prd_id TEXT,
+                title TEXT NOT NULL,
+                file_path TEXT,
+                status TEXT DEFAULT 'pending',
+                priority TEXT DEFAULT 'medium',
+                component TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                FOREIGN KEY (prd_id) REFERENCES prds(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE sync_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                local_id TEXT NOT NULL,
+                external_system TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                sync_status TEXT DEFAULT 'synced',
+                last_synced TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(entity_type, local_id, external_system)
+            );
+
+            CREATE TABLE external_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                system TEXT NOT NULL,
+                config JSON NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_id, system),
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+
+            INSERT INTO projects (id, shortname, name, path, created_at, last_accessed)
+            VALUES ('proj', 'PROJ', 'Project', '/tmp/proj', '2025-01-01T00:00:00', '2025-01-10T00:00:00');
+
+            INSERT INTO prds (id, project_id, title, status, created_at, updated_at)
+            VALUES ('P-READY', 'proj', 'Ready PRD', 'ready', '2025-01-01T00:00:00', '2025-01-05T00:00:00');
+
+            INSERT INTO prds (id, project_id, title, status, created_at, updated_at)
+            VALUES ('P-SPLIT', 'proj', 'Split PRD', 'split', '2025-01-01T00:00:00', '2025-01-08T00:00:00');
+
+            INSERT INTO prds (id, project_id, title, status, created_at, updated_at)
+            VALUES ('P-DONE', 'proj', 'Done PRD', 'completed', '2025-01-01T00:00:00', '2025-01-10T00:00:00');
+        """)
+        conn.commit()
+        conn.close()
+
+        # Initialize Database, which triggers migration
+        db = Database(db_path=db_path)
+
+        # Verify migration ran
+        with db.connection() as conn:
+            cursor = conn.execute("SELECT version FROM schema_version")
+            assert cursor.fetchone()[0] == 4
+
+        # Verify backfill: ready PRD
+        prd_ready = db.get_prd("P-READY")
+        assert prd_ready["ready_at"] == "2025-01-05T00:00:00"
+        assert prd_ready["split_at"] is None
+        assert prd_ready["completed_at"] is None
+
+        # Verify backfill: split PRD
+        prd_split = db.get_prd("P-SPLIT")
+        assert prd_split["ready_at"] == "2025-01-01T00:00:00"
+        assert prd_split["split_at"] == "2025-01-08T00:00:00"
+        assert prd_split["completed_at"] is None
+
+        # Verify backfill: completed PRD
+        prd_done = db.get_prd("P-DONE")
+        assert prd_done["ready_at"] == "2025-01-01T00:00:00"
+        assert prd_done["split_at"] == "2025-01-01T00:00:00"
+        assert prd_done["completed_at"] == "2025-01-10T00:00:00"
+
+
 class TestProjectShortname:
     """Test project shortname functionality."""
 

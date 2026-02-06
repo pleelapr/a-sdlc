@@ -3,25 +3,53 @@
 {% block title %}PRDs - {{ project.name }}{% endblock %}
 
 {% block content %}
-<h1 style="margin-top: 1rem;">Product Requirements Documents</h1>
+<div class="breadcrumbs">
+    <a href="/">Home</a> <span class="sep">/</span>
+    <a href="/projects/{{ project.id }}">{{ project.name }}</a> <span class="sep">/</span>
+    <span>PRDs</span>
+</div>
+
+<h1>Product Requirements Documents</h1>
+
+<div class="filters">
+    <select onchange="window.location.href='?project={{ project.id }}&status=' + this.value + '{% if filter_sprint %}&sprint_id={{ filter_sprint }}{% endif %}'">
+        <option value="">All Status</option>
+        <option value="draft" {% if filter_status == 'draft' %}selected{% endif %}>Draft</option>
+        <option value="ready" {% if filter_status == 'ready' %}selected{% endif %}>Ready</option>
+        <option value="split" {% if filter_status == 'split' %}selected{% endif %}>Split</option>
+        <option value="completed" {% if filter_status == 'completed' %}selected{% endif %}>Completed</option>
+    </select>
+
+    <select onchange="window.location.href='?project={{ project.id }}&sprint_id=' + this.value + '{% if filter_status %}&status={{ filter_status }}{% endif %}'">
+        <option value="">All Sprints</option>
+        {% for sprint in sprints %}
+        <option value="{{ sprint.id }}" {% if filter_sprint == sprint.id %}selected{% endif %}>{{ sprint.title }}</option>
+        {% endfor %}
+    </select>
+</div>
 
 <div class="card">
     {% if prds %}
-    <table>
+    <div class="table-search">
+        <input type="text" id="prd-search" placeholder="Search PRDs...">
+        <span class="search-count"></span>
+    </div>
+    <table id="prds-table">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Status</th>
+                <th data-sort="text">ID</th>
+                <th data-sort="text">Title</th>
+                <th data-sort="status">Status</th>
                 <th>Sprint</th>
-                <th>Updated</th>
+                <th data-sort="date">Updated</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for prd in prds %}
             <tr>
                 <td><a href="/prds/{{ prd.id }}">{{ prd.id }}</a></td>
-                <td>{{ prd.title }}</td>
+                <td class="cell-title" title="{{ prd.title }}">{{ prd.title }}</td>
                 <td>
                     <span class="badge badge-{% if prd.status == 'completed' %}success{% elif prd.status == 'ready' %}success{% elif prd.status == 'split' %}info{% else %}warning{% endif %}">
                         {{ prd.status }}
@@ -29,6 +57,13 @@
                 </td>
                 <td>{% if prd.sprint_id %}<a href="/sprints/{{ prd.sprint_id }}">{{ prd.sprint_id }}</a>{% else %}<span style="color: var(--text-muted);">Backlog</span>{% endif %}</td>
                 <td>{{ prd.updated_at[:10] if prd.updated_at else '-' }}</td>
+                <td>
+                    {% if prd.status in ['draft', 'ready'] %}
+                    <button class="btn-copy-sm" onclick="copyCommand('/sdlc:prd-split {{ prd.id }}')" title="Copy split command">
+                        Split
+                    </button>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -36,8 +71,10 @@
     {% else %}
     <div class="empty-state">
         <p>No PRDs yet</p>
-        <p style="margin-top: 0.5rem; font-size: 0.875rem;">Create one with <code>/sdlc:prd-generate</code> in Claude Code</p>
+        <p style="margin-top: 0.75rem; font-size: 0.875rem;">Create one in Claude Code:</p>
+        <button class="btn-copy" onclick="copyCommand('/sdlc:prd-generate')" style="margin-top: 0.5rem;">/sdlc:prd-generate</button>
     </div>
     {% endif %}
 </div>
+<script>document.addEventListener('DOMContentLoaded', function() { initTableSearch('prd-search', 'prds-table'); });</script>
 {% endblock %}

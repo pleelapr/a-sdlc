@@ -139,6 +139,10 @@ class HybridStorage:
         """Get most recently accessed project."""
         return self._db.get_most_recent_project()
 
+    def get_all_projects_with_stats(self) -> list[dict[str, Any]]:
+        """Get all projects with aggregated task/PRD/sprint counts."""
+        return self._db.get_all_projects_with_stats()
+
     def update_project_accessed(self, project_id: str) -> None:
         """Update project's last_accessed timestamp."""
         self._db.update_project_accessed(project_id)

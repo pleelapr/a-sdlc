@@ -3,34 +3,67 @@
 {% block title %}{{ sprint.id }} - {{ sprint.title }}{% endblock %}
 
 {% block content %}
-<div style="margin-top: 1rem;">
-    <a href="/sprints" style="color: var(--text-muted);">← Back to Sprints</a>
+<div class="breadcrumbs">
+    <a href="/">Home</a> <span class="sep">/</span>
+    <a href="/sprints?project={{ sprint.project_id }}">Sprints</a> <span class="sep">/</span>
+    <span>{{ sprint.id }}</span>
 </div>
 
-<div class="card" style="margin-top: 1rem;">
+<div class="card" style="margin-top: 0.5rem;">
     <div class="card-header">
         <h1 style="margin: 0;">{{ sprint.id }}</h1>
-        <select id="status-select" onchange="updateStatus(this.value)" style="
-            padding: 0.4rem 0.75rem;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: var(--bg);
-            color: var(--text);
-            font-size: 0.875rem;
-            cursor: pointer;
-        ">
-            <option value="planned" {% if sprint.status == 'planned' %}selected{% endif %}>Planned</option>
-            <option value="active" {% if sprint.status == 'active' %}selected{% endif %}>Active</option>
-            <option value="completed" {% if sprint.status == 'completed' %}selected{% endif %}>Completed</option>
-        </select>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+            {% if sprint.status == 'active' %}
+            <button class="btn-copy" onclick="copyCommand('/sdlc:sprint-run {{ sprint.id }}')" title="Copy run command">
+                Run in Claude Code
+            </button>
+            {% endif %}
+            <select id="status-select" onchange="updateStatus(this.value)" style="
+                padding: 0.4rem 0.75rem;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: var(--bg);
+                color: var(--text);
+                font-size: 0.875rem;
+                cursor: pointer;
+            ">
+                <option value="planned" {% if sprint.status == 'planned' %}selected{% endif %}>Planned</option>
+                <option value="active" {% if sprint.status == 'active' %}selected{% endif %}>Active</option>
+                <option value="completed" {% if sprint.status == 'completed' %}selected{% endif %}>Completed</option>
+            </select>
+        </div>
     </div>
-    
-    <h2 style="margin-bottom: 1rem;">{{ sprint.title }}</h2>
-    
+
+    <h2 class="title-full" style="margin-bottom: 1rem;">{{ sprint.title }}</h2>
+
     {% if sprint.goal %}
     <p style="color: var(--text-muted); margin-bottom: 1rem;">{{ sprint.goal }}</p>
     {% endif %}
-    
+
+    <!-- Progress Bar -->
+    {% if tasks %}
+    {% set total = tasks|length %}
+    {% set completed = task_stats.completed %}
+    {% set pct = ((completed / total) * 100) | int if total > 0 else 0 %}
+    <div style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-bottom: 0.5rem;">
+            <span style="color: var(--text-muted);">Sprint Progress</span>
+            <span style="color: var(--success);">{{ completed }}/{{ total }} tasks ({{ pct }}%)</span>
+        </div>
+        <div class="progress-bar" style="height: 10px;">
+            <div class="progress-bar-fill" style="width: {{ pct }}%;"></div>
+        </div>
+        <div style="display: flex; gap: 1.5rem; margin-top: 0.75rem; font-size: 0.8rem;">
+            <span class="status-pending">{{ task_stats.pending }} pending</span>
+            <span class="status-in_progress">{{ task_stats.in_progress }} in progress</span>
+            <span class="status-completed">{{ task_stats.completed }} completed</span>
+            {% if task_stats.blocked > 0 %}
+            <span class="status-blocked">{{ task_stats.blocked }} blocked</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem;">
         <div>
             <div style="color: var(--text-muted); font-size: 0.875rem;">Created</div>
@@ -47,31 +80,60 @@
     </div>
 </div>
 
-{% if prds %}
 <div class="card">
     <h3>PRDs in Sprint</h3>
+    {% if prds %}
     <table style="margin-top: 1rem;">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Status</th>
+                <th data-sort="text">ID</th>
+                <th data-sort="text">Title</th>
+                <th data-sort="status">Status</th>
                 <th>Tasks</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for prd in prds %}
             <tr>
                 <td><a href="/prds/{{ prd.id }}">{{ prd.id }}</a></td>
-                <td>{{ prd.title[:50] }}{% if prd.title|length > 50 %}...{% endif %}</td>
+                <td class="cell-title" title="{{ prd.title }}">{{ prd.title }}</td>
                 <td><span class="badge badge-{% if prd.status == 'completed' %}success{% elif prd.status == 'ready' %}success{% elif prd.status == 'split' %}info{% else %}warning{% endif %}">{{ prd.status.title() }}</span></td>
                 <td>{{ prd.task_count or 0 }}</td>
+                <td>
+                    <form method="post" action="/sprints/{{ sprint.id }}/prds/{{ prd.id }}/remove" style="display:inline;" onsubmit="return confirm('Remove PRD from sprint?')">
+                        <button type="submit" class="btn-danger-sm">Remove</button>
+                    </form>
+                </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    {% else %}
+    <p style="color: var(--text-muted); margin-top: 1rem;">No PRDs assigned to this sprint yet.</p>
+    {% endif %}
+
+    {% if available_prds %}
+    <form method="post" action="/sprints/{{ sprint.id }}/prds" style="display: flex; gap: 0.5rem; align-items: center; margin-top: 1rem;">
+        <select name="prd_id" style="
+            padding: 0.4rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.875rem;
+            flex: 1;
+        ">
+            {% for prd in available_prds %}
+            <option value="{{ prd.id }}">{{ prd.id }} - {{ prd.title[:40] }}{% if prd.title|length > 40 %}...{% endif %}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary" style="padding: 0.4rem 0.75rem; font-size: 0.875rem; white-space: nowrap;">Add to Sprint</button>
+    </form>
+    {% elif not prds %}
+    <p style="color: var(--text-muted); margin-top: 0.5rem; font-size: 0.875rem;">Generate PRDs with <code>/sdlc:prd-generate</code> first.</p>
+    {% endif %}
 </div>
-{% endif %}
 
 <div class="card">
     <h3>Tasks in Sprint (via PRDs)</h3>
@@ -79,21 +141,37 @@
     <table style="margin-top: 1rem;">
         <thead>
             <tr>
-                <th>ID</th>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Priority</th>
+                <th data-sort="text">ID</th>
+                <th data-sort="text">Title</th>
+                <th data-sort="status">Status</th>
+                <th data-sort="priority">Priority</th>
                 <th>PRD</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for task in tasks %}
             <tr>
                 <td><a href="/tasks/{{ task.id }}">{{ task.id }}</a></td>
-                <td>{{ task.title[:50] }}{% if task.title|length > 50 %}...{% endif %}</td>
+                <td class="cell-title" title="{{ task.title }}">{{ task.title }}</td>
                 <td><span class="status-{{ task.status }}">{{ task.status.replace('_', ' ').title() }}</span></td>
                 <td><span class="priority-{{ task.priority }}">{{ task.priority.title() }}</span></td>
                 <td>{% if task.prd_id %}<a href="/prds/{{ task.prd_id }}">{{ task.prd_id }}</a>{% else %}-{% endif %}</td>
+                <td>
+                    {% if task.status == 'pending' %}
+                    <button class="btn-copy-sm" onclick="copyCommand('/sdlc:task-start {{ task.id }}')" title="Copy start command">
+                        Start
+                    </button>
+                    {% elif task.status == 'in_progress' %}
+                    <button class="btn btn-primary"
+                            hx-post="/tasks/{{ task.id }}/status?status=completed"
+                            hx-swap="none"
+                            onclick="setTimeout(function(){ location.reload(); }, 300)"
+                            style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                        Complete
+                    </button>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -105,20 +183,6 @@
     {% endif %}
 </div>
 
-{% if sprint.task_counts %}
-<div class="card">
-    <h3>Progress</h3>
-    <div class="stats-grid" style="margin-top: 1rem;">
-        {% for status, count in sprint.task_counts.items() %}
-        <div class="stat-card">
-            <div class="stat-value status-{{ status }}">{{ count }}</div>
-            <div class="stat-label">{{ status.replace('_', ' ').title() }}</div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-{% endif %}
-
 <script>
     async function updateStatus(status) {
         try {
@@ -128,12 +192,14 @@
                 body: JSON.stringify({ status: status })
             });
 
-            if (!response.ok) {
-                alert('Failed to update status');
+            if (response.ok) {
+                showToast('Sprint status updated to ' + status);
+            } else {
+                showToast('Failed to update status', 'error');
             }
         } catch (error) {
             console.error('Update status error:', error);
-            alert('Failed to update status');
+            showToast('Failed to update status', 'error');
         }
     }
 </script>
