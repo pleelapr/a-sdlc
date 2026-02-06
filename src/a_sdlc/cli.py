@@ -3,6 +3,7 @@ Main CLI for a-sdlc package.
 
 Provides commands for:
 - install: Deploy skill templates to Claude Code
+- uninstall: Remove all a-sdlc components
 - setup-mcp: Install and configure Serena MCP
 - doctor: System diagnostics
 - plugins: Plugin management
@@ -23,6 +24,14 @@ from a_sdlc.installer import Installer
 from a_sdlc.mcp_setup import (
     setup_serena,
     verify_setup,
+)
+from a_sdlc.monitoring_setup import (
+    check_docker_available,
+    configure_langfuse_keys,
+    setup_monitoring,
+    verify_monitoring_setup,
+    check_services_health,
+    MONITORING_DIR,
 )
 from a_sdlc.plugins import get_plugin_manager
 
@@ -101,7 +110,12 @@ def serve(transport: str, host: str, port: int) -> None:
     is_flag=True,
     help="Also install and configure Serena MCP server"
 )
-def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool) -> None:
+@click.option(
+    "--with-monitoring",
+    is_flag=True,
+    help="Set up monitoring stack (Langfuse + SigNoz)"
+)
+def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool) -> None:
     """Deploy skill templates to Claude Code.
 
     Installs the /sdlc:* commands into your Claude Code configuration,
@@ -109,10 +123,11 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
 
     Examples:
 
-        a-sdlc install                # Install all templates
-        a-sdlc install --list         # List installed templates
-        a-sdlc install --force        # Reinstall all templates
-        a-sdlc install --with-serena  # Also set up Serena MCP
+        a-sdlc install                    # Install all templates
+        a-sdlc install --list             # List installed templates
+        a-sdlc install --force            # Reinstall all templates
+        a-sdlc install --with-serena      # Also set up Serena MCP
+        a-sdlc install --with-monitoring  # Also set up monitoring
     """
     installer = Installer(target_dir=target)
 
@@ -145,6 +160,11 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
         if with_serena:
             console.print()
             _setup_serena_mcp(force=force)
+
+        # Set up monitoring if requested
+        if with_monitoring:
+            console.print()
+            _setup_monitoring(force=force)
 
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")
@@ -220,6 +240,228 @@ def _setup_serena_mcp(force: bool = False) -> bool:
         return False
 
 
+def _setup_monitoring(force: bool = False) -> bool:
+    """Set up monitoring stack (Langfuse + SigNoz).
+
+    Returns:
+        True if setup succeeded, False otherwise.
+    """
+    console.print(Panel(
+        "[bold]Setting up Monitoring Stack[/bold]\n\n"
+        "This will install:\n"
+        "  - Langfuse (conversation tracing)\n"
+        "  - SigNoz (OTEL metrics & logs)\n\n"
+        f"Files: [cyan]{MONITORING_DIR}[/cyan]",
+        border_style="blue"
+    ))
+
+    success, message, verification = setup_monitoring(force=force)
+
+    if success:
+        console.print(f"[green]{message}[/green]")
+        console.print()
+
+        if verification:
+            table = Table(title="Monitoring Setup")
+            table.add_column("Check", style="cyan")
+            table.add_column("Status")
+
+            table.add_row(
+                "Monitoring Files",
+                "[green]Installed[/green]" if verification.get("files_ready") else "[red]Missing[/red]"
+            )
+            table.add_row(
+                "SigNoz",
+                "[green]Cloned[/green]" if verification.get("signoz_cloned") else "[red]Not cloned[/red]"
+            )
+            table.add_row(
+                "Stop Hook",
+                "[green]Registered[/green]" if verification.get("hook_registered") else "[yellow]Not registered[/yellow]"
+            )
+            table.add_row(
+                "OTEL Environment",
+                "[green]Configured[/green]" if verification.get("otel_configured") else "[yellow]Not configured[/yellow]"
+            )
+            table.add_row(
+                "Langfuse API Keys",
+                "[green]Configured[/green]" if verification.get("langfuse_keys_configured") else "[yellow]Not yet (run: a-sdlc monitoring configure)[/yellow]"
+            )
+
+            console.print(table)
+
+        console.print()
+        console.print("[bold]Next steps:[/bold]")
+        console.print(f"  1. Start services:   [cyan]a-sdlc monitoring start[/cyan]")
+        console.print(f"  2. Open Langfuse:    [cyan]http://localhost:13000[/cyan]")
+        console.print(f"     Login:            admin@langfuse.local / changeme123")
+        console.print(f"     Go to Settings > API Keys > Create")
+        console.print(f"  3. Configure keys:   [cyan]a-sdlc monitoring configure[/cyan]")
+        console.print(f"  4. Restart Claude Code")
+
+        return True
+    else:
+        console.print(f"[red]{message}[/red]")
+        return False
+
+
+# =============================================================================
+# Uninstall Command
+# =============================================================================
+
+
+@main.command()
+@click.option(
+    "--include-data",
+    is_flag=True,
+    help="Also remove project data (~/.a-sdlc/ including PRDs, tasks, database)"
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview what would be removed without making changes"
+)
+@click.option(
+    "-y", "--yes",
+    is_flag=True,
+    help="Skip confirmation prompt"
+)
+def uninstall(include_data: bool, dry_run: bool, yes: bool) -> None:
+    """Remove all a-sdlc components from the system.
+
+    By default, preserves project data (PRDs, tasks, database).
+    Use --include-data for a complete wipe.
+
+    The Python package itself is not uninstalled; run
+    `uv tool uninstall a-sdlc` or `pip uninstall a-sdlc` separately.
+
+    \b
+    Examples:
+        a-sdlc uninstall                  # Remove tooling, keep data
+        a-sdlc uninstall --include-data   # Remove everything
+        a-sdlc uninstall --dry-run        # Preview changes
+        a-sdlc uninstall -y               # Skip confirmation
+    """
+    from a_sdlc.uninstall import build_uninstall_plan, execute_uninstall
+
+    plan = build_uninstall_plan(include_data=include_data)
+
+    # Display plan
+    _display_uninstall_plan(plan)
+
+    if dry_run:
+        console.print()
+        console.print("[yellow]Dry run — no changes made.[/yellow]")
+        return
+
+    # Nothing to do?
+    if not _plan_has_work(plan):
+        console.print()
+        console.print("[green]Nothing to uninstall.[/green]")
+        return
+
+    # Confirmation
+    if not yes:
+        console.print()
+        if include_data:
+            console.print(
+                "[bold red]WARNING: --include-data will permanently delete "
+                "all PRDs, tasks, and the database.[/bold red]"
+            )
+        confirmed = click.confirm("Proceed with uninstall?", default=False)
+        if not confirmed:
+            console.print("[dim]Cancelled.[/dim]")
+            return
+
+    # Execute
+    result = execute_uninstall(plan)
+
+    # Display results
+    console.print()
+    if result.actions:
+        console.print(Panel(
+            "\n".join(f"[green]  {a}[/green]" for a in result.actions),
+            title="[bold]Actions Taken[/bold]",
+            border_style="green",
+        ))
+
+    if result.warnings:
+        for w in result.warnings:
+            console.print(f"[yellow]  Warning: {w}[/yellow]")
+
+    if result.errors:
+        for e in result.errors:
+            console.print(f"[red]  Error: {e}[/red]")
+        sys.exit(1)
+
+    console.print()
+    console.print("[green]Uninstall complete.[/green]")
+    console.print()
+    console.print("[dim]Notes:[/dim]")
+    console.print("  - To remove the Python package: [cyan]uv tool uninstall a-sdlc[/cyan]")
+    console.print("  - Per-project [cyan].sdlc/[/cyan] directories must be removed manually from each repo.")
+
+
+def _display_uninstall_plan(plan) -> None:
+    """Display a table summarizing what will be removed."""
+    table = Table(title="Uninstall Plan")
+    table.add_column("Component", style="cyan")
+    table.add_column("Status")
+    table.add_column("Action")
+
+    table.add_row(
+        "asdlc MCP server",
+        "[green]Found[/green]" if plan.has_asdlc_mcp else "[dim]Not found[/dim]",
+        "Remove from ~/.claude.json" if plan.has_asdlc_mcp else "Skip",
+    )
+    table.add_row(
+        "serena MCP server",
+        "[green]Found[/green]" if plan.has_serena_mcp else "[dim]Not found[/dim]",
+        "Remove from settings.json" if plan.has_serena_mcp else "Skip",
+    )
+    table.add_row(
+        "Skill templates",
+        f"[green]{plan.skill_template_count} files[/green]" if plan.skill_template_count else "[dim]None[/dim]",
+        f"Delete {plan.skill_template_count} templates" if plan.skill_template_count else "Skip",
+    )
+    table.add_row(
+        "Monitoring hook",
+        "[green]Found[/green]" if plan.has_monitoring_hook else "[dim]Not found[/dim]",
+        "Remove from settings.json" if plan.has_monitoring_hook else "Skip",
+    )
+    table.add_row(
+        "OTEL/Langfuse env vars",
+        f"[green]{len(plan.managed_env_keys)} keys[/green]" if plan.managed_env_keys else "[dim]None[/dim]",
+        f"Remove {len(plan.managed_env_keys)} key(s)" if plan.managed_env_keys else "Skip",
+    )
+    table.add_row(
+        "Monitoring files",
+        f"[green]{plan.monitoring_dir}[/green]" if plan.has_monitoring_dir else "[dim]Not found[/dim]",
+        "Delete directory" if plan.has_monitoring_dir else "Skip",
+    )
+    table.add_row(
+        "Project data",
+        f"[green]{plan.data_dir}[/green]" if plan.has_data_dir else "[dim]Not found[/dim]",
+        "[red]Delete directory[/red]" if plan.include_data and plan.has_data_dir
+        else "[dim]Preserved (use --include-data)[/dim]" if plan.has_data_dir
+        else "Skip",
+    )
+
+    console.print(table)
+
+
+def _plan_has_work(plan) -> bool:
+    """Check if the plan has anything to do."""
+    return any([
+        plan.has_asdlc_mcp,
+        plan.has_serena_mcp,
+        plan.skill_template_count > 0,
+        plan.has_monitoring_hook,
+        plan.managed_env_keys,
+        plan.has_monitoring_dir,
+        plan.include_data and plan.has_data_dir,
+    ])
+
+
 @main.command("setup-mcp")
 @click.option(
     "--force", "-f",
@@ -251,6 +493,204 @@ def setup_mcp(force: bool) -> None:
     console.print("  1. Restart Claude Code to load the new MCP server")
     console.print("  2. Run [cyan]/sdlc:init[/cyan] in your project")
     console.print("  3. Run [cyan]/sdlc:scan[/cyan] to generate artifacts")
+
+
+# =============================================================================
+# Monitoring Commands
+# =============================================================================
+
+
+@main.group()
+def monitoring() -> None:
+    """Manage monitoring stack (Langfuse + SigNoz).
+
+    Provides commands to configure, start, stop, and check the
+    monitoring stack for Claude Code observability.
+
+    \b
+      a-sdlc monitoring configure   Set Langfuse API keys
+      a-sdlc monitoring start       Start Docker services
+      a-sdlc monitoring stop        Stop Docker services
+      a-sdlc monitoring status      Check services health
+    """
+    pass
+
+
+@monitoring.command("configure")
+def monitoring_configure() -> None:
+    """Configure Langfuse API keys interactively.
+
+    After starting the monitoring stack, log in to Langfuse at
+    http://localhost:13000 (admin@langfuse.local / changeme123),
+    create API keys under Settings > API Keys, then run this command.
+
+    Examples:
+
+        a-sdlc monitoring configure
+    """
+    console.print(Panel(
+        "[bold]Langfuse API Key Configuration[/bold]\n\n"
+        "Get your keys from http://localhost:13000\n"
+        "  Login: admin@langfuse.local / changeme123\n"
+        "  Go to: Settings > API Keys > Create",
+        border_style="blue"
+    ))
+
+    secret_key = click.prompt("Langfuse Secret Key (sk-lf-...)", hide_input=True)
+    public_key = click.prompt("Langfuse Public Key (pk-lf-...)")
+    host = click.prompt("Langfuse Host", default="http://localhost:13000")
+
+    success, message = configure_langfuse_keys(secret_key, public_key, host)
+
+    if success:
+        console.print(f"[green]{message}[/green]")
+        console.print()
+        console.print("Restart Claude Code for the keys to take effect.")
+    else:
+        console.print(f"[red]{message}[/red]")
+        sys.exit(1)
+
+
+@monitoring.command("start")
+def monitoring_start() -> None:
+    """Start monitoring Docker services.
+
+    Runs `docker compose up -d` in ~/.a-sdlc/monitoring/.
+
+    Examples:
+
+        a-sdlc monitoring start
+    """
+    import subprocess
+
+    if not MONITORING_DIR.exists():
+        console.print("[red]Monitoring not installed.[/red]")
+        console.print("Run [cyan]a-sdlc install --with-monitoring[/cyan] first.")
+        sys.exit(1)
+
+    compose_file = MONITORING_DIR / "docker-compose.yaml"
+    if not compose_file.exists():
+        console.print("[red]docker-compose.yaml not found.[/red]")
+        console.print("Run [cyan]a-sdlc install --with-monitoring --force[/cyan] to reinstall.")
+        sys.exit(1)
+
+    console.print("[bold]Starting monitoring services...[/bold]")
+    console.print(f"[dim]Working directory: {MONITORING_DIR}[/dim]")
+    console.print()
+
+    result = subprocess.run(
+        ["docker", "compose", "up", "-d"],
+        cwd=str(MONITORING_DIR),
+    )
+
+    if result.returncode == 0:
+        console.print()
+        console.print("[green]Monitoring services started![/green]")
+        console.print()
+        console.print("Dashboards:")
+        console.print("  Langfuse: [cyan]http://localhost:13000[/cyan]")
+        console.print("  SigNoz:   [cyan]http://localhost:8080[/cyan]")
+    else:
+        console.print()
+        console.print("[red]Failed to start services.[/red]")
+        sys.exit(1)
+
+
+@monitoring.command("stop")
+def monitoring_stop() -> None:
+    """Stop monitoring Docker services.
+
+    Runs `docker compose down` in ~/.a-sdlc/monitoring/.
+
+    Examples:
+
+        a-sdlc monitoring stop
+    """
+    import subprocess
+
+    if not MONITORING_DIR.exists():
+        console.print("[yellow]Monitoring directory not found. Nothing to stop.[/yellow]")
+        return
+
+    console.print("[bold]Stopping monitoring services...[/bold]")
+
+    result = subprocess.run(
+        ["docker", "compose", "down"],
+        cwd=str(MONITORING_DIR),
+    )
+
+    if result.returncode == 0:
+        console.print("[green]Monitoring services stopped.[/green]")
+    else:
+        console.print("[red]Failed to stop services.[/red]")
+        sys.exit(1)
+
+
+@monitoring.command("status")
+def monitoring_status() -> None:
+    """Show monitoring setup and services health.
+
+    Checks file installation, settings configuration,
+    and whether Docker services are reachable.
+
+    Examples:
+
+        a-sdlc monitoring status
+    """
+    console.print(Panel(
+        "[bold]Monitoring Status[/bold]",
+        border_style="blue"
+    ))
+
+    # Setup verification
+    verification = verify_monitoring_setup()
+
+    setup_table = Table(title="Setup")
+    setup_table.add_column("Component", style="cyan")
+    setup_table.add_column("Status")
+
+    setup_checks = [
+        ("Monitoring Files", verification.get("files_ready", False)),
+        ("SigNoz Clone", verification.get("signoz_cloned", False)),
+        ("Stop Hook", verification.get("hook_registered", False)),
+        ("OTEL Environment", verification.get("otel_configured", False)),
+        ("Langfuse API Keys", verification.get("langfuse_keys_configured", False)),
+    ]
+
+    for name, ok in setup_checks:
+        status = "[green]OK[/green]" if ok else "[yellow]Not configured[/yellow]"
+        setup_table.add_row(name, status)
+
+    console.print(setup_table)
+    console.print()
+
+    # Services health
+    health = check_services_health()
+
+    health_table = Table(title="Services")
+    health_table.add_column("Service", style="cyan")
+    health_table.add_column("Status")
+    health_table.add_column("URL", style="dim")
+
+    langfuse_ok = health.get("langfuse_reachable", False)
+    health_table.add_row(
+        "Langfuse",
+        "[green]Running[/green]" if langfuse_ok else "[red]Not reachable[/red]",
+        "http://localhost:13000"
+    )
+
+    signoz_ok = health.get("signoz_reachable", False)
+    health_table.add_row(
+        "SigNoz",
+        "[green]Running[/green]" if signoz_ok else "[red]Not reachable[/red]",
+        "http://localhost:8080"
+    )
+
+    console.print(health_table)
+
+    if not langfuse_ok or not signoz_ok:
+        console.print()
+        console.print("[dim]Run [cyan]a-sdlc monitoring start[/cyan] to start services.[/dim]")
 
 
 @main.command()
@@ -328,6 +768,50 @@ def doctor() -> None:
         "status": "pass",
         "detail": ", ".join(plugins) if plugins else "None"
     })
+
+    # Monitoring checks
+    docker_ok = check_docker_available()
+    checks.append({
+        "name": "Docker",
+        "status": "pass" if docker_ok else "warn",
+        "detail": "Available" if docker_ok else "Not found (needed for monitoring)"
+    })
+
+    mon_verification = verify_monitoring_setup()
+
+    checks.append({
+        "name": "Monitoring Files",
+        "status": "pass" if mon_verification.get("files_ready") else "warn",
+        "detail": "Installed" if mon_verification.get("files_ready") else "Not installed. Run: a-sdlc install --with-monitoring"
+    })
+
+    checks.append({
+        "name": "Langfuse Hook",
+        "status": "pass" if mon_verification.get("hook_registered") else "warn",
+        "detail": "Registered" if mon_verification.get("hook_registered") else "Not registered"
+    })
+
+    checks.append({
+        "name": "OTEL Environment",
+        "status": "pass" if mon_verification.get("otel_configured") else "warn",
+        "detail": "Configured" if mon_verification.get("otel_configured") else "Not configured"
+    })
+
+    if mon_verification.get("files_ready"):
+        health = check_services_health()
+        langfuse_ok = health.get("langfuse_reachable", False)
+        signoz_ok = health.get("signoz_reachable", False)
+
+        checks.append({
+            "name": "Langfuse Service",
+            "status": "pass" if langfuse_ok else "warn",
+            "detail": "http://localhost:13000" if langfuse_ok else "Not reachable. Run: a-sdlc monitoring start"
+        })
+        checks.append({
+            "name": "SigNoz Service",
+            "status": "pass" if signoz_ok else "warn",
+            "detail": "http://localhost:8080" if signoz_ok else "Not reachable. Run: a-sdlc monitoring start"
+        })
 
     # Display results
     table = Table(show_header=True, header_style="bold")

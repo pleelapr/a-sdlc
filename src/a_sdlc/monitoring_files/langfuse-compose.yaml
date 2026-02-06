@@ -1,26 +1,6 @@
-# Claude Code Monitoring Stack (SigNoz + Langfuse)
-#
-# Usage:
-#   docker compose up -d        # Start all services
-#   docker compose down          # Stop all services
-#   docker compose ps            # Check status
-#   docker compose down -v       # Stop and delete all data
-#
-# After starting, configure Claude Code by sourcing the env file:
-#   source ./claude-code-env.sh
-#
-# SigNoz Dashboard: http://localhost:8080
-# Langfuse Dashboard: http://localhost:13000
-# OTLP gRPC: localhost:4317
-# OTLP HTTP: localhost:4318
-
-include:
-  - path: signoz/deploy/docker/docker-compose.yaml
-
-# ---------------------------------------------------------------------------
 # Langfuse (self-hosted) – conversation tracing for Claude Code
 # Based on: https://github.com/langfuse/langfuse/blob/main/docker-compose.yml
-# ---------------------------------------------------------------------------
+# Deployed to ~/.a-sdlc/monitoring/ by `a-sdlc install --with-monitoring`
 
 networks:
   langfuse-net:
