@@ -22,6 +22,7 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
 
 📋 PRD Management
 
+  /sdlc:ideate "<idea>"        Explore a vague idea → one or more PRDs
   /sdlc:prd-generate "<desc>"  Create PRD via interactive Q&A
   /sdlc:prd-import jira <key>  Import Jira issue as PRD
   /sdlc:prd-list               List all PRDs
@@ -119,11 +120,12 @@ All commands use the a-sdlc MCP server tools:
 ```
 1. /sdlc:init                              # Initialize (once per project)
 2. /sdlc:status                            # Check project context
-3. /sdlc:prd-generate "Feature description" # Create PRD
-4. /sdlc:sprint-create "Sprint 1"          # Create sprint
-5. /sdlc:prd-split "prd-id" --sprint SPRINT-01  # Generate tasks
-6. /sdlc:sprint-start SPRINT-01            # Activate sprint
-7. /sdlc:sprint-run SPRINT-01              # Execute tasks
+3. /sdlc:ideate "vague idea"               # (Optional) Explore idea → PRDs
+4. /sdlc:prd-generate "Feature description" # Create PRD (if you know what to build)
+5. /sdlc:sprint-create "Sprint 1"          # Create sprint
+6. /sdlc:prd-split "prd-id" --sprint SPRINT-01  # Generate tasks
+7. /sdlc:sprint-start SPRINT-01            # Activate sprint
+8. /sdlc:sprint-run SPRINT-01              # Execute tasks
 ```
 
 ## Data Storage
