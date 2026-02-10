@@ -19,6 +19,7 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:scan     Full repo scan → generate codebase artifacts
   /sdlc:update   Incremental update of stale artifacts
   /sdlc:status   Show project context and statistics
+  /sdlc:ask      Answer any question about this repository
 
 📋 PRD Management
 

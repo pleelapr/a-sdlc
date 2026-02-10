@@ -1,12 +1,3 @@
----
-hooks:
-  PreToolUse:
-    - matcher: "Edit|Write|Bash|MultiEdit|NotebookEdit"
-      hooks:
-        - type: command
-          command: "~/.a-sdlc/hooks/block-source-edits.sh ideate"
----
-
 # /sdlc:ideate "<initial thought>"
 
 ## Purpose

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A-SDLC is an MCP server that provides SDLC (Software Development Lifecycle) management tools for PRDs, tasks, and sprints with external system integration (Linear, Jira). It also ships slash-command skill templates and a PreToolUse hook for planning-only commands.
+A-SDLC is an MCP server that provides SDLC (Software Development Lifecycle) management tools for PRDs, tasks, and sprints with external system integration (Linear, Jira). It also ships slash-command skill templates.
 
 ## Development Commands
 
@@ -46,7 +46,7 @@ All tests must pass before committing changes.
 ```
 src/a_sdlc/
 ├── cli.py                # Click CLI entry point (a-sdlc command)
-├── installer.py          # Deploys templates → ~/.claude/commands/sdlc/, hooks → ~/.a-sdlc/hooks/, MCP config → ~/.claude.json
+├── installer.py          # Deploys templates → ~/.claude/commands/sdlc/, MCP config → ~/.claude.json
 ├── server/__init__.py    # MCP server (@mcp.tool() decorators), started via `a-sdlc serve` / `uvx a-sdlc serve`
 ├── server/sync.py        # External sync service (Linear, Jira)
 ├── core/database.py      # SQLite schema and operations
@@ -55,16 +55,14 @@ src/a_sdlc/
 ├── plugins/              # Sync plugins: local.py, linear.py, jira.py (entry points in pyproject.toml)
 ├── artifacts/            # Artifact generation: scan → .sdlc/artifacts/
 ├── templates/            # Skill templates (~35 .md files, deployed to ~/.claude/commands/sdlc/)
-├── artifact_templates/   # Mustache content templates (prd.template.md, task.template.md)
-└── hook_files/           # block-source-edits.sh — PreToolUse hook that blocks Bash/Edit/Write for planning-only skills, allows writes to ~/.a-sdlc/ and .sdlc/ paths
+└── artifact_templates/   # Mustache content templates (prd.template.md, task.template.md)
 ```
 
 ### Installer Flow
 
 `a-sdlc install` (via `installer.py`):
 1. Copies `src/a_sdlc/templates/*.md` → `~/.claude/commands/sdlc/`
-2. Copies `hook_files/block-source-edits.sh` → `~/.a-sdlc/hooks/` (chmod 755)
-3. Configures `asdlc` MCP server in `~/.claude.json` (command: `uvx a-sdlc serve`)
+2. Configures `asdlc` MCP server in `~/.claude.json` (command: `uvx a-sdlc serve`)
 
 ### Plugin System
 
@@ -79,7 +77,6 @@ Entry points defined in `pyproject.toml`:
 ```
 ~/.a-sdlc/                          # User-level storage (cross-project)
 ├── data.db                         # SQLite database (metadata + relationships)
-├── hooks/                          # Deployed hook scripts
 └── content/                        # Markdown content files (source of truth)
     └── {project_id}/
         ├── prds/{prd_id}.md
