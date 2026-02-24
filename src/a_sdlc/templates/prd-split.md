@@ -49,6 +49,26 @@ mcp__asdlc__split_prd(prd_id="PROJ-P0001", task_specs=[...])  # CORRECT!
 
 ---
 
+## CRITICAL: Anti-Fluff Rules
+
+**Every task must trace to a specific requirement in the PRD. Zero AI-invented scope.**
+
+- **MUST NOT** create tasks for features, components, or requirements not in the PRD
+- **MUST NOT** add implementation steps that go beyond what the PRD specifies
+- **MUST NOT** pad task content with unnecessary steps, boilerplate, or "nice-to-have" items
+- **MUST NOT** add acceptance criteria the PRD doesn't require
+- **MUST NOT** invent NFRs, error handling patterns, or testing approaches not specified in the PRD
+- **MUST NOT** add tasks for "documentation", "monitoring", "observability", or "cleanup" unless the PRD explicitly requires them
+- **MUST** map every task to a specific FR, NFR, or AC from the PRD
+- **MUST** keep task scope tight — if the PRD says "add a button", the task is about adding a button, not refactoring the entire UI
+- **MUST** ask the user if a task seems necessary but isn't covered by the PRD — never silently add it
+
+**Traceability Rule:** Each task's "Key Requirements" section must cite specific PRD requirement IDs (e.g., FR-001, AC-002). If a task cannot cite a PRD requirement, it should not exist.
+
+**If the PRD is missing something, flag it — do not silently compensate by adding extra tasks.**
+
+---
+
 ## Usage
 
 ```
@@ -103,6 +123,49 @@ Store results:
 
 ---
 
+### Step 1.5: Design Document Gate
+
+**HARD GATE:** A design document is required before splitting a PRD into tasks.
+
+Check for an existing design document:
+
+```
+design = mcp__asdlc__get_design(prd_id)
+```
+
+**If design NOT found** (`design.status == "not_found"`):
+
+```
+BLOCKED: No design document found for PRD {prd_id}.
+
+A design document is required before splitting a PRD into tasks.
+The design doc ensures tasks are grounded in architectural decisions.
+
+Run this command first:
+  /sdlc:prd-architect "{prd_id}"
+
+Then re-run:
+  /sdlc:prd-split "{prd_id}"
+```
+
+**STOP HERE. Do not proceed to investigation or task creation.**
+
+**If design found** (`design.status == "ok"`):
+
+Store design content for use in Phase 1 and Phase 2:
+- `design_content` - Full design document markdown
+- `design_decisions` - Extract key decisions from the Decision and Approach sections
+
+Display confirmation:
+```
+Design document found for PRD {prd_id}
+Design decisions will be used to guide task breakdown.
+```
+
+Proceed to Step 2.
+
+---
+
 ### Step 2: Phase 1 - Investigation (Explore Agent)
 
 Launch an **Explore** agent to investigate the codebase:
@@ -120,6 +183,14 @@ Investigate the codebase to gather context for implementing this PRD.
 
 ## PRD Content
 {prd_content}
+
+## Design Document
+{design_content}
+
+Use the design document to:
+- Focus investigation on components identified in the Impact Analysis section
+- Verify file paths mentioned in the design actually exist
+- Find implementation patterns mentioned in the Approach section
 
 ## Investigation Tasks
 
@@ -214,6 +285,16 @@ Design an optimal task breakdown for implementing this PRD.
 ## Investigation Report
 {investigation_report}
 
+## Design Document
+{design_content}
+
+Use the design document to:
+- Align tasks with design decisions — each task should implement specific design decisions
+- Use file paths from the Impact Analysis for accurate "Files to Modify" lists
+- Follow patterns specified in the Approach section
+- Ensure the task breakdown covers ALL design decisions (100% coverage required)
+- Include a "Design Compliance" mapping for each task showing which design decisions it implements
+
 ## Task Design Guidelines
 
 ### Granularity: {granularity}
@@ -281,6 +362,54 @@ Components involved: [list]
 
 ---
 
+### Step 3.5: Design Decision Traceability Matrix
+
+Before presenting tasks for approval, generate and verify a traceability matrix.
+
+**3.5.1: Extract Design Decisions**
+From the design document, extract each key decision from the Decision and Approach sections.
+
+**3.5.2: Map Decisions to Tasks**
+For each design decision, identify which task(s) implement it:
+
+```
+## Design Decision Traceability Matrix
+
+| Design Decision | Implementing Task(s) | Coverage |
+|----------------|----------------------|----------|
+| {decision_1}   | {task_id_1}, {task_id_2} | Covered |
+| {decision_2}   | {task_id_3}              | Covered |
+| {decision_3}   | —                        | GAP     |
+```
+
+**3.5.3: Verify 100% Coverage**
+Every design decision must have at least one implementing task.
+
+If gaps found:
+```
+AskUserQuestion({
+  questions: [{
+    question: "Design traceability found {N} uncovered decisions. How to proceed?",
+    header: "Traceability",
+    options: [
+      { label: "Add tasks", description: "Go back and add tasks to cover the gaps" },
+      { label: "Acknowledge gaps", description: "Gaps are intentional — proceed with current breakdown" },
+      { label: "Cancel", description: "Abort and rethink the breakdown" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If 100% covered:
+```
+Design Traceability: All {N} design decisions are covered by the task breakdown.
+```
+
+Present the matrix to the user as part of the task breakdown in Step 4.
+
+---
+
 ### Step 4: User Approval
 
 Present the task breakdown to the user for review:
@@ -307,6 +436,63 @@ Allow the user to:
 - Request more or less detail
 
 **Loop until user approves or cancels.**
+
+---
+
+### Step 4.5: Lesson-Learn Preflight Check
+
+Before generating task content, validate against documented lessons:
+
+**4.5.1: Load Lessons**
+```
+Read: .sdlc/lesson-learn.md       → Project-specific lessons
+Read: ~/.a-sdlc/lesson-learn.md   → Global lessons (if exists)
+```
+
+If neither file exists, display:
+> No lesson-learn.md found. Skipping preflight. Consider running `/sdlc:init` to set up lessons tracking.
+
+Proceed to Step 5.
+
+**4.5.2: Filter by Relevance**
+Match lessons to PRD components/categories. A lesson is relevant if:
+- Its category matches a component in the proposed task breakdown
+- It references a pattern used in the affected files
+
+**4.5.3: Present Lessons by Priority**
+
+For MUST-level lessons (blocking):
+```
+AskUserQuestion({
+  questions: [{
+    question: "These MUST-level lessons apply. Acknowledge before proceeding:",
+    header: "MUST lessons",
+    options: [
+      { label: "Acknowledged", description: "I've reviewed these and the task breakdown accounts for them" },
+      { label: "Adjust tasks", description: "Go back and modify the task breakdown to address these" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+For SHOULD-level lessons (warning):
+```
+AskUserQuestion({
+  questions: [{
+    question: "These SHOULD-level lessons may apply. Review before proceeding:",
+    header: "SHOULD lessons",
+    options: [
+      { label: "Noted", description: "Reviewed — the task breakdown addresses these" },
+      { label: "Adjust tasks", description: "Go back and modify the task breakdown" },
+      { label: "Skip", description: "Not relevant to this PRD" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+Display MAY-level lessons as informational text (no interaction required).
 
 ---
 
@@ -345,6 +531,15 @@ Fallback to: Default template structure
 ### Key Requirements
 
 {requirements mapped from PRD}
+
+### Design Compliance
+
+This task implements the following design decisions:
+- **[Decision from design doc]**: [Brief description]
+
+**Implementation guidance from design doc:**
+- [Relevant approach/pattern from design's Approach section]
+- [Relevant file paths from design's Impact Analysis]
 
 ### Technical Notes
 
@@ -437,6 +632,65 @@ Fallback to: Default template structure
 
 {explicit statement of what NOT to do}
 ```
+
+---
+
+### Step 5.5: Quality Gate — Task Completeness Verification
+
+Before persisting tasks, verify the breakdown covers the PRD completely:
+
+**5.5.1: Requirements Coverage Check**
+Cross-reference the PRD's Functional Requirements against the proposed tasks:
+- List each FR and the task(s) that address it
+- Flag any FRs with no corresponding task
+
+**5.5.2: Testing Coverage Check**
+Verify at least one task includes:
+- Unit test scope for new functionality
+- Integration test scope if multiple components are involved
+
+**5.5.3: Integration Check**
+If the PRD affects 2+ components, verify:
+- At least one task covers wiring/integration between components
+- Dependencies between components are reflected in task dependencies
+
+**5.5.4: Present Results**
+
+If gaps found:
+```
+AskUserQuestion({
+  questions: [{
+    question: "Quality gate found potential gaps. How to proceed?",
+    header: "Quality gate",
+    options: [
+      { label: "Add tasks", description: "Go back and add missing tasks to cover the gaps" },
+      { label: "Acknowledged", description: "Gaps are intentional — proceed with current breakdown" },
+      { label: "Cancel", description: "Abort and rethink the breakdown" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If no gaps found, display:
+> Quality gate passed. All requirements covered, tests included, integration tasks present.
+
+**5.5.5: Log Quality Gate Corrections**
+
+If the quality gate found gaps that were addressed (tasks added/modified), log the corrections:
+
+```
+mcp__asdlc__log_correction(
+  context_type="prd",
+  context_id="{prd_id}",
+  category="{category}",
+  description="{gap found and how it was addressed}"
+)
+```
+
+For example, if a missing FR was caught and a task was added, log it as `task-completeness`.
+
+Proceed to Step 6: Persistence.
 
 ---
 

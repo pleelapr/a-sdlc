@@ -789,3 +789,501 @@ class TestEnsureGitignoreEntry:
 
         content = gitignore.read_text()
         assert content == "node_modules/\n.worktrees/\n"
+
+
+class TestLogCorrection:
+    """Test log_correction() MCP tool."""
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_valid_input_creates_file(self, mock_getcwd, mock_get_db, tmp_path):
+        """Valid input creates corrections.log with correct format."""
+        from a_sdlc.server import log_correction
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        project = _make_project(str(tmp_path))
+        mock_db.get_project_by_path.return_value = project
+        mock_db.get_project.return_value = project
+        mock_db.update_project_accessed.return_value = None
+
+        result = log_correction(
+            context_type="task",
+            context_id="PROJ-T00001",
+            category="testing",
+            description="Added missing edge case tests",
+        )
+
+        assert result["status"] == "logged"
+        assert result["entry"]["context"] == "task:PROJ-T00001"
+        assert result["entry"]["category"] == "testing"
+        assert result["entry"]["description"] == "Added missing edge case tests"
+
+        log_file = tmp_path / ".sdlc" / "corrections.log"
+        assert log_file.exists()
+        content = log_file.read_text()
+        assert "task:PROJ-T00001" in content
+        assert "testing" in content
+        assert "Added missing edge case tests" in content
+
+    def test_invalid_category_returns_error(self):
+        """Invalid category returns error without writing."""
+        from a_sdlc.server import log_correction
+
+        result = log_correction(
+            context_type="task",
+            context_id="PROJ-T00001",
+            category="invalid-cat",
+            description="Some fix",
+        )
+
+        assert result["status"] == "error"
+        assert "invalid-cat" in result["message"].lower() or "invalid" in result["message"].lower()
+
+    def test_invalid_context_type_returns_error(self):
+        """Invalid context_type returns error without writing."""
+        from a_sdlc.server import log_correction
+
+        result = log_correction(
+            context_type="unknown",
+            context_id="X",
+            category="testing",
+            description="Some fix",
+        )
+
+        assert result["status"] == "error"
+        assert "unknown" in result["message"].lower() or "context_type" in result["message"].lower()
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_creates_file_if_missing(self, mock_getcwd, mock_get_db, tmp_path):
+        """Creates .sdlc/corrections.log if it does not exist."""
+        from a_sdlc.server import log_correction
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        project = _make_project(str(tmp_path))
+        mock_db.get_project_by_path.return_value = project
+        mock_db.get_project.return_value = project
+        mock_db.update_project_accessed.return_value = None
+
+        log_file = tmp_path / ".sdlc" / "corrections.log"
+        assert not log_file.exists()
+
+        result = log_correction(
+            context_type="prd",
+            context_id="PROJ-P0001",
+            category="documentation",
+            description="Fixed missing section",
+        )
+
+        assert result["status"] == "logged"
+        assert log_file.exists()
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_appends_to_existing_file(self, mock_getcwd, mock_get_db, tmp_path):
+        """Appends to existing corrections.log, preserving previous entries."""
+        from a_sdlc.server import log_correction
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        project = _make_project(str(tmp_path))
+        mock_db.get_project_by_path.return_value = project
+        mock_db.get_project.return_value = project
+        mock_db.update_project_accessed.return_value = None
+
+        sdlc_dir = tmp_path / ".sdlc"
+        sdlc_dir.mkdir()
+        log_file = sdlc_dir / "corrections.log"
+        log_file.write_text("2026-01-01T00:00:00Z | task:OLD-001 | testing | Old entry\n")
+
+        log_correction(
+            context_type="sprint",
+            context_id="PROJ-S0001",
+            category="process",
+            description="New entry",
+        )
+
+        content = log_file.read_text()
+        lines = content.strip().split("\n")
+        assert len(lines) == 2
+        assert "OLD-001" in lines[0]
+        assert "PROJ-S0001" in lines[1]
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_no_project_falls_back_to_cwd(self, mock_getcwd, mock_get_db, tmp_path):
+        """When no project context exists, falls back to os.getcwd()."""
+        from a_sdlc.server import log_correction
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_project_by_path.return_value = None
+
+        result = log_correction(
+            context_type="ad-hoc",
+            context_id="none",
+            category="code-quality",
+            description="Fixed linting issues",
+        )
+
+        assert result["status"] == "logged"
+        log_file = tmp_path / ".sdlc" / "corrections.log"
+        assert log_file.exists()
+        assert "ad-hoc:none" in log_file.read_text()
+
+    def test_empty_description_returns_error(self):
+        """Empty description returns error."""
+        from a_sdlc.server import log_correction
+
+        result = log_correction(
+            context_type="task",
+            context_id="PROJ-T00001",
+            category="testing",
+            description="",
+        )
+
+        assert result["status"] == "error"
+        assert "empty" in result["message"].lower() or "description" in result["message"].lower()
+
+
+# =============================================================================
+# init_project -- init_files context for existing projects
+# =============================================================================
+
+
+class TestInitProjectExistingContext:
+    """Test that init_project() returns init_files for existing projects."""
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_returns_init_files_all_present(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """When project exists and all init files are present, init_files all True."""
+        from a_sdlc.server import init_project
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+
+        # Create all init files
+        (mock_project_dir / "CLAUDE.md").write_text("# CLAUDE.md")
+        sdlc_dir = mock_project_dir / ".sdlc"
+        sdlc_dir.mkdir()
+        (sdlc_dir / "lesson-learn.md").write_text("# Lessons")
+
+        result = init_project()
+
+        assert result["status"] == "exists"
+        assert result["init_files"]["claude_md"] is True
+        assert result["init_files"]["lesson_learn"] is True
+        assert result["init_files"]["sdlc_dir"] is True
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_returns_init_files_none_present(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """When project exists but no init files, init_files all False."""
+        from a_sdlc.server import init_project
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+
+        result = init_project()
+
+        assert result["status"] == "exists"
+        assert result["init_files"]["claude_md"] is False
+        assert result["init_files"]["lesson_learn"] is False
+        assert result["init_files"]["sdlc_dir"] is False
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_returns_init_files_partial(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """When project exists with only CLAUDE.md, init_files reflects that."""
+        from a_sdlc.server import init_project
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+
+        # Only create CLAUDE.md
+        (mock_project_dir / "CLAUDE.md").write_text("# CLAUDE.md")
+
+        result = init_project()
+
+        assert result["status"] == "exists"
+        assert result["init_files"]["claude_md"] is True
+        assert result["init_files"]["lesson_learn"] is False
+        assert result["init_files"]["sdlc_dir"] is False
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_still_returns_project_info(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """Existing project response still includes project dict."""
+        from a_sdlc.server import init_project
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        project = _make_project(str(mock_project_dir))
+        mock_db.get_project_by_path.return_value = project
+
+        result = init_project()
+
+        assert result["status"] == "exists"
+        assert result["project"] == project
+        assert "message" in result
+
+
+# =============================================================================
+# Design Document MCP Tools
+# =============================================================================
+
+
+class TestDesignMCPTools:
+    """Test design document MCP tools."""
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_design_no_project(self, mock_get_pid, mock_get_storage):
+        """Test create_design without project context."""
+        from a_sdlc.server import create_design
+
+        mock_get_pid.return_value = None
+
+        result = create_design(prd_id="TEST-P0001", content="# Design")
+        assert result["status"] == "error"
+        assert "No project context" in result["message"]
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_design_prd_not_found(self, mock_get_pid, mock_get_storage):
+        """Test create_design when PRD doesn't exist."""
+        from a_sdlc.server import create_design
+
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_prd.return_value = None
+
+        result = create_design(prd_id="NONEXISTENT", content="# Design")
+        assert result["status"] == "not_found"
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_design_success(self, mock_get_pid, mock_get_storage):
+        """Test successful design creation."""
+        from a_sdlc.server import create_design
+
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_prd.return_value = {"id": "TEST-P0001", "title": "Test PRD"}
+        mock_storage.get_design_by_prd.return_value = None
+        mock_storage.create_design.return_value = {
+            "id": "TEST-P0001",
+            "prd_id": "TEST-P0001",
+            "project_id": "test-project",
+            "content": "# Design",
+        }
+
+        result = create_design(prd_id="TEST-P0001", content="# Design")
+        assert result["status"] == "created"
+        assert result["design"]["prd_id"] == "TEST-P0001"
+        mock_storage.create_design.assert_called_once_with(
+            prd_id="TEST-P0001", project_id="test-project", content="# Design"
+        )
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_design_duplicate(self, mock_get_pid, mock_get_storage):
+        """Test creating duplicate design returns error."""
+        from a_sdlc.server import create_design
+
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_prd.return_value = {"id": "TEST-P0001", "title": "Test PRD"}
+        mock_storage.get_design_by_prd.return_value = {"id": "existing-design"}
+
+        result = create_design(prd_id="TEST-P0001", content="# Design")
+        assert result["status"] == "error"
+        assert "already exists" in result["message"]
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_design_default_empty_content(self, mock_get_pid, mock_get_storage):
+        """Test create_design with default empty content."""
+        from a_sdlc.server import create_design
+
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_prd.return_value = {"id": "TEST-P0001", "title": "Test PRD"}
+        mock_storage.get_design_by_prd.return_value = None
+        mock_storage.create_design.return_value = {
+            "id": "TEST-P0001",
+            "prd_id": "TEST-P0001",
+            "project_id": "test-project",
+            "content": "",
+        }
+
+        result = create_design(prd_id="TEST-P0001")
+        assert result["status"] == "created"
+        mock_storage.create_design.assert_called_once_with(
+            prd_id="TEST-P0001", project_id="test-project", content=""
+        )
+
+    @patch("a_sdlc.server.get_storage")
+    def test_get_design_not_found(self, mock_get_storage):
+        """Test get_design when design doesn't exist."""
+        from a_sdlc.server import get_design
+
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_design_by_prd.return_value = None
+
+        result = get_design(prd_id="NONEXISTENT")
+        assert result["status"] == "not_found"
+
+    @patch("a_sdlc.server.get_storage")
+    def test_get_design_success(self, mock_get_storage):
+        """Test successful design retrieval."""
+        from a_sdlc.server import get_design
+
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_design_by_prd.return_value = {
+            "id": "TEST-P0001",
+            "prd_id": "TEST-P0001",
+            "content": "# Design Content",
+        }
+
+        result = get_design(prd_id="TEST-P0001")
+        assert result["status"] == "ok"
+        assert result["design"]["content"] == "# Design Content"
+
+    @patch("a_sdlc.server.get_storage")
+    def test_update_design_success(self, mock_get_storage):
+        """Test successful design update."""
+        from a_sdlc.server import update_design
+
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.update_design.return_value = {
+            "id": "TEST-P0001",
+            "prd_id": "TEST-P0001",
+            "content": "# Updated",
+        }
+
+        result = update_design(prd_id="TEST-P0001", content="# Updated")
+        assert result["status"] == "updated"
+        assert result["design"]["content"] == "# Updated"
+        mock_storage.update_design.assert_called_once_with("TEST-P0001", content="# Updated")
+
+    @patch("a_sdlc.server.get_storage")
+    def test_update_design_not_found(self, mock_get_storage):
+        """Test update_design when design doesn't exist."""
+        from a_sdlc.server import update_design
+
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.update_design.return_value = None
+
+        result = update_design(prd_id="NONEXISTENT", content="# New")
+        assert result["status"] == "not_found"
+
+    @patch("a_sdlc.server.get_storage")
+    def test_delete_design_success(self, mock_get_storage):
+        """Test successful design deletion."""
+        from a_sdlc.server import delete_design
+
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.delete_design.return_value = True
+
+        result = delete_design(prd_id="TEST-P0001")
+        assert result["status"] == "deleted"
+        mock_storage.delete_design.assert_called_once_with("TEST-P0001")
+
+    @patch("a_sdlc.server.get_storage")
+    def test_delete_design_not_found(self, mock_get_storage):
+        """Test delete_design when design doesn't exist."""
+        from a_sdlc.server import delete_design
+
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.delete_design.return_value = False
+
+        result = delete_design(prd_id="NONEXISTENT")
+        assert result["status"] == "not_found"
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_list_designs_success(self, mock_get_pid, mock_get_storage):
+        """Test listing designs."""
+        from a_sdlc.server import list_designs
+
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.list_designs.return_value = [
+            {"id": "d1", "prd_id": "TEST-P0001"},
+        ]
+
+        result = list_designs()
+        assert result["status"] == "ok"
+        assert result["count"] == 1
+        assert result["project_id"] == "test-project"
+        assert len(result["designs"]) == 1
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_list_designs_no_project(self, mock_get_pid, mock_get_storage):
+        """Test list_designs without project context."""
+        from a_sdlc.server import list_designs
+
+        mock_get_pid.return_value = None
+
+        result = list_designs()
+        assert result["status"] == "error"
+        assert "No project context" in result["message"]
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_list_designs_with_explicit_project_id(self, mock_get_pid, mock_get_storage):
+        """Test list_designs with explicitly provided project_id."""
+        from a_sdlc.server import list_designs
+
+        mock_get_pid.return_value = None  # No auto-detected project
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.list_designs.return_value = []
+
+        result = list_designs(project_id="explicit-project")
+        assert result["status"] == "ok"
+        assert result["project_id"] == "explicit-project"
+        assert result["count"] == 0
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_list_designs_empty(self, mock_get_pid, mock_get_storage):
+        """Test list_designs when no designs exist."""
+        from a_sdlc.server import list_designs
+
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.list_designs.return_value = []
+
+        result = list_designs()
+        assert result["status"] == "ok"
+        assert result["count"] == 0
+        assert result["designs"] == []

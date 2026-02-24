@@ -45,6 +45,19 @@ Parse and display the PRD content by sections:
 - Out of Scope
 - Open Questions
 
+### CRITICAL: Anti-Fluff Rules
+
+**When editing sections, use the user's exact content. Zero AI embellishment.**
+
+- **MUST NOT** rephrase, expand, or "improve" the user's input when applying edits
+- **MUST NOT** add requirements, acceptance criteria, or scope items the user didn't type
+- **MUST NOT** insert boilerplate ("ensure proper...", "follow best practices...", "handle edge cases...")
+- **MUST NOT** merge your suggestions into the user's content without explicit approval
+- **MUST** apply the user's edited text verbatim — formatting corrections only
+- **MUST** ask if something seems missing rather than adding it yourself
+
+**If the user types two bullet points for Goals, save two bullet points — not five.**
+
 ### 3. Section-by-Section Review
 
 For each section (or `--section` if specified):

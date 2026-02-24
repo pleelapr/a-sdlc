@@ -413,7 +413,7 @@ class TestTemplateOperations:
 
 
 class TestMigrationV3ToV4:
-    """Test v3→v4 migration: PRD phase timestamp backfill."""
+    """Test v3->v4 migration: PRD phase timestamp backfill."""
 
     def test_migration_backfills_prd_timestamps(self, tmp_path):
         """Migrating a v3 database backfills ready_at, split_at, completed_at."""
@@ -529,7 +529,7 @@ class TestMigrationV3ToV4:
         # Verify migration ran
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
-            assert cursor.fetchone()[0] == 4
+            assert cursor.fetchone()[0] == 5
 
         # Verify backfill: ready PRD
         prd_ready = db.get_prd("P-READY")
@@ -726,3 +726,126 @@ class TestProjectShortname:
         shortnames = [p["shortname"] for p in projects]
         # All shortnames should be unique
         assert len(shortnames) == len(set(shortnames))
+
+
+class TestHybridStorageDesign:
+    """Test HybridStorage design document operations."""
+
+    @pytest.fixture
+    def hybrid_storage(self):
+        """Create a HybridStorage instance for testing."""
+        import tempfile
+        from a_sdlc.storage import HybridStorage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = HybridStorage(base_path=Path(tmpdir))
+            # Create project and PRD for testing
+            storage.create_project("test-project", "Test Project", "/tmp/test")
+            storage.create_prd(
+                prd_id="TEST-P0001",
+                project_id="test-project",
+                title="Test PRD",
+                content="# Test PRD Content",
+            )
+            yield storage
+
+    def test_create_design_writes_file_and_db(self, hybrid_storage):
+        """Test that create_design writes content file and DB record."""
+        design = hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# Architecture\n\nDesign content",
+        )
+        assert design is not None
+        assert design["prd_id"] == "TEST-P0001"
+        assert "file_path" in design
+        assert design["content"] == "# Architecture\n\nDesign content"
+
+    def test_get_design_by_prd_with_content(self, hybrid_storage):
+        """Test that get_design_by_prd returns content from file."""
+        hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# Architecture Design",
+        )
+        design = hybrid_storage.get_design_by_prd("TEST-P0001")
+        assert design is not None
+        assert design["content"] == "# Architecture Design"
+
+    def test_get_design_by_prd_not_found(self, hybrid_storage):
+        """Test get_design_by_prd returns None for nonexistent."""
+        design = hybrid_storage.get_design_by_prd("NONEXISTENT")
+        assert design is None
+
+    def test_list_designs_metadata_only(self, hybrid_storage):
+        """Test that list_designs returns metadata without content."""
+        hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# Design",
+        )
+        designs = hybrid_storage.list_designs("test-project")
+        assert len(designs) == 1
+        assert designs[0]["prd_id"] == "TEST-P0001"
+        # list_designs returns metadata only, no content key expected
+        assert "content" not in designs[0]
+
+    def test_update_design_updates_both(self, hybrid_storage):
+        """Test that update_design updates file and DB."""
+        hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# Original",
+        )
+        updated = hybrid_storage.update_design("TEST-P0001", content="# Updated Design")
+        assert updated is not None
+        assert updated["content"] == "# Updated Design"
+
+        # Verify via get
+        fetched = hybrid_storage.get_design_by_prd("TEST-P0001")
+        assert fetched["content"] == "# Updated Design"
+
+    def test_update_design_not_found(self, hybrid_storage):
+        """Test update_design returns None for nonexistent."""
+        result = hybrid_storage.update_design("NONEXISTENT", content="# New")
+        assert result is None
+
+    def test_delete_design_removes_both(self, hybrid_storage):
+        """Test that delete_design removes file and DB record."""
+        hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# To Delete",
+        )
+        result = hybrid_storage.delete_design("TEST-P0001")
+        assert result is True
+        assert hybrid_storage.get_design_by_prd("TEST-P0001") is None
+
+    def test_delete_design_not_found(self, hybrid_storage):
+        """Test delete_design returns False for nonexistent."""
+        result = hybrid_storage.delete_design("NONEXISTENT")
+        assert result is False
+
+    def test_create_and_verify_file_exists(self, hybrid_storage):
+        """Test that creating a design actually writes a file to disk."""
+        design = hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# File Test",
+        )
+        file_path = Path(design["file_path"])
+        assert file_path.exists()
+        assert file_path.read_text(encoding="utf-8") == "# File Test"
+
+    def test_delete_design_removes_file(self, hybrid_storage):
+        """Test that deleting a design removes the content file from disk."""
+        design = hybrid_storage.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-project",
+            content="# To Remove",
+        )
+        file_path = Path(design["file_path"])
+        assert file_path.exists()
+
+        hybrid_storage.delete_design("TEST-P0001")
+        assert not file_path.exists()

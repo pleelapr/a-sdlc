@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 # Module-level variable to track UI server process
@@ -32,6 +33,7 @@ _ui_process: subprocess.Popen | None = None
 
 from a_sdlc.core.database import Database, get_db
 from a_sdlc.core.content import ContentManager, get_content_manager
+from a_sdlc.storage import get_storage
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -185,10 +187,20 @@ def init_project(
     # Check if already exists
     existing = db.get_project_by_path(cwd)
     if existing:
+        project_path = Path(cwd)
+        has_claude_md = (project_path / "CLAUDE.md").exists()
+        has_lesson_learn = (project_path / ".sdlc" / "lesson-learn.md").exists()
+        has_sdlc_dir = (project_path / ".sdlc").exists()
+
         return {
             "status": "exists",
             "message": f"Project already initialized: {existing['name']}",
             "project": existing,
+            "init_files": {
+                "claude_md": has_claude_md,
+                "lesson_learn": has_lesson_learn,
+                "sdlc_dir": has_sdlc_dir,
+            },
         }
 
     # Generate project ID from folder name
@@ -221,6 +233,11 @@ def init_project(
             "message": str(e),
         }
 
+    # Generate CLAUDE.md, lesson-learn.md, and global lesson-learn.md
+    from a_sdlc.core.init_files import generate_init_files
+
+    init_results = generate_init_files(Path(cwd), project_name)
+
     return {
         "status": "created",
         "message": f"Project '{project_name}' initialized with shortname '{shortname}'.",
@@ -230,6 +247,7 @@ def init_project(
             "sprint": f"{shortname}-S0001",
             "prd": f"{shortname}-P0001",
         },
+        "init_files": init_results["results"],
     }
 
 
@@ -554,6 +572,141 @@ def delete_prd(prd_id: str) -> dict[str, Any]:
     return {
         "status": "deleted",
         "message": f"PRD deleted: {prd_id}",
+    }
+
+
+# =============================================================================
+# Design Document Operations
+# =============================================================================
+
+
+@mcp.tool()
+def create_design(prd_id: str, content: str = "") -> dict[str, Any]:
+    """Create a design document for a PRD.
+
+    Each PRD can have one design document (ADR-style architecture decision record).
+
+    Args:
+        prd_id: Parent PRD identifier.
+        content: Design document markdown content.
+
+    Returns:
+        Created design document details.
+    """
+    storage = get_storage()
+    pid = _get_current_project_id()
+
+    if not pid:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    # Validate PRD exists
+    prd = storage.get_prd(prd_id)
+    if not prd:
+        return {"status": "not_found", "message": f"PRD not found: {prd_id}"}
+
+    # Check for existing design
+    existing = storage.get_design_by_prd(prd_id)
+    if existing:
+        return {"status": "error", "message": f"Design already exists for PRD {prd_id}. Use update_design instead."}
+
+    design = storage.create_design(prd_id=prd_id, project_id=pid, content=content)
+    return {
+        "status": "created",
+        "message": f"Design document created for PRD {prd_id}",
+        "design": design,
+    }
+
+
+@mcp.tool()
+def get_design(prd_id: str) -> dict[str, Any]:
+    """Get design document for a PRD with full content.
+
+    Args:
+        prd_id: PRD identifier.
+
+    Returns:
+        Design document with metadata and content.
+    """
+    storage = get_storage()
+    design = storage.get_design_by_prd(prd_id)
+
+    if not design:
+        return {"status": "not_found", "message": f"No design document found for PRD: {prd_id}"}
+
+    return {
+        "status": "ok",
+        "design": design,
+    }
+
+
+@mcp.tool()
+def update_design(prd_id: str, content: str) -> dict[str, Any]:
+    """Update a design document's content.
+
+    Args:
+        prd_id: PRD identifier.
+        content: New design document content.
+
+    Returns:
+        Updated design document details.
+    """
+    storage = get_storage()
+    design = storage.update_design(prd_id, content=content)
+
+    if not design:
+        return {"status": "not_found", "message": f"No design document found for PRD: {prd_id}"}
+
+    return {
+        "status": "updated",
+        "message": f"Design document updated for PRD {prd_id}",
+        "design": design,
+    }
+
+
+@mcp.tool()
+def delete_design(prd_id: str) -> dict[str, Any]:
+    """Delete a design document.
+
+    Args:
+        prd_id: PRD identifier.
+
+    Returns:
+        Deletion status.
+    """
+    storage = get_storage()
+    deleted = storage.delete_design(prd_id)
+
+    if not deleted:
+        return {"status": "not_found", "message": f"No design document found for PRD: {prd_id}"}
+
+    return {
+        "status": "deleted",
+        "message": f"Design document deleted for PRD {prd_id}",
+    }
+
+
+@mcp.tool()
+def list_designs(project_id: str | None = None) -> dict[str, Any]:
+    """List design documents for a project.
+
+    Args:
+        project_id: Optional project ID. Auto-detects if not provided.
+
+    Returns:
+        List of design document summaries (metadata only).
+    """
+    storage = get_storage()
+    pid = project_id or _get_current_project_id()
+
+    if not pid:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    designs = storage.list_designs(pid)
+    return {
+        "status": "ok",
+        "project_id": pid,
+        "count": len(designs),
+        "designs": designs,
     }
 
 
@@ -1962,6 +2115,58 @@ def configure_confluence(
 
 
 @mcp.tool()
+def configure_github(token: str, scope: str = "project") -> dict[str, Any]:
+    """Configure GitHub integration for the current project or globally.
+
+    Stores a GitHub token for PR feedback retrieval. The token is validated
+    before storing.
+
+    Args:
+        token: GitHub personal access token or fine-grained token with 'repo' scope.
+        scope: Where to store the token — 'project' (default) or 'global' (~/.config/a-sdlc/).
+
+    Returns:
+        Configuration status with authenticated username.
+    """
+    from a_sdlc.server.github import GitHubClient, save_global_github_config
+
+    # Validate token before storing
+    try:
+        client = GitHubClient(token)
+        user = client.validate_token()
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+
+    if scope == "global":
+        save_global_github_config({"token": token})
+        return {
+            "status": "configured",
+            "message": f"GitHub integration configured globally (authenticated as @{user['login']})",
+            "system": "github",
+            "scope": "global",
+            "user": user["login"],
+        }
+
+    # Project scope
+    db = get_db()
+    project_id = _get_current_project_id()
+
+    if not project_id:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    config = {"token": token}
+    db.set_external_config(project_id, "github", config)
+
+    return {
+        "status": "configured",
+        "message": f"GitHub integration configured for {project_id} (authenticated as @{user['login']})",
+        "system": "github",
+        "scope": "project",
+        "user": user["login"],
+    }
+
+
+@mcp.tool()
 def get_integrations() -> dict[str, Any]:
     """List configured external integrations for the current project.
 
@@ -1981,7 +2186,7 @@ def get_integrations() -> dict[str, Any]:
         # Mask sensitive data
         cfg = config.get("config", {})
         masked_config = {
-            k: ("***" if k in ["api_key", "api_token"] else v)
+            k: ("***" if k in ["api_key", "api_token", "token"] else v)
             for k, v in cfg.items()
         }
         integrations.append({
@@ -2004,7 +2209,7 @@ def remove_integration(system: str) -> dict[str, Any]:
     """Remove external system integration from the current project.
 
     Args:
-        system: External system name ('linear', 'jira', or 'confluence').
+        system: External system name ('linear', 'jira', 'confluence', or 'github').
 
     Returns:
         Removal status.
@@ -2015,8 +2220,8 @@ def remove_integration(system: str) -> dict[str, Any]:
     if not project_id:
         return {"status": "error", "message": "No project context. Run /sdlc:init first."}
 
-    if system not in ["linear", "jira", "confluence"]:
-        return {"status": "error", "message": f"Unknown system: {system}. Use 'linear', 'jira', or 'confluence'."}
+    if system not in ["linear", "jira", "confluence", "github"]:
+        return {"status": "error", "message": f"Unknown system: {system}. Use 'linear', 'jira', 'confluence', or 'github'."}
 
     deleted = db.delete_external_config(project_id, system)
 
@@ -2030,6 +2235,207 @@ def remove_integration(system: str) -> dict[str, Any]:
         "status": "removed",
         "message": f"{system.title()} integration removed from {project_id}",
         "system": system,
+    }
+
+
+# =============================================================================
+# GitHub PR Feedback
+# =============================================================================
+
+
+@mcp.tool()
+def get_pr_feedback(
+    unresolved_only: bool = False,
+    reviewer: str | None = None,
+) -> dict[str, Any]:
+    """Fetch PR review comments for the current branch.
+
+    Detects the GitHub repo and branch from git, finds the open PR,
+    and retrieves all review comments (line-level, review summaries,
+    and general conversation).
+
+    Token resolution: project config → global config (~/.config/a-sdlc/) → GITHUB_TOKEN env var.
+
+    Args:
+        unresolved_only: If True, only return unresolved review threads.
+        reviewer: Filter comments by this GitHub username.
+
+    Returns:
+        Structured dict with PR info and categorized comments.
+    """
+    from a_sdlc.server.github import GitHubClient, detect_git_info, load_global_github_config
+
+    db = get_db()
+    project_id = _get_current_project_id()
+
+    # Resolve token: project config → global config → env var
+    token = None
+    if project_id:
+        config = db.get_external_config(project_id, "github")
+        if config:
+            token = config["config"].get("token")
+
+    if not token:
+        global_cfg = load_global_github_config()
+        if global_cfg:
+            token = global_cfg.get("token")
+
+    if not token:
+        token = os.environ.get("GITHUB_TOKEN")
+
+    if not token:
+        return {
+            "status": "error",
+            "message": (
+                "No GitHub token found. Either:\n"
+                "1. Configure per-project: use configure_github tool\n"
+                "2. Configure globally: a-sdlc connect github --global\n"
+                "3. Set GITHUB_TOKEN environment variable"
+            ),
+        }
+
+    # Detect repo info from git
+    try:
+        owner, repo, branch = detect_git_info()
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+
+    client = GitHubClient(token)
+
+    # Find PR for current branch
+    try:
+        pr = client.get_pr_for_branch(owner, repo, branch)
+    except httpx.HTTPStatusError as e:
+        return {
+            "status": "error",
+            "message": f"GitHub API error: {e.response.status_code} — {e.response.text[:200]}",
+        }
+
+    if not pr:
+        return {
+            "status": "no_pr",
+            "message": f"No open PR found for branch '{branch}' in {owner}/{repo}.",
+            "branch": branch,
+            "repo": f"{owner}/{repo}",
+        }
+
+    pr_number = pr["number"]
+
+    # Fetch all comment types
+    try:
+        reviews = client.get_reviews(owner, repo, pr_number)
+        review_comments = client.get_review_comments(owner, repo, pr_number)
+        issue_comments = client.get_issue_comments(owner, repo, pr_number)
+    except httpx.HTTPStatusError as e:
+        return {
+            "status": "error",
+            "message": f"Failed to fetch comments: {e.response.status_code}",
+        }
+
+    # Get resolved thread IDs if filtering
+    resolved_ids: set[str] = set()
+    if unresolved_only:
+        try:
+            resolved_ids = client.get_resolved_thread_ids(owner, repo, pr_number)
+        except Exception:
+            # GraphQL may fail with limited token scopes; continue without filtering
+            pass
+
+    # Process review comments (line-level)
+    processed_review_comments = []
+    for c in review_comments:
+        comment_id = str(c["id"])
+
+        # Filter resolved
+        if unresolved_only and comment_id in resolved_ids:
+            continue
+
+        # Filter by reviewer
+        if reviewer and c.get("user", {}).get("login") != reviewer:
+            continue
+
+        processed_review_comments.append({
+            "id": comment_id,
+            "type": "review_comment",
+            "author": c.get("user", {}).get("login", "unknown"),
+            "body": c.get("body", ""),
+            "path": c.get("path", ""),
+            "line": c.get("original_line") or c.get("line"),
+            "side": c.get("side", "RIGHT"),
+            "diff_hunk": c.get("diff_hunk", ""),
+            "created_at": c.get("created_at", ""),
+            "updated_at": c.get("updated_at", ""),
+            "in_reply_to_id": c.get("in_reply_to_id"),
+            "html_url": c.get("html_url", ""),
+        })
+
+    # Process review summaries
+    processed_reviews = []
+    for r in reviews:
+        if reviewer and r.get("user", {}).get("login") != reviewer:
+            continue
+
+        # Skip empty review summaries (just approvals with no body)
+        body = r.get("body", "").strip()
+        state = r.get("state", "")
+
+        processed_reviews.append({
+            "id": str(r["id"]),
+            "type": "review",
+            "author": r.get("user", {}).get("login", "unknown"),
+            "body": body,
+            "state": state,
+            "created_at": r.get("submitted_at", ""),
+            "html_url": r.get("html_url", ""),
+        })
+
+    # Process general conversation comments
+    processed_issue_comments = []
+    for c in issue_comments:
+        if reviewer and c.get("user", {}).get("login") != reviewer:
+            continue
+
+        processed_issue_comments.append({
+            "id": str(c["id"]),
+            "type": "issue_comment",
+            "author": c.get("user", {}).get("login", "unknown"),
+            "body": c.get("body", ""),
+            "created_at": c.get("created_at", ""),
+            "updated_at": c.get("updated_at", ""),
+            "html_url": c.get("html_url", ""),
+        })
+
+    total = (
+        len(processed_review_comments)
+        + len(processed_reviews)
+        + len(processed_issue_comments)
+    )
+
+    return {
+        "status": "ok",
+        "pr": {
+            "number": pr_number,
+            "title": pr.get("title", ""),
+            "author": pr.get("user", {}).get("login", "unknown"),
+            "html_url": pr.get("html_url", ""),
+            "state": pr.get("state", ""),
+            "branch": branch,
+            "base": pr.get("base", {}).get("ref", ""),
+        },
+        "repo": f"{owner}/{repo}",
+        "filters": {
+            "unresolved_only": unresolved_only,
+            "reviewer": reviewer,
+        },
+        "summary": {
+            "total_comments": total,
+            "review_comments": len(processed_review_comments),
+            "reviews": len(processed_reviews),
+            "issue_comments": len(processed_issue_comments),
+        },
+        "reviews": processed_reviews,
+        "review_comments": processed_review_comments,
+        "issue_comments": processed_issue_comments,
     }
 
 
@@ -2717,6 +3123,97 @@ def sync_prd_to(prd_id: str) -> dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# =============================================================================
+# Quality Tools
+# =============================================================================
+
+VALID_CONTEXT_TYPES = {"task", "prd", "sprint", "pr", "ad-hoc"}
+VALID_CORRECTION_CATEGORIES = {
+    "testing",
+    "code-quality",
+    "task-completeness",
+    "integration",
+    "documentation",
+    "architecture",
+    "security",
+    "performance",
+    "process",
+}
+
+
+@mcp.tool()
+def log_correction(
+    context_type: str, context_id: str, category: str, description: str
+) -> dict:
+    """Log a correction to .sdlc/corrections.log.
+
+    Records fixes, mistakes, and improvements made during any workflow step
+    (task work, PRD updates, sprint execution, PR feedback, ad-hoc fixes).
+
+    Args:
+        context_type: One of: task, prd, sprint, pr, ad-hoc
+        context_id: Entity ID (e.g., PROJ-T00001, PROJ-P0001, PR #42, or "none" for ad-hoc)
+        category: One of: testing, code-quality, task-completeness, integration,
+                  documentation, architecture, security, performance, process
+        description: What was corrected and why
+    """
+    if context_type not in VALID_CONTEXT_TYPES:
+        return {
+            "status": "error",
+            "message": f"Invalid context_type '{context_type}'. Must be one of: {', '.join(sorted(VALID_CONTEXT_TYPES))}",
+        }
+
+    if category not in VALID_CORRECTION_CATEGORIES:
+        return {
+            "status": "error",
+            "message": f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CORRECTION_CATEGORIES))}",
+        }
+
+    if not description or not description.strip():
+        return {
+            "status": "error",
+            "message": "Description must not be empty.",
+        }
+
+    # Resolve project path: prefer DB project, fallback to cwd
+    project_path = None
+    try:
+        db = get_db()
+        project_id = _get_current_project_id()
+        if project_id:
+            project = db.get_project(project_id)
+            if project:
+                project_path = project["path"]
+    except Exception:
+        pass
+
+    if not project_path:
+        project_path = os.getcwd()
+
+    sdlc_dir = Path(project_path) / ".sdlc"
+    sdlc_dir.mkdir(parents=True, exist_ok=True)
+    log_file = sdlc_dir / "corrections.log"
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry_line = f"{timestamp} | {context_type}:{context_id} | {category} | {description.strip()}\n"
+
+    try:
+        with open(log_file, "a") as f:
+            f.write(entry_line)
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to write corrections.log: {e}"}
+
+    return {
+        "status": "logged",
+        "entry": {
+            "timestamp": timestamp,
+            "context": f"{context_type}:{context_id}",
+            "category": category,
+            "description": description.strip(),
+        },
+    }
 
 
 # =============================================================================

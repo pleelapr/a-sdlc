@@ -20,7 +20,7 @@ from typing import Any, Generator
 
 # Schema version for fresh start (hybrid storage with file_path design)
 # Version 2: Added shortname column to projects table
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def get_data_dir() -> Path:
@@ -174,6 +174,20 @@ class Database:
             CREATE INDEX idx_sync_entity ON sync_mappings(entity_type, local_id);
             CREATE INDEX idx_sync_external ON sync_mappings(external_system, external_id);
 
+            -- Designs table (1:1 with PRD, metadata + file path reference)
+            CREATE TABLE designs (
+                id TEXT PRIMARY KEY,
+                prd_id TEXT UNIQUE NOT NULL,
+                project_id TEXT NOT NULL,
+                file_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prd_id) REFERENCES prds(id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_designs_prd ON designs(prd_id);
+            CREATE INDEX idx_designs_project ON designs(project_id);
+
             -- External configuration for integrations (Linear, Jira)
             CREATE TABLE external_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,6 +222,10 @@ class Database:
         if current_version == 3:
             self._migrate_v3_to_v4(conn)
             current_version = 4
+
+        if current_version == 4:
+            self._migrate_v4_to_v5(conn)
+            current_version = 5
 
         if current_version == SCHEMA_VERSION:
             return
@@ -280,6 +298,24 @@ class Database:
             WHERE status = 'completed' AND completed_at IS NULL
         """)
         conn.execute("UPDATE schema_version SET version = 4")
+
+    def _migrate_v4_to_v5(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 4 to version 5 (add designs table)."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS designs (
+                id TEXT PRIMARY KEY,
+                prd_id TEXT UNIQUE NOT NULL,
+                project_id TEXT NOT NULL,
+                file_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prd_id) REFERENCES prds(id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_designs_prd ON designs(prd_id);
+            CREATE INDEX IF NOT EXISTS idx_designs_project ON designs(project_id);
+        """)
+        conn.execute("UPDATE schema_version SET version = 5")
 
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -580,8 +616,13 @@ class Database:
                     SELECT project_id, COUNT(*) AS total_sprints
                     FROM sprints GROUP BY project_id
                 ) sprint_counts ON p.id = sprint_counts.project_id
-                LEFT JOIN sprints active_sprint
-                    ON p.id = active_sprint.project_id AND active_sprint.status = 'active'
+                LEFT JOIN (
+                    SELECT project_id, id, title
+                    FROM sprints
+                    WHERE status = 'active'
+                    GROUP BY project_id
+                    HAVING id = MAX(id)
+                ) active_sprint ON p.id = active_sprint.project_id
                 ORDER BY p.last_accessed DESC
             """)
             return [dict(row) for row in cursor.fetchall()]
@@ -1086,6 +1127,116 @@ class Database:
             )
             count = cursor.fetchone()[0]
         return f"{shortname}-P{count + 1:04d}"
+
+    # =========================================================================
+    # Design Operations
+    # =========================================================================
+
+    def create_design(
+        self,
+        design_id: str,
+        prd_id: str,
+        project_id: str,
+        file_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new design document.
+
+        Args:
+            design_id: Unique design identifier (same as prd_id)
+            prd_id: Parent PRD ID (1:1 relationship)
+            project_id: Parent project ID
+            file_path: Path to markdown file (source of truth for content)
+
+        Returns:
+            Created design dict
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connection() as conn:
+            conn.execute(
+                """INSERT INTO designs (id, prd_id, project_id, file_path, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (design_id, prd_id, project_id, file_path, now, now),
+            )
+        return self.get_design(design_id)
+
+    def get_design(self, design_id: str) -> dict[str, Any] | None:
+        """Get design by ID (metadata only, content in file).
+
+        Args:
+            design_id: Design identifier
+
+        Returns:
+            Design dict if found, None otherwise.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute("SELECT * FROM designs WHERE id = ?", (design_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_design_by_prd(self, prd_id: str) -> dict[str, Any] | None:
+        """Get design by parent PRD ID.
+
+        Args:
+            prd_id: PRD identifier
+
+        Returns:
+            Design dict if found, None otherwise.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute("SELECT * FROM designs WHERE prd_id = ?", (prd_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def list_designs(self, project_id: str) -> list[dict[str, Any]]:
+        """List all designs for a project.
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            List of design dicts ordered by most recently updated.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM designs WHERE project_id = ? ORDER BY updated_at DESC",
+                (project_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_design(self, design_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        """Update design fields.
+
+        Args:
+            design_id: Design identifier
+            **kwargs: Fields to update (file_path, etc.)
+
+        Returns:
+            Updated design dict or None if not found.
+        """
+        if not kwargs:
+            return self.get_design(design_id)
+
+        kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        values = list(kwargs.values()) + [design_id]
+
+        with self.connection() as conn:
+            conn.execute(f"UPDATE designs SET {fields} WHERE id = ?", values)
+        return self.get_design(design_id)
+
+    def delete_design(self, design_id: str) -> bool:
+        """Delete a design.
+
+        Args:
+            design_id: Design identifier
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute("DELETE FROM designs WHERE id = ?", (design_id,))
+            return cursor.rowcount > 0
 
     # =========================================================================
     # Sync Mapping Operations

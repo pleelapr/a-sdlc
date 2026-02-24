@@ -146,4 +146,28 @@
         </div>
     </form>
 </div>
+
+{% elif system == 'github' %}
+<div class="integration-form">
+    <form hx-post="/settings/integrations/github?project={{ project_id }}"
+          hx-target="#integration-github"
+          hx-swap="outerHTML">
+        <div class="form-group">
+            <label for="token">Personal Access Token</label>
+            <input type="password" id="token" name="token"
+                   value="{{ config.token if config else '' }}"
+                   placeholder="ghp_... or github_pat_..." required>
+            <div class="help-text">GitHub PAT with 'repo' scope. Generate at github.com/settings/tokens.</div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn"
+                    hx-get="/settings/integrations/github/cancel"
+                    hx-target="#github-form-container"
+                    hx-swap="innerHTML">
+                Cancel
+            </button>
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </form>
+</div>
 {% endif %}

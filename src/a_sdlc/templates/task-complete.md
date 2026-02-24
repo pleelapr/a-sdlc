@@ -54,6 +54,55 @@ Completed at: 2025-01-26 15:30
 Great work! 🎉
 ```
 
+### Definition-of-Done Checklist
+
+Before finalizing completion, confirm these items:
+
+**Standard Checks:**
+Read `.sdlc/lesson-learn.md` (if exists) for component-specific lessons.
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Confirm definition-of-done for this task:",
+    header: "DoD check",
+    options: [
+      { label: "Tests passing", description: "All new and existing tests pass" },
+      { label: "Lint clean", description: "No new linting warnings or errors" },
+      { label: "Requirements met", description: "All task acceptance criteria satisfied" },
+      { label: "No duplication", description: "No duplicative code introduced — reused existing utilities" }
+    ],
+    multiSelect: true
+  }]
+})
+```
+
+If lesson-learn.md has MUST-level items for this task's component, add them to the checklist.
+
+If any standard checks are unchecked, warn:
+> Some definition-of-done items were not confirmed. Consider addressing before completion.
+
+Proceed to PRD completion check regardless (user has been warned).
+
+## Log Corrections
+
+After the DoD checklist, log any corrections or fixes made during this task's implementation.
+
+For each fix, bug correction, or mistake caught during the task:
+
+```
+mcp__asdlc__log_correction(
+  context_type="task",
+  context_id="{task_id}",
+  category="{category}",
+  description="{what was fixed and why}"
+)
+```
+
+**Categories:** `testing`, `code-quality`, `task-completeness`, `integration`, `documentation`, `architecture`, `security`, `performance`, `process`
+
+If no corrections were needed, skip this step.
+
 ## Check PRD Completion
 
 After completing a task, check if all tasks for the parent PRD are now completed:

@@ -2,16 +2,18 @@
 Content directory manager for a-sdlc.
 
 Manages markdown content files that serve as the source of truth
-for PRD and task content. The SQLite database stores metadata and
-file path references; this module manages the actual content files.
+for PRD, task, and design document content. The SQLite database stores
+metadata and file path references; this module manages the actual content files.
 
 Directory structure:
     ~/.a-sdlc/content/
     └── {project}/
         ├── prds/
         │   └── {prd-id}.md     # Full PRD content (LLM-generated)
-        └── tasks/
-            └── TASK-001.md     # Full task content (LLM-generated)
+        ├── tasks/
+        │   └── TASK-001.md     # Full task content (LLM-generated)
+        └── designs/
+            └── {prd-id}.md     # Design document content (1:1 with PRD)
 """
 
 import os
@@ -36,7 +38,7 @@ def get_data_dir() -> Path:
 
 
 class ContentManager:
-    """Manages markdown content files for PRDs and tasks.
+    """Manages markdown content files for PRDs, tasks, and design documents.
 
     This class handles:
     - Creating and organizing content directories
@@ -395,6 +397,78 @@ class ContentManager:
                         result["dependencies"] = deps
 
         return result
+
+    # =========================================================================
+    # Design Document Content Operations
+    # =========================================================================
+
+    def get_design_dir(self, project_id: str) -> Path:
+        """Get design document directory for a project.
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            Path to design documents directory
+        """
+        design_dir = self.base_path / project_id / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        return design_dir
+
+    def get_design_path(self, project_id: str, prd_id: str) -> Path:
+        """Get path for design document markdown file.
+
+        Design documents have a 1:1 relationship with PRDs,
+        so the prd_id is used as the filename.
+
+        Args:
+            project_id: Project identifier
+            prd_id: PRD identifier (used as filename)
+
+        Returns:
+            Path to design document markdown file
+        """
+        return self.get_design_dir(project_id) / f"{prd_id}.md"
+
+    def write_design(self, project_id: str, prd_id: str, content: str) -> Path:
+        """Write design document content to markdown file.
+
+        Args:
+            project_id: Project identifier
+            prd_id: PRD identifier (used as filename)
+            content: Design document markdown content
+
+        Returns:
+            Path to the written file
+        """
+        file_path = self.get_design_path(project_id, prd_id)
+        return self.write_content(file_path, content)
+
+    def read_design(self, project_id: str, prd_id: str) -> str | None:
+        """Read design document content from markdown file.
+
+        Args:
+            project_id: Project identifier
+            prd_id: PRD identifier
+
+        Returns:
+            Design document content as string, or None if not found
+        """
+        file_path = self.get_design_path(project_id, prd_id)
+        return self.read_content(file_path)
+
+    def delete_design(self, project_id: str, prd_id: str) -> bool:
+        """Delete design document content file.
+
+        Args:
+            project_id: Project identifier
+            prd_id: PRD identifier
+
+        Returns:
+            True if deleted, False if not found
+        """
+        file_path = self.get_design_path(project_id, prd_id)
+        return self.delete_content(file_path)
 
     # =========================================================================
     # Project Operations

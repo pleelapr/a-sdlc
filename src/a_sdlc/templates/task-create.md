@@ -65,6 +65,20 @@ mcp__asdlc__create_task(
 }
 ```
 
+## CRITICAL: Anti-Fluff Rules
+
+**Every task field must reflect exactly what the user specified. Zero AI-embellished content.**
+
+- **MUST NOT** expand the user's description with extra implementation details, edge cases, or technical notes they didn't mention
+- **MUST NOT** add acceptance criteria, success metrics, or NFRs the user didn't specify
+- **MUST NOT** suggest a higher priority than what the task content warrants
+- **MUST NOT** add components, dependencies, or related tasks the user didn't ask for
+- **MUST NOT** pad the description with boilerplate ("ensure proper error handling", "follow best practices", "add appropriate tests")
+- **MUST** use the user's own words for title and description — do not rephrase or "improve" them
+- **MUST** ask if information is missing rather than filling in blanks yourself
+
+**If the user says "Fix login timeout bug", the task is about fixing the login timeout bug — not about refactoring the auth system, adding monitoring, or improving test coverage.**
+
 ## Interactive Mode
 
 When invoked without arguments, prompt for task details interactively.

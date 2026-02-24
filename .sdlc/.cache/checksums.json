@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-02-24T23:19:19.499960Z",
+  "artifacts": {
+    "architecture": {
+      "sha256": "2c10348af081b259ce9a914cd76866e57fa033ff45d3d90c0a9e9fbbc1dcd8b4",
+      "lines": 243
+    },
+    "codebase-summary": {
+      "sha256": "ad5fa483654ebe72a01699cab0b10d7d5909c3a345ca22565e80593b031b90e7",
+      "lines": 123
+    },
+    "data-model": {
+      "sha256": "ff9e2608c14ef37e590a9c8f1427e65ccb3fe9e659167cd5b5ddded0fa9e88c1",
+      "lines": 220
+    },
+    "directory-structure": {
+      "sha256": "4696ab3f579b1624c7aeac591a68c54cb7b7c4aad23f9175d4f02e883599815c",
+      "lines": 178
+    },
+    "key-workflows": {
+      "sha256": "802a2cee045adead517245f12e029e3796957ce61191309784e6276cd32f1234",
+      "lines": 242
+    }
+  }
+}

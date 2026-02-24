@@ -77,6 +77,9 @@
         <button class="tab active" onclick="switchTab('documentation')" id="tab-documentation">
             Documentation
         </button>
+        <button class="tab" onclick="switchTab('design')" id="tab-design">
+            Design {% if design %}&#10003;{% endif %}
+        </button>
         <button class="tab" onclick="switchTab('tasks')" id="tab-tasks">
             Tasks {% if tasks %}({{ tasks|length }}){% endif %}
         </button>
@@ -116,6 +119,47 @@
                 <button class="btn" onclick="cancelEdit()">Cancel</button>
             </div>
         </div>
+    </div>
+
+    <!-- Design Tab Panel -->
+    <div class="tab-panel" id="panel-design">
+        {% if design %}
+        <div class="card-header" style="border-top: none; padding-top: 0;">
+            <h3 style="margin: 0;">Design Document</h3>
+            <div id="design-actions">
+                <button id="design-edit-btn" class="btn" onclick="toggleDesignEdit()">Edit</button>
+            </div>
+        </div>
+
+        <!-- View Mode: Rendered Markdown -->
+        <div id="design-view" class="markdown" style="margin-top: 1rem;"></div>
+
+        <!-- Edit Mode: Textarea -->
+        <div id="design-edit" style="display: none; margin-top: 1rem;">
+            <textarea id="design-textarea" style="
+                width: 100%;
+                min-height: 400px;
+                padding: 1rem;
+                font-family: monospace;
+                font-size: 0.875rem;
+                background: var(--bg);
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                color: var(--text);
+                resize: vertical;
+            ">{{ design.content or '' }}</textarea>
+            <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+                <button class="btn btn-primary" onclick="saveDesign()">Save</button>
+                <button class="btn" onclick="cancelDesignEdit()">Cancel</button>
+            </div>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>No design document yet.</p>
+            <p style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--text-muted);">Generate one with:</p>
+            <button class="btn-copy" onclick="copyCommand('/sdlc:prd-architect {{ prd.id }}')" style="margin-top: 0.75rem;">/sdlc:prd-architect {{ prd.id }}</button>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Tasks Tab Panel -->
@@ -220,6 +264,8 @@
     let originalContent = {{ prd.content | tojson | safe if prd.content else '""' }};
     let isEditing = false;
     let mermaidRendered = false;
+    let designContent = {{ (design.content if design and design.content else "") | tojson | safe }};
+    let isDesignEditing = false;
 
     function switchTab(tabName) {
         // Update tab buttons
@@ -233,6 +279,11 @@
         // Cancel edit if switching away from documentation
         if (tabName !== 'documentation' && isEditing) {
             cancelEdit();
+        }
+
+        // Cancel design edit if switching away from design
+        if (tabName !== 'design' && isDesignEditing) {
+            cancelDesignEdit();
         }
 
         // Render Mermaid on first view of dependencies tab
@@ -286,6 +337,7 @@
     // Render markdown on page load
     document.addEventListener('DOMContentLoaded', function() {
         renderMarkdown(originalContent);
+        renderDesignMarkdown(designContent);
     });
 
     function renderMarkdown(content) {
@@ -312,6 +364,59 @@
         document.getElementById('content-textarea').value = originalContent;
         if (isEditing) {
             toggleEdit();
+        }
+    }
+
+    // Design tab functions
+    function renderDesignMarkdown(content) {
+        const viewEl = document.getElementById('design-view');
+        if (!viewEl) return;
+        if (content) {
+            viewEl.innerHTML = marked.parse(content);
+        } else {
+            viewEl.innerHTML = '<p style="color: var(--text-muted);">No design content.</p>';
+        }
+    }
+
+    function toggleDesignEdit() {
+        isDesignEditing = !isDesignEditing;
+        document.getElementById('design-view').style.display = isDesignEditing ? 'none' : 'block';
+        document.getElementById('design-edit').style.display = isDesignEditing ? 'block' : 'none';
+        document.getElementById('design-edit-btn').textContent = isDesignEditing ? 'View' : 'Edit';
+
+        if (isDesignEditing) {
+            document.getElementById('design-textarea').focus();
+        }
+    }
+
+    function cancelDesignEdit() {
+        document.getElementById('design-textarea').value = designContent;
+        if (isDesignEditing) {
+            toggleDesignEdit();
+        }
+    }
+
+    async function saveDesign() {
+        const content = document.getElementById('design-textarea').value;
+
+        try {
+            const response = await fetch('/prds/{{ prd.id }}/design', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: content })
+            });
+
+            if (response.ok) {
+                designContent = content;
+                renderDesignMarkdown(content);
+                toggleDesignEdit();
+                showToast('Design saved');
+            } else {
+                showToast('Failed to save design', 'error');
+            }
+        } catch (error) {
+            console.error('Save design error:', error);
+            showToast('Failed to save design', 'error');
         }
     }
 

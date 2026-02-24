@@ -40,6 +40,7 @@
                 <th data-sort="text">ID</th>
                 <th data-sort="text">Title</th>
                 <th data-sort="status">Status</th>
+                <th>Design</th>
                 <th>Sprint</th>
                 <th data-sort="date">Updated</th>
                 <th>Actions</th>
@@ -55,6 +56,7 @@
                         {{ prd.status }}
                     </span>
                 </td>
+                <td style="text-align: center;">{% if prd.has_design %}<span style="color: var(--success);">&#10003;</span>{% else %}<span style="color: var(--text-muted);">-</span>{% endif %}</td>
                 <td>{% if prd.sprint_id %}<a href="/sprints/{{ prd.sprint_id }}">{{ prd.sprint_id }}</a>{% else %}<span style="color: var(--text-muted);">Backlog</span>{% endif %}</td>
                 <td>{{ prd.updated_at[:10] if prd.updated_at else '-' }}</td>
                 <td>

@@ -176,9 +176,12 @@ Content file generation: Agent generates markdown → calls MCP tool → tool in
 - `sync_sprint_to(sprint_id)` / `sync_sprint_from(sprint_id)` — One-way sync
 - `list_sync_mappings()` — View all mappings
 
+### Quality Tools
+- `log_correction(context_type, context_id, category, description)` — Log a correction to `.sdlc/corrections.log`
+
 ## Key Workflows
 
-1. **Init**: `/sdlc:init` → creates `.sdlc/`, registers project in DB with shortname
+1. **Init**: `/sdlc:init` → creates `.sdlc/`, registers project in DB with shortname, generates `CLAUDE.md` + `.sdlc/lesson-learn.md` + `~/.a-sdlc/lesson-learn.md`
 2. **Scan**: `/sdlc:scan` → analyzes codebase → generates 5 artifacts in `.sdlc/artifacts/`
 3. **PRD**: `/sdlc:prd-generate` → interactive requirements → `create_prd()` → DB + content file
 4. **Split**: `/sdlc:prd-split` → analyze PRD → propose tasks → user approves → `create_task()` for each
@@ -190,6 +193,33 @@ Content file generation: Agent generates markdown → calls MCP tool → tool in
 - **Linear**: GraphQL API, cycles as sprints
 - **Jira**: REST API v3, sprints with ADF formatting
 - Status mapping: pending↔Backlog/To Do, in_progress↔In Progress, blocked↔Blocked, completed↔Done
+
+## Quality Gate System
+
+a-sdlc includes a quality feedback loop that captures corrections, distills them into lessons, and enforces them via preflight checks.
+
+### Data Flow
+
+```
+corrections.log → retrospective → lesson-learn.md → preflight checks
+```
+
+1. **Corrections Log** (`.sdlc/corrections.log`) — Append-only log of all fixes, format: `TIMESTAMP | CONTEXT:ID | CATEGORY | DESCRIPTION`
+2. **Retrospective** (`/sdlc:sprint-complete`) — Reads corrections, identifies patterns (2+ in same category), proposes lessons via AskUserQuestion
+3. **Lessons Learned** (`.sdlc/lesson-learn.md` + `~/.a-sdlc/lesson-learn.md`) — Categorized rules with MUST/SHOULD/MAY priorities
+4. **Preflight Checks** — Lessons presented before work starts in prd-split, task-start, sprint-run
+5. **Quality Gates** — Completeness verification at prd-split (Step 5.5) and task-complete (DoD checklist)
+
+### File Locations
+
+| File | Location | Purpose |
+|------|----------|---------|
+| Project lessons | `.sdlc/lesson-learn.md` | Project-specific rules |
+| Global lessons | `~/.a-sdlc/lesson-learn.md` | Cross-project rules |
+| Correction log | `.sdlc/corrections.log` | Raw correction entries |
+| Archived corrections | `.sdlc/corrections.log.{sprint_id}` | Post-retrospective archive |
+| CLAUDE.md template | `src/a_sdlc/artifact_templates/claude-md.template.md` | Generated during init |
+| Lesson template | `src/a_sdlc/artifact_templates/lesson-learn.template.md` | Generated during init |
 
 ## Common Mistakes to Avoid
 

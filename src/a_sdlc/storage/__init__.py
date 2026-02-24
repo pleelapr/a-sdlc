@@ -490,6 +490,132 @@ class HybridStorage:
         return self._db.get_next_prd_id(project_id)
 
     # =========================================================================
+    # Design Document Operations
+    # =========================================================================
+
+    def create_design(
+        self,
+        prd_id: str,
+        project_id: str,
+        content: str = "",
+    ) -> dict[str, Any]:
+        """Create a new design document.
+
+        Follows file-first persistence: writes content file before DB record.
+        Design documents have a 1:1 relationship with PRDs.
+
+        Args:
+            prd_id: Parent PRD ID (also used as design ID)
+            project_id: Parent project ID
+            content: Design document markdown content
+
+        Returns:
+            Combined dict with metadata and content
+        """
+        # Write content file first
+        file_path = self._content_mgr.write_design(project_id, prd_id, content)
+
+        # Create DB record (design_id = prd_id for 1:1 relationship)
+        design = self._db.create_design(
+            design_id=prd_id,
+            prd_id=prd_id,
+            project_id=project_id,
+            file_path=str(file_path),
+        )
+
+        # Add content to response
+        design_with_content = dict(design)
+        design_with_content["content"] = content
+        return design_with_content
+
+    def get_design_by_prd(self, prd_id: str) -> dict[str, Any] | None:
+        """Get design document by parent PRD ID with content.
+
+        Args:
+            prd_id: PRD identifier
+
+        Returns:
+            Combined dict with metadata and content, or None if not found
+        """
+        design = self._db.get_design_by_prd(prd_id)
+        if not design:
+            return None
+
+        # Read content from file
+        content = None
+        if design.get("file_path"):
+            content = self._content_mgr.read_content(Path(design["file_path"]))
+        elif design.get("project_id"):
+            content = self._content_mgr.read_design(design["project_id"], prd_id)
+
+        design_with_content = dict(design)
+        design_with_content["content"] = content or ""
+        return design_with_content
+
+    def list_designs(self, project_id: str) -> list[dict[str, Any]]:
+        """List design documents for a project (metadata only).
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            List of design metadata dicts (no content)
+        """
+        return self._db.list_designs(project_id)
+
+    def update_design(self, prd_id: str, content: str | None = None) -> dict[str, Any] | None:
+        """Update a design document.
+
+        Args:
+            prd_id: PRD identifier (design_id = prd_id)
+            content: New content to write (if provided)
+
+        Returns:
+            Combined dict with metadata and content, or None if not found
+        """
+        design = self._db.get_design_by_prd(prd_id)
+        if not design:
+            return None
+
+        kwargs: dict[str, Any] = {}
+
+        # Handle content update
+        if content is not None:
+            file_path = self._content_mgr.write_design(
+                design["project_id"], prd_id, content
+            )
+            kwargs["file_path"] = str(file_path)
+
+        # Update DB record
+        updated = self._db.update_design(prd_id, **kwargs)
+        if updated:
+            # Read content for response
+            read_content = self._content_mgr.read_design(updated["project_id"], prd_id)
+            updated_with_content = dict(updated)
+            updated_with_content["content"] = read_content or ""
+            return updated_with_content
+        return None
+
+    def delete_design(self, prd_id: str) -> bool:
+        """Delete a design document.
+
+        Args:
+            prd_id: PRD identifier (design_id = prd_id)
+
+        Returns:
+            True if deleted, False if not found
+        """
+        design = self._db.get_design_by_prd(prd_id)
+        if not design:
+            return False
+
+        # Delete content file first
+        self._content_mgr.delete_design(design["project_id"], prd_id)
+
+        # Delete from database
+        return self._db.delete_design(prd_id)
+
+    # =========================================================================
     # Sprint Operations
     # =========================================================================
 

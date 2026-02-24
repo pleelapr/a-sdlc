@@ -25,6 +25,7 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
 
   /sdlc:ideate "<idea>"        Explore a vague idea → one or more PRDs
   /sdlc:prd-generate "<desc>"  Create PRD via interactive Q&A
+  /sdlc:prd-architect "<id>"   Generate ADR-style design doc for PRD
   /sdlc:prd-import jira <key>  Import Jira issue as PRD
   /sdlc:prd-list               List all PRDs
   /sdlc:prd "<id>"             View PRD details
@@ -37,6 +38,10 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
 
   /sdlc:investigate "<problem>"     Root cause analysis for bugs/errors
   /sdlc:investigate --error "<msg>" Analyze error message or stack trace
+
+🔍 Code Review
+
+  /sdlc:pr-feedback                Fetch & process PR review comments
 
 📋 Task Management
 
@@ -89,6 +94,13 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__update_prd(prd_id, ...)` - Update PRD
 - `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
 
+### Design Operations
+- `mcp__asdlc__create_design(prd_id, content)` - Create design doc for PRD
+- `mcp__asdlc__get_design(prd_id)` - Get design doc with content
+- `mcp__asdlc__update_design(prd_id, content)` - Update design doc
+- `mcp__asdlc__delete_design(prd_id)` - Delete design doc
+- `mcp__asdlc__list_designs()` - List design docs for current project
+
 ### Task Operations
 - `mcp__asdlc__list_tasks(status?, sprint_id?, prd_id?)` - List tasks
 - `mcp__asdlc__get_task(task_id)` - Get task details
@@ -116,6 +128,9 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__sync_prd_to(prd_id)` - Push PRD to Jira
 - `mcp__asdlc__sync_prd_from(prd_id)` - Pull from Jira to PRD
 
+### Quality Tools
+- `mcp__asdlc__log_correction(context_type, context_id, category, description)` - Log a correction to `.sdlc/corrections.log`
+
 ## Quick Start Workflow
 
 ```
@@ -129,10 +144,45 @@ All commands use the a-sdlc MCP server tools:
 8. /sdlc:sprint-run SPRINT-01              # Execute tasks
 ```
 
+## Lessons Learned System
+
+a-sdlc tracks lessons learned at two levels:
+- **Project:** `.sdlc/lesson-learn.md` — rules specific to this project
+- **Global:** `~/.a-sdlc/lesson-learn.md` — rules from all projects
+
+Lessons are categorized (Testing, Code Quality, Task Completeness, Integration, Documentation) with priorities (MUST/SHOULD/MAY). They are automatically loaded during key workflows:
+- `/sdlc:prd-generate` — Lessons inform PRD quality
+- `/sdlc:prd-split` — Preflight check + quality gate
+- `/sdlc:task-start` — Preflight check before implementation
+- `/sdlc:sprint-run` — Sprint-level lesson summary
+- `/sdlc:task-complete` — Definition-of-done checklist
+- `/sdlc:sprint-complete` — Auto-retrospective with lesson distillation
+- `/sdlc:pr-feedback` — Logs corrections to `.sdlc/corrections.log`
+
+## Quality System
+
+a-sdlc includes a built-in quality feedback loop:
+
+1. **Corrections Log** — Fixes are logged via `mcp__asdlc__log_correction()` from any workflow step
+2. **Retrospective** — `/sdlc:sprint-complete` distills corrections into lessons
+3. **Lessons Learned** — Stored in `.sdlc/lesson-learn.md` (project) and `~/.a-sdlc/lesson-learn.md` (global)
+4. **Preflight Checks** — Lessons are presented before key workflow steps
+5. **Quality Gates** — Completeness verified at PRD split and task completion
+
+### Commands with Quality Gates
+
+- `/sdlc:prd-split` — Includes lesson-learn preflight check and requirements coverage gate
+- `/sdlc:task-start` — Includes lesson-learn preflight before implementation
+- `/sdlc:task-complete` — Includes definition-of-done checklist
+- `/sdlc:sprint-run` — Includes sprint-level lesson preflight
+- `/sdlc:sprint-complete` — Includes auto-retrospective with lesson distillation
+- `/sdlc:pr-feedback` — Logs corrections to `.sdlc/corrections.log`
+
 ## Data Storage
 
 - All data stored in user-level SQLite: `~/.a-sdlc/data.db`
-- No files created in repository (except optional artifacts)
+- Lesson-learn files: `.sdlc/lesson-learn.md` (project), `~/.a-sdlc/lesson-learn.md` (global)
+- Correction log: `.sdlc/corrections.log` (append-only)
 - Data persists across Claude Code sessions
 
 ## CLI Commands

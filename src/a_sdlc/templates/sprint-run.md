@@ -60,6 +60,27 @@ PRD count: 2 → Using ISOLATED MODE (git worktrees)
   PROJ-P0002 (User Profile): 2 tasks
 ```
 
+### Step 1.5: Sprint-Level Lesson Preflight
+
+Read `.sdlc/lesson-learn.md` and `~/.a-sdlc/lesson-learn.md`.
+Aggregate lessons relevant to ALL task components in this sprint.
+
+Present consolidated summary:
+```
+AskUserQuestion({
+  questions: [{
+    question: "Sprint lesson summary — {N} lessons across {M} categories. Ready to proceed?",
+    header: "Sprint prep",
+    options: [
+      { label: "Ready", description: "Reviewed all lessons, ready to start sprint execution" },
+      { label: "Review details", description: "Show me the full lesson list before proceeding" },
+      { label: "Skip preflight", description: "Proceed without lesson review" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
 If only 1 PRD is detected, skip ahead to **Step 3** (Simple Mode).
 
 ---
@@ -414,6 +435,19 @@ Action Taken:
 
 To retry: /sdlc:task-start PROJ-T00002
 ```
+
+**Log failures as corrections** so the retrospective can identify patterns:
+
+```
+mcp__asdlc__log_correction(
+  context_type="task",
+  context_id="PROJ-T00002",
+  category="{appropriate_category}",
+  description="Task failed: {error reason}. {what was learned or needs fixing}"
+)
+```
+
+**Reminder to agents:** Each task agent should call `mcp__asdlc__log_correction()` whenever it discovers and fixes issues during implementation (bugs, missing tests, pattern violations, etc.). Log corrections as they happen — don't wait until task completion.
 
 ### 13. Generate Summary
 

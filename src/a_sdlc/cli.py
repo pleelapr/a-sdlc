@@ -2850,12 +2850,13 @@ def complete_task_cmd(task_id: str) -> None:
 def connect() -> None:
     """Configure external system integrations.
 
-    Connect to Linear, Jira, or Confluence to sync sprints, tasks, and artifacts.
+    Connect to Linear, Jira, Confluence, or GitHub for sync and PR feedback.
 
     \b
       a-sdlc connect linear      Configure Linear integration
       a-sdlc connect jira        Configure Jira integration
       a-sdlc connect confluence  Configure Confluence integration
+      a-sdlc connect github      Configure GitHub integration (PR feedback)
     """
     pass
 
@@ -2993,20 +2994,93 @@ def connect_confluence(url: str, email: str, api_token: str, space_key: str, par
     console.print("  - Push PRDs: [cyan]a-sdlc prd push <prd-id>[/cyan]")
 
 
+@connect.command("github")
+@click.option("--token", prompt="GitHub Personal Access Token", hide_input=True, help="GitHub PAT with 'repo' scope")
+@click.option("--global", "-g", "save_global", is_flag=True, help="Save globally (~/.config/a-sdlc/) instead of project-level")
+def connect_github(token: str, save_global: bool) -> None:
+    """Configure GitHub integration for PR feedback retrieval.
+
+    The token is validated before storing. By default, saves to the current project.
+    Use --global to save to ~/.config/a-sdlc/config.yaml for cross-project use.
+
+    Examples:
+
+        a-sdlc connect github --token ghp_xxx
+        a-sdlc connect github --global
+        a-sdlc connect github  # Interactive prompt
+    """
+    from a_sdlc.server.github import (
+        GitHubClient,
+        save_global_github_config,
+    )
+
+    # Validate token
+    try:
+        client = GitHubClient(token)
+        user = client.validate_token()
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+    if save_global:
+        save_global_github_config({"token": token})
+        console.print(f"[green]✓ GitHub integration configured globally (authenticated as @{user['login']})[/green]")
+        console.print("[dim]Token saved to ~/.config/a-sdlc/config.yaml[/dim]")
+    else:
+        from a_sdlc.storage import get_storage
+
+        storage = get_storage()
+        cwd = str(Path.cwd())
+        project = storage.get_project_by_path(cwd)
+
+        if not project:
+            console.print("[yellow]No project found for current directory.[/yellow]")
+            console.print("Run [cyan]/sdlc:init[/cyan] first, or use [cyan]--global[/cyan] for cross-project config.")
+            sys.exit(1)
+
+        storage.set_external_config(project["id"], "github", {"token": token})
+        console.print(f"[green]✓ GitHub integration configured for {project['name']} (authenticated as @{user['login']})[/green]")
+
+    console.print()
+    console.print("Next steps:")
+    console.print("  - Get PR feedback: [cyan]/sdlc:pr-feedback[/cyan]")
+
+
 @main.command("disconnect")
-@click.argument("system", type=click.Choice(["linear", "jira", "confluence"]))
+@click.argument("system", type=click.Choice(["linear", "jira", "confluence", "github"]))
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-def disconnect(system: str, yes: bool) -> None:
+@click.option("--global", "-g", "remove_global", is_flag=True, help="Remove global config (~/.config/a-sdlc/) instead of project-level (github only)")
+def disconnect(system: str, yes: bool, remove_global: bool) -> None:
     """Remove an external system integration.
 
-    SYSTEM: The integration to remove ('linear', 'jira', or 'confluence')
+    SYSTEM: The integration to remove ('linear', 'jira', 'confluence', or 'github')
 
     Examples:
 
         a-sdlc disconnect linear
         a-sdlc disconnect jira -y
         a-sdlc disconnect confluence
+        a-sdlc disconnect github
+        a-sdlc disconnect github --global
     """
+    if remove_global:
+        if system != "github":
+            console.print(f"[yellow]--global flag is only supported for github.[/yellow]")
+            sys.exit(1)
+
+        from a_sdlc.server.github import delete_global_github_config
+
+        if not yes:
+            if not click.confirm("Remove global GitHub configuration?"):
+                console.print("Aborted.")
+                return
+
+        if delete_global_github_config():
+            console.print("[green]✓ Global GitHub integration removed[/green]")
+        else:
+            console.print("[yellow]No global GitHub configuration found.[/yellow]")
+        return
+
     from a_sdlc.storage import get_storage
 
     storage = get_storage()
@@ -3063,6 +3137,7 @@ def integrations() -> None:
         console.print("Configure integrations:")
         console.print("  - [cyan]a-sdlc connect linear[/cyan]")
         console.print("  - [cyan]a-sdlc connect jira[/cyan]")
+        console.print("  - [cyan]a-sdlc connect github[/cyan]")
         return
 
     table = Table(show_header=True, header_style="bold")
@@ -3078,6 +3153,10 @@ def integrations() -> None:
             config_display = f"Team: {cfg.get('team_id', 'N/A')}"
         elif config["system"] == "confluence":
             config_display = f"Space: {cfg.get('space_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
+        elif config["system"] == "github":
+            token_val = cfg.get("token", "")
+            masked = f"***{token_val[-4:]}" if len(token_val) >= 4 else "***"
+            config_display = f"Token: {masked}"
         else:  # jira
             config_display = f"Project: {cfg.get('project_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
 
@@ -3089,6 +3168,15 @@ def integrations() -> None:
 
     console.print(table)
     console.print()
+
+    # Show global GitHub config if configured
+    from a_sdlc.server.github import load_global_github_config
+    global_gh = load_global_github_config()
+    if global_gh:
+        token_val = global_gh.get("token", "")
+        masked = f"***{token_val[-4:]}" if len(token_val) >= 4 else "***"
+        console.print(f"[dim]Global GitHub config: Token: {masked} (~/.config/a-sdlc/config.yaml)[/dim]")
+        console.print()
 
     # Show sync mappings summary
     mappings = storage.list_sync_mappings()
@@ -3741,10 +3829,21 @@ def init_project_cmd(name: str | None) -> None:
 
     project = storage.create_project(project_id, project_name, cwd)
 
+    # Generate CLAUDE.md, lesson-learn.md, and global lesson-learn.md
+    from a_sdlc.core.init_files import generate_init_files
+
+    init_results = generate_init_files(Path(cwd), project_name)
+    init_files_status = []
+    for result in init_results["results"]:
+        status_icon = "[green]created[/green]" if result["status"] == "created" else "[yellow]exists[/yellow]"
+        init_files_status.append(f"  {status_icon}: {result['path']}")
+    init_files_display = "\n".join(init_files_status)
+
     console.print(Panel(
         f"[green]Project '{project_name}' initialized![/green]\n\n"
         f"ID: {project['id']}\n"
         f"Path: {project['path']}\n\n"
+        f"Generated files:\n{init_files_display}\n\n"
         "Next steps:\n"
         "  [cyan]/sdlc:scan[/cyan]     - Generate documentation artifacts\n"
         "  [cyan]/sdlc:prd[/cyan]      - Create a PRD\n"

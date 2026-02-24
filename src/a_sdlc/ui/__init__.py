@@ -434,6 +434,13 @@ async def prds_page(request: Request, project: str | None = None, status: str | 
         )
 
     prds = storage.list_prds(current_project["id"], status=status, sprint_id=sprint_id)
+
+    # Check design existence for each PRD
+    designs = storage.list_designs(current_project["id"])
+    design_prd_ids = {d["prd_id"] for d in designs}
+    for prd in prds:
+        prd["has_design"] = prd["id"] in design_prd_ids
+
     sprints = storage.list_sprints(current_project["id"])
 
     return templates.TemplateResponse(
@@ -524,9 +531,12 @@ async def prd_detail(request: Request, prd_id: str):
     # Generate dependency graph
     graph_data = _generate_dependency_graph(tasks)
 
+    # Get design document if exists
+    design = storage.get_design_by_prd(prd_id)
+
     return templates.TemplateResponse(
         "prd_detail.html",
-        {"request": request, "prd": prd, "sprints": sprints, "tasks": tasks, "graph_data": graph_data}
+        {"request": request, "prd": prd, "sprints": sprints, "tasks": tasks, "graph_data": graph_data, "design": design}
     )
 
 
@@ -540,6 +550,29 @@ async def update_prd_content(prd_id: str, request: Request):
     prd = storage.update_prd(prd_id, content=content)
     if not prd:
         return HTMLResponse(content="PRD not found", status_code=404)
+
+    return {"success": True}
+
+
+@app.put("/prds/{prd_id}/design")
+async def update_design_content(prd_id: str, request: Request):
+    """Update design document content."""
+    storage = get_storage()
+    data = await request.json()
+    content = data.get("content", "")
+
+    # Check if design exists; create if not
+    existing = storage.get_design_by_prd(prd_id)
+    if existing:
+        design = storage.update_design(prd_id, content=content)
+    else:
+        prd = storage.get_prd(prd_id)
+        if not prd:
+            return HTMLResponse(content="PRD not found", status_code=404)
+        design = storage.create_design(prd_id=prd_id, project_id=prd["project_id"], content=content)
+
+    if not design:
+        return HTMLResponse(content="Failed to save design", status_code=500)
 
     return {"success": True}
 
@@ -993,6 +1026,41 @@ async def save_confluence_integration(
             "system": "confluence",
             "project": current_project,
             "integration": integrations.get("confluence"),
+        }
+    )
+
+
+@app.post("/settings/integrations/github", response_class=HTMLResponse)
+async def save_github_integration(
+    request: Request,
+    project: str,
+    token: str = Form(...),
+):
+    """Save GitHub integration configuration with token validation."""
+    storage = get_storage()
+    current_project = _get_current_project(project)
+
+    if not current_project:
+        return HTMLResponse(content="Project not found", status_code=404)
+
+    # Validate token before saving
+    from a_sdlc.server.github import GitHubClient
+    try:
+        client = GitHubClient(token)
+        client.validate_token()
+    except RuntimeError:
+        return HTMLResponse(content="Invalid GitHub token. Ensure the token has 'repo' scope.", status_code=400)
+
+    storage.set_external_config(current_project["id"], "github", {"token": token})
+
+    integrations = _get_integrations_dict(current_project["id"])
+    return templates.TemplateResponse(
+        "partials/integration_card.html",
+        {
+            "request": request,
+            "system": "github",
+            "project": current_project,
+            "integration": integrations.get("github"),
         }
     )
 

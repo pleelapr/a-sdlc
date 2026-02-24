@@ -140,4 +140,49 @@
     {% endif %}
     <div id="confluence-form-container"></div>
 </div>
+
+{% elif system == 'github' %}
+<div class="integration-card" id="integration-github">
+    <div class="integration-header">
+        <div class="integration-title">
+            <h3>GitHub</h3>
+            {% if integration %}
+            <span class="integration-status status-configured">Configured</span>
+            {% else %}
+            <span class="integration-status status-not-configured">Not Configured</span>
+            {% endif %}
+        </div>
+    </div>
+    <p class="integration-description">Retrieve PR review comments for the current branch</p>
+    {% if integration %}
+    <div class="integration-details">
+        Token: <code>***{{ integration.config.token[-4:] }}</code>
+    </div>
+    <div class="integration-actions">
+        <button class="btn"
+                hx-get="/settings/integrations/github/edit?project={{ project.id }}"
+                hx-target="#github-form-container"
+                hx-swap="innerHTML">
+            Edit
+        </button>
+        <button class="btn btn-danger"
+                hx-delete="/settings/integrations/github?project={{ project.id }}"
+                hx-confirm="Are you sure you want to remove this integration?"
+                hx-target="#integration-github"
+                hx-swap="outerHTML">
+            Remove
+        </button>
+    </div>
+    {% else %}
+    <div class="integration-actions">
+        <button class="btn btn-primary"
+                hx-get="/settings/integrations/github/edit?project={{ project.id }}"
+                hx-target="#github-form-container"
+                hx-swap="innerHTML">
+            Configure
+        </button>
+    </div>
+    {% endif %}
+    <div id="github-form-container"></div>
+</div>
 {% endif %}

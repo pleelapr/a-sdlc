@@ -21,6 +21,24 @@ Create a Product Requirements Document interactively from a brief description. U
 **RIGHT**: Create PRD → Display summary → STOP
 **WRONG**: Create PRD → Split into tasks → Start implementing
 
+## CRITICAL: Anti-Fluff Rules
+
+**Every line in the PRD must trace to a user answer. Zero AI-inferred content.**
+
+- **MUST NOT** add features, parameters, NFRs, or scope items that were not explicitly discussed and confirmed by the user via AskUserQuestion
+- **MUST NOT** hallucinate acceptance criteria — every AC must trace to a specific user answer from a specific round
+- **MUST NOT** expand scope beyond what the user confirmed in clarifying questions
+- **MUST NOT** use vague language ("improve", "better", "ensure", "handle properly") without measurable targets provided by the user
+- **MUST NOT** add User Stories for user types the user did not mention
+- **MUST NOT** infer "obvious" requirements — if it wasn't discussed, it doesn't belong in the PRD
+- **MUST** map every Functional Requirement to a specific user answer (cite the round and question)
+- **MUST** map every Non-Functional Requirement to a specific user answer
+- **MUST** ask the user if information is missing — never fill in the blanks yourself
+
+**Traceability Rule:** When generating PRD content in Step 3, mentally tag each requirement with `[Round N, Q M]` to verify it traces to a real answer. If you cannot tag it, do not include it.
+
+**If in doubt, ASK — do not assume.**
+
 ## Execution Steps
 
 ### 1. Parse User Description
@@ -49,40 +67,168 @@ Use this context to:
 - Understand existing patterns before asking about implementation approach
 - Identify affected areas more precisely
 
+Also read lesson-learn files if available:
+```
+Read: .sdlc/lesson-learn.md        → Project-specific lessons
+Read: ~/.a-sdlc/lesson-learn.md    → Global lessons (if exists)
+```
+
+Use lessons to inform PRD quality — e.g., if past lessons mention "missing test tasks", ensure the PRD explicitly calls out testing requirements.
+
 If `context.artifacts.scan_status` is `"not_scanned"`:
 ```
 ⚠️ No codebase artifacts found. Run `/sdlc:scan` first for codebase-aware PRD generation.
    Continuing without codebase context...
 ```
 
-### 2. Ask Clarifying Questions (Interactive)
+### 2. Ask Clarifying Questions (Interactive with AskUserQuestion)
 
-**Problem Context:**
-- "What problem does this solve?"
-- "Why is this change needed now?"
-- "What's the impact if we don't make this change?"
+**IMPORTANT**: Use the `AskUserQuestion` tool for ALL clarifying questions. This gives users selectable multiple-choice options instead of free-form text. Users can always pick "Other" to provide custom answers.
 
-**Scope Questions:**
-- "What components will be affected?"
-- "Which user workflows are impacted?"
-- "Will this require data model changes?"
+Ask questions in **3 base rounds + up to 3 adaptive follow-up rounds** (max 6 rounds total, max 3 questions per round). Adapt options based on the description, codebase context, and prior answers.
 
-**Requirements Discovery:**
-- "What are the quantitative goals?" (cost reduction %, latency targets, uptime)
-- "What quality standards must be met?"
-- "Is backward compatibility required?"
-- "What's the target timeline?"
+**Round structure:**
+- **Rounds 1-3**: Base rounds (always run) — Problem & Change Type, Scope & Requirements, Acceptance & Boundaries
+- **Rounds 4-6**: Adaptive follow-ups (only if scope is still ambiguous after Round 3)
+- **Each round**: Max 3 questions via a single AskUserQuestion call
+- **Early stop**: If scope is clear after any round, proceed to Step 3 immediately
 
-**Acceptance Criteria:**
-- "How will success be measured?"
-- "What tests will validate this change?"
-- "What's the rollback plan?"
+#### Round 1: Problem & Change Type
 
-**Boundaries:**
-- "What's explicitly out of scope?"
-- "What dependencies must be resolved first?"
+Use `AskUserQuestion` with 2-3 questions:
+
+```
+Question 1: "What type of change is this?"
+Header: "Change type"
+Options (adapt to description):
+- "New feature" — Adding entirely new functionality
+- "Enhancement" — Improving existing functionality
+- "Refactor" — Restructuring without behavior change
+- "Bug fix" — Correcting broken behavior
+
+Question 2: "What's the primary motivation?"
+Header: "Motivation"
+Options (adapt to description):
+- "User request" — Users/customers have asked for this
+- "Cost reduction" — Reduce operational or infrastructure costs
+- "Tech debt" — Address accumulated technical debt
+- "Performance" — Improve speed, latency, or resource usage
+
+Question 3: "How urgent is this change?"
+Header: "Priority"
+Options:
+- "Critical" — Blocking other work or causing incidents
+- "High" — Needed this sprint/cycle
+- "Medium" — Important but not time-sensitive
+- "Low" — Nice to have, can wait
+```
+
+#### Round 2: Scope & Requirements
+
+Based on Round 1 answers, ask 2-4 more questions:
+
+```
+Question 1: "What's the expected scope of changes?"
+Header: "Scope"
+Options (adapt based on codebase artifacts):
+- "Single component" — Isolated to one module/service
+- "Multiple components" — Touches 2-3 related modules
+- "Cross-cutting" — Affects many parts of the system
+- "Infrastructure" — Config, CI/CD, deployment changes
+
+Question 2: "Is backward compatibility required?"
+Header: "Compat"
+Options:
+- "Full compat" — Existing APIs/behavior must not break
+- "Migration path" — Breaking changes OK with migration plan
+- "No constraint" — Clean break is acceptable
+
+Question 3 (if applicable): "What quality attributes matter most?"
+Header: "Quality"
+multiSelect: true
+Options (pick relevant ones):
+- "Performance" — Latency, throughput targets
+- "Security" — Auth, data protection, compliance
+- "Reliability" — Uptime, error handling, recovery
+- "Scalability" — Handle growth in users/data
+```
+
+#### Round 3: Acceptance & Boundaries
+
+Final round of 2-3 questions:
+
+```
+Question 1: "How should we validate success?"
+Header: "Validation"
+multiSelect: true
+Options:
+- "Unit tests" — Function-level test coverage
+- "Integration tests" — Cross-component verification
+- "Performance benchmarks" — Measurable perf targets
+- "Manual QA" — Human verification of workflows
+
+Question 2: "What should be explicitly OUT of scope?"
+Header: "Exclusions"
+multiSelect: true
+Options (adapt based on description — suggest likely scope-creep areas):
+- "{Related feature A}" — Description of why excluded
+- "{Related feature B}" — Description of why excluded
+- "{Optimization area}" — Description of why excluded
+- "Nothing excluded" — Everything related is in scope
+```
+
+#### Adapting Questions to Context
+
+- If codebase artifacts exist, reference **real component names** in options (e.g., "AuthService" instead of "Single component")
+- If the description implies a specific domain (e.g., "authentication"), tailor options to that domain
+- Skip questions that are already answered by the description (e.g., don't ask change type if description says "Add new...")
+- Use `multiSelect: true` when multiple answers are valid (quality attributes, validation methods, exclusions)
+- **If user gives vague answers, do NOT proceed** — ask a follow-up round to get specifics
+- **Each round should narrow scope, not expand it** — never introduce new topics the user didn't mention
+
+#### Adaptive Follow-Up Rounds (Rounds 4-6)
+
+After Round 3, evaluate whether scope is sufficiently clear to generate a quality PRD.
+
+**Ambiguity triggers** — run an additional round if ANY of these are true:
+- User selected "Other" with vague or incomplete text in any round
+- Scope is "Cross-cutting" but affected components are not specifically named
+- Multiple components were selected but boundaries between them are unclear
+- Acceptance criteria lack measurable targets (no numbers, thresholds, or specific behaviors)
+- The user's answers conflict or leave gaps (e.g., said "high priority" but "no timeline")
+- Key questions were skipped because they seemed obvious — but the answers would change the PRD
+
+**Adaptive round content:**
+Each follow-up round targets the specific ambiguity found. Examples:
+
+```
+Round 4 example (if acceptance criteria lack measurable targets):
+  Question: "You mentioned [quality attribute] matters. What's the specific target?"
+  Header: "Target"
+  Options:
+  - "{Specific measurable option A}" — e.g., "Response time < 200ms"
+  - "{Specific measurable option B}" — e.g., "99.9% uptime"
+  - "No specific target" — Directional improvement only
+```
+
+```
+Round 5 example (if component boundaries are unclear):
+  Question: "You selected [Component A] and [Component B]. What's the boundary?"
+  Header: "Boundary"
+  Options:
+  - "{Component A} owns X, {Component B} owns Y"
+  - "Shared responsibility" — Both components involved equally
+  - "Not sure yet" — Needs investigation
+```
+
+**Stop conditions** — stop asking and proceed to Step 3 if:
+- All ambiguity triggers are resolved
+- User explicitly says scope is clear (via "Other" response)
+- Maximum 6 rounds reached
 
 ### 3. Generate PRD Content
+
+**CRITICAL: Apply Anti-Fluff Rules during generation.** Every item below must trace to a specific user answer. Do NOT add content that wasn't discussed.
 
 Build markdown content with structure:
 
@@ -93,57 +239,192 @@ Build markdown content with structure:
 **Created**: {timestamp}
 
 ## Overview
-{Synthesized from description and answers}
+{Synthesized ONLY from description and confirmed answers — no embellishment}
 
 ## Problem Statement
-{From problem context questions}
+{From problem context questions — state only what the user described as the problem}
 
 ## Goals
-{Derived from requirements discovery}
+{ONLY goals the user confirmed — each must have a measurable target or timeline if the user provided one}
 
 ## Affected Components
-{From scope questions}
-- Component A: {impact description}
-- Component B: {impact description}
+{ONLY components the user selected or confirmed in scope questions}
+- Component A: {impact as described by user}
+- Component B: {impact as described by user}
 
 ## Functional Requirements
-- FR-001: {requirement from answers}
-- FR-002: {requirement from answers}
+{ONLY requirements derived from user answers — cite the source}
+- FR-001: {requirement} [from Round N, Question M]
+- FR-002: {requirement} [from Round N, Question M]
 
 ## Non-Functional Requirements
-- NFR-001: {requirement from answers}
-- NFR-002: {requirement from answers}
+{ONLY if user discussed quality attributes or constraints}
+- NFR-001: {requirement} [from Round N, Question M]
 
 ## User Stories
-- As a {user type}, I want {capability}, so that {benefit}
+{ONLY for user types the user mentioned — omit this section if no user types were discussed}
+- As a {user type mentioned by user}, I want {capability from answers}, so that {benefit from answers}
 
 ## Acceptance Criteria
-- AC-001: {criterion from answers}
-- AC-002: {criterion from answers}
+{ONLY testable criteria derived from validation answers}
+- AC-001: {criterion} [from Round N, Question M]
+- AC-002: {criterion} [from Round N, Question M]
 
 ## Out of Scope
-{From boundaries questions}
+{ONLY exclusions the user confirmed in boundary questions}
 
 ## Open Questions
-{Unresolved items from interactive session}
+{Unresolved items from interactive session — things the user said "not sure" about}
 ```
 
-### 4. Confirm Before Saving
+**Post-generation check:** Before presenting to user, verify every FR, NFR, and AC traces to a user answer. Remove any that don't.
 
-Present generated PRD content to user for review:
+### 3.5. Anti-Fluff Validation
+
+Before presenting the PRD for section-by-section review, validate the generated content against quality rules.
+
+#### Validation Rules
+
+Check each section against these rules:
+
+| Section | Rule | Flag If |
+|---------|------|---------|
+| Goals | Measurability | Any goal lacks a measurable target or timeline that the user provided |
+| Functional Requirements | Traceability | Any FR cannot be mapped to a specific user answer from Rounds 1-6 |
+| Non-Functional Requirements | Traceability | Any NFR was not discussed in clarifying questions |
+| Acceptance Criteria | Testability | Any AC uses vague language or cannot be verified with a concrete test |
+| User Stories | Relevance | Any user story describes a user type not mentioned by the user |
+| Out of Scope | Specificity | Fewer than 2 specific exclusions, or only generic phrases like "future work" |
+| Affected Components | Evidence | Any component listed that wasn't identified during questions |
+
+#### Vague Language Detection
+
+Flag any of these words/phrases when they appear in requirements or criteria WITHOUT measurable targets:
+- "improve", "better", "enhance", "optimize"
+- "ensure", "handle properly", "manage effectively"
+- "as needed", "where appropriate", "when necessary"
+- "robust", "scalable", "efficient", "reliable" (without specific thresholds)
+- "etc.", "and more", "various", "several"
+
+#### Traceability Check
+
+For each FR and NFR, verify it has a `[from Round N, Question M]` tag. If a requirement cannot be traced to a user answer, flag it as "potentially AI-inferred — consider removing."
+
+#### Present Results
+
+If flags are found:
 
 ```
-📝 PRD Ready for Review
+⚠️ Anti-Fluff Validation — {N} potential issues found
 
-[Display generated PRD content]
+**Goals:**
+- [FLAG] Goal 2: "Improve developer experience" — lacks measurable target
+  → Ask user for a specific metric, or remove this goal
 
-Options:
-1. ✅ **Save** - Create this PRD in a-sdlc
-2. ✏️ **Edit** - Revise specific sections
-3. ❌ **Cancel** - Discard without saving
+**Functional Requirements:**
+- [FLAG] FR-003: "Handle edge cases gracefully" — no user answer traces to this
+  → This appears to be AI-inferred. Remove unless user confirms it.
 
-Waiting for your choice...
+**Acceptance Criteria:**
+- [FLAG] AC-002: "System performs well under load" — not testable as stated
+  → Needs specific threshold from user (e.g., "handles 100 req/s")
+
+These flags will be highlighted during the section-by-section review.
+Flagged items are candidates for removal or revision.
 ```
+
+If no flags are found:
+
+```
+✅ Anti-Fluff Validation Passed — all content traces to user answers.
+```
+
+Proceed to Step 4 (section-by-section review) regardless of flag count. Flags are informational — the user decides what to keep or remove during review.
+
+#### Flag Integration with Section Review
+
+During Step 4 (section-by-section review), if a section contains flagged items:
+- Display the flags alongside the section content
+- Add a note: "⚠️ This section has {N} flagged items (see validation results above)"
+- This guides the user to focus attention on potentially problematic sections
+
+### 4. Section-by-Section Review
+
+**Do NOT present the entire PRD for bulk approval.** Instead, review each section individually so the user can confirm, edit, or remove each one.
+
+#### 4.1: Announce Review
+
+```
+📝 PRD Generated — Starting Section-by-Section Review
+
+I'll present each section of the PRD individually. For each section, you can:
+- **Keep** it as-is
+- **Edit** it (tell me what to change)
+- **Remove** it entirely
+```
+
+#### 4.2: Review Each Section
+
+For each section in this order — Overview, Problem Statement, Goals, Affected Components, Functional Requirements, Non-Functional Requirements, User Stories, Acceptance Criteria, Out of Scope, Open Questions:
+
+1. Display the section content
+2. Ask via AskUserQuestion:
+
+```
+AskUserQuestion([
+  {
+    question: "Review the '{section_name}' section above:",
+    header: "{section}",
+    options: [
+      { label: "Keep", description: "This section is accurate and complete" },
+      { label: "Edit", description: "I want to change something in this section" },
+      { label: "Remove", description: "Remove this section — not needed in this PRD" }
+    ]
+  }
+])
+```
+
+- If **Keep**: Include as-is, move to next section
+- If **Edit**: Ask the user what to change. Revise the section. Re-present the SAME section for approval (loop until user selects Keep or Remove)
+- If **Remove**: Exclude from final PRD, move to next section
+
+#### 4.3: Assemble Final PRD
+
+After all sections are reviewed, assemble the final PRD from kept/edited sections only.
+
+Display a summary:
+
+```
+📋 PRD Assembly Summary:
+
+  ✅ Overview — kept
+  ✅ Problem Statement — kept
+  ✏️ Goals — edited
+  ✅ Functional Requirements — kept
+  ❌ User Stories — removed
+  ✅ Acceptance Criteria — kept
+  ✅ Out of Scope — kept
+```
+
+#### 4.4: Final Confirmation
+
+```
+AskUserQuestion([
+  {
+    question: "Final PRD assembled. How would you like to proceed?",
+    header: "Save PRD",
+    options: [
+      { label: "Save", description: "Create this PRD in a-sdlc as draft" },
+      { label: "Re-review", description: "Go through the sections again from the start" },
+      { label: "Cancel", description: "Discard without saving" }
+    ]
+  }
+])
+```
+
+- If **Save**: Proceed to Step 5
+- If **Re-review**: Loop back to Step 4.2
+- If **Cancel**: Discard and stop
 
 **Wait for explicit user approval before saving.**
 
@@ -209,36 +490,104 @@ The user must explicitly run one of these commands to continue:
 /sdlc:prd-generate "Change default model from GPT-5 to GPT-4"
 ```
 
-**Claude's Response:**
+**Claude's Flow:**
+
+**Step 1** — Parse description + load codebase context
+
+**Step 2** — Round 1 questions via `AskUserQuestion`:
 ```
-📝 Creating PRD for: Change default model from GPT-5 to GPT-4
+AskUserQuestion([
+  {
+    question: "What type of change is this?",
+    header: "Change type",
+    options: [
+      { label: "Enhancement", description: "Improving existing model configuration" },
+      { label: "Cost optimization", description: "Reducing operational costs" },
+      { label: "Refactor", description: "Restructuring without behavior change" }
+    ]
+  },
+  {
+    question: "What's the primary motivation?",
+    header: "Motivation",
+    options: [
+      { label: "Cost reduction", description: "GPT-5 pricing is too high for current usage" },
+      { label: "Performance", description: "GPT-4 latency is better for our use case" },
+      { label: "Simplification", description: "Reduce model dependency complexity" }
+    ]
+  }
+])
+```
+User selects: **Cost optimization**, **Cost reduction**
 
-❓ Let me ask some clarifying questions:
+**Step 3** — Round 2 questions (adapted to answers):
+```
+AskUserQuestion([
+  {
+    question: "Which components will need changes?",
+    header: "Scope",
+    multiSelect: true,
+    options: [
+      { label: "inference-service", description: "Model invocation and routing" },
+      { label: "api-gateway", description: "Request handling and model parameter" },
+      { label: "model-config", description: "Default model settings" },
+      { label: "monitoring", description: "Cost tracking dashboards" }
+    ]
+  },
+  {
+    question: "Is backward compatibility required?",
+    header: "Compat",
+    options: [
+      { label: "Full compat", description: "API still accepts model param for GPT-5 override" },
+      { label: "Migration path", description: "Deprecate GPT-5 with transition period" },
+      { label: "Clean break", description: "Switch entirely, no override" }
+    ]
+  }
+])
+```
+User selects: **inference-service + api-gateway + model-config**, **Full compat**
 
-1. What problem does this solve?
-   > Reduce operational costs while maintaining acceptable quality
+**Step 4** — Round 3 questions:
+```
+AskUserQuestion([
+  {
+    question: "How should we validate success?",
+    header: "Validation",
+    multiSelect: true,
+    options: [
+      { label: "Cost metrics", description: "65%+ reduction in model API costs" },
+      { label: "Latency benchmarks", description: "Max 15% slower than GPT-5 baseline" },
+      { label: "Integration tests", description: "All existing API tests pass" },
+      { label: "Manual QA", description: "Verify output quality on sample prompts" }
+    ]
+  },
+  {
+    question: "What should be explicitly OUT of scope?",
+    header: "Exclusions",
+    multiSelect: true,
+    options: [
+      { label: "Prompt optimization", description: "No rewriting prompts for GPT-4" },
+      { label: "Model fine-tuning", description: "No custom GPT-4 fine-tuning" },
+      { label: "Multi-model routing", description: "No dynamic model selection logic" }
+    ]
+  }
+])
+```
+User selects: **Cost metrics + Latency benchmarks + Integration tests**, **Prompt optimization + Model fine-tuning**
 
-2. Why change from GPT-5 to GPT-4 specifically?
-   > GPT-5 pricing is 3x GPT-4, quality difference minimal for our use case
+**Step 5** — Generate PRD content from structured answers
 
-3. What components will be affected?
-   > inference-service, api-gateway, model-config
+**Step 6** — Section-by-section review:
+- Overview: Keep ✅
+- Problem Statement: Keep ✅
+- Goals: Edit ✏️ (user removes a vague goal, adds measurable target)
+- Functional Requirements: Keep ✅
+- Non-Functional Requirements: Keep ✅
+- User Stories: Remove ❌ (not relevant for this change)
+- Acceptance Criteria: Keep ✅
+- Out of Scope: Keep ✅
 
-4. Target cost reduction percentage?
-   > 65% cost reduction
-
-5. Acceptable latency increase?
-   > Max 15% slower than GPT-5 baseline
-
-6. Backward compatibility needed?
-   > Yes, API should accept model parameter for overrides
-
-7. How will success be measured?
-   > Cost metrics dashboard + latency monitoring
-
-8. What's out of scope?
-   > Model fine-tuning, prompt optimization
-
+**Step 7** — After user approves final assembly:
+```
 ✅ PRD created: model-downgrade-gpt4
 
 📊 Summary:

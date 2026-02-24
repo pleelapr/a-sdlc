@@ -54,7 +54,112 @@ mcp__asdlc__init_project(name="My Project", shortname="{chosen_shortname}")
 This will:
 1. Register the project with the chosen shortname
 2. Create the project in the a-sdlc database
-3. Return the project context with ID format examples
+3. Generate `CLAUDE.md` in the project root (with lesson-learn and correction logging rules)
+4. Generate `.sdlc/lesson-learn.md` (project-level lessons tracking)
+5. Generate `~/.a-sdlc/lesson-learn.md` (global lessons, if it doesn't exist)
+6. Return the project context with ID format examples
+
+**Note:** If `CLAUDE.md` or `lesson-learn.md` already exists, they will NOT be overwritten.
+
+### Upgrade Path: Existing Project
+
+If `init_project()` returns `status: "exists"`, the project is already registered. Instead of stopping, perform an upgrade check using the `init_files` context from the response:
+
+#### 3a. Check CLAUDE.md
+
+Read the project's `CLAUDE.md`. Search for the marker `<!-- a-sdlc:managed -->`.
+
+- **If marker is missing**: Append the a-sdlc integration block at the end of the file:
+
+```markdown
+## a-sdlc Integration
+<!-- a-sdlc:managed -->
+
+This project uses a-sdlc for SDLC management.
+
+**Before starting work, read these files:**
+- `.sdlc/lesson-learn.md` — Project-specific lessons and rules
+- `~/.a-sdlc/lesson-learn.md` — Global cross-project lessons
+- `.sdlc/artifacts/` — Generated codebase documentation (if available)
+
+**During work:**
+- Log corrections to `.sdlc/corrections.log` when fixing mistakes
+- Update lesson-learn files when patterns emerge
+- Use `/sdlc:help` for available commands
+```
+
+- **If marker exists but content is outdated**: Replace the content between `<!-- a-sdlc:managed -->` and the next `## ` heading (or end of file) with the block above.
+- **If marker exists and content is current**: No changes needed.
+
+#### 3b. Check `.sdlc/lesson-learn.md`
+
+If `init_files.lesson_learn` is `false`, create `.sdlc/lesson-learn.md` with the standard lesson-learn template content:
+
+```markdown
+# Lessons Learned
+
+Rules and patterns discovered during development. Claude Code reads this file at the start of every session and follows these lessons during all work.
+
+**Priority Levels:**
+- **MUST** — Always follow. Never skip without explicit user override
+- **SHOULD** — Follow by default. Skip only with justification
+- **MAY** — Consider when relevant. Skip freely if not applicable
+
+## Testing
+
+<!-- Lessons about test coverage, test quality, edge cases -->
+
+## Code Quality
+
+<!-- Lessons about code style, duplication, naming, patterns -->
+
+## Task Completeness
+
+<!-- Lessons about missing requirements, incomplete implementations -->
+
+## Integration
+
+<!-- Lessons about component wiring, API contracts, cross-module issues -->
+
+## Documentation
+
+<!-- Lessons about missing docs, unclear comments, outdated references -->
+```
+
+#### 3c. Check `~/.a-sdlc/lesson-learn.md`
+
+If the global lesson-learn file does not exist at `~/.a-sdlc/lesson-learn.md`, create it with the same template content as above.
+
+#### 3d. Check `.sdlc/` directory structure
+
+If `init_files.sdlc_dir` is `false`, or if subdirectories are missing, create:
+
+```bash
+mkdir -p .sdlc/artifacts
+mkdir -p .sdlc/.cache
+```
+
+#### 3e. Report Upgrade Results
+
+Report what was created or updated to the user:
+
+```
+✓ Project upgrade check complete: {project_name}
+
+  Shortname: {shortname}
+  Project ID: {project_id}
+
+  Checked/Updated:
+  - CLAUDE.md: {created a-sdlc block | already current | appended a-sdlc block}
+  - .sdlc/lesson-learn.md: {created | already exists}
+  - ~/.a-sdlc/lesson-learn.md: {created | already exists}
+  - .sdlc/artifacts/: {created | already exists}
+  - .sdlc/.cache/: {created | already exists}
+```
+
+Then skip to the **Output** section (do not repeat Steps 4-5 for existing projects).
+
+---
 
 ### Step 4: Create Project Folder Structure
 
@@ -148,6 +253,11 @@ After successful initialization, display:
   - Tasks:   MYPR-T00001
   - Sprints: MYPR-S0001
   - PRDs:    MYPR-P0001
+
+  Files generated:
+  - CLAUDE.md (project rules + lesson-learn references)
+  - .sdlc/lesson-learn.md (project lessons)
+  - ~/.a-sdlc/lesson-learn.md (global lessons)
 
   Folders created:
   - .sdlc/artifacts/

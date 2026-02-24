@@ -42,6 +42,28 @@ mcp__asdlc__start_task(task_id="TASK-001")
 }
 ```
 
+### Preflight: Lesson Check
+
+Read `.sdlc/lesson-learn.md` and `~/.a-sdlc/lesson-learn.md` (if they exist).
+Filter for lessons matching this task's component: `{task.component}`.
+
+If MUST or SHOULD lessons found, present via AskUserQuestion:
+```
+AskUserQuestion({
+  questions: [{
+    question: "Lessons relevant to {component} — review before implementing:",
+    header: "Lessons",
+    options: [
+      { label: "Acknowledged", description: "I'll follow these during implementation" },
+      { label: "Not relevant", description: "These don't apply to this specific task" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If no relevant lessons, proceed silently.
+
 ## Display Format
 
 After starting the task, check for relevant codebase context:
@@ -79,6 +101,23 @@ Good luck! Run /sdlc:task-complete TASK-001 when done.
 ```
 
 If no artifacts are available or the task has no component, display the standard format without the component context section.
+
+## During Implementation
+
+When you discover and fix issues during implementation, log them immediately:
+
+```
+mcp__asdlc__log_correction(
+  context_type="task",
+  context_id="{task_id}",
+  category="{category}",
+  description="{what was corrected and why}"
+)
+```
+
+**Categories:** `testing`, `code-quality`, `task-completeness`, `integration`, `documentation`, `architecture`, `security`, `performance`, `process`
+
+Log corrections as they happen — don't wait until task completion.
 
 ## Examples
 

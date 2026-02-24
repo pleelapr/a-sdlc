@@ -46,6 +46,22 @@ If no artifacts are found in `.sdlc/artifacts/`:
    Proceeding with limited context...
 ```
 
+### CRITICAL: Anti-Fluff Rules
+
+**Every task must trace to a specific requirement. Zero AI-invented scope.**
+
+- **MUST NOT** create tasks for features, components, or requirements not in the source
+- **MUST NOT** add implementation steps that go beyond what the requirements specify
+- **MUST NOT** pad task content with unnecessary steps, boilerplate, or "nice-to-have" items
+- **MUST NOT** add acceptance criteria the source requirements don't include
+- **MUST NOT** invent NFRs, error handling patterns, or testing approaches not specified in the requirements
+- **MUST NOT** add tasks for "documentation", "monitoring", "observability", or "cleanup" unless the requirements explicitly ask for them
+- **MUST** map every task to a specific requirement from the source
+- **MUST** keep task scope tight — if the requirement says "add a button", the task is about adding a button, not refactoring the entire UI
+- **MUST** ask the user if a task seems necessary but isn't covered by the requirements — never silently add it
+
+**If a requirement cannot be cited for a task, that task should not exist.**
+
 ### 3. Decomposition Algorithm
 
 For each requirement:
