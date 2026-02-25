@@ -59,13 +59,14 @@ mcp__asdlc__get_task(task_id="TASK-001")
 ### Create Task
 
 ```
-mcp__asdlc__create_task(
+result = mcp__asdlc__create_task(
     title="Implement login",
-    description="Add OAuth login flow",
     prd_id="feature-auth",        # Required for sprint inheritance
     priority="high",              # low, medium, high, critical
     component="auth-service"
 )
+# Then write task content to the returned file_path:
+Write(file_path=result["file_path"], content="<task description markdown>")
 ```
 
 ### Update Task Status
@@ -73,7 +74,7 @@ mcp__asdlc__create_task(
 ```
 mcp__asdlc__start_task(task_id="TASK-001")     # → in_progress
 mcp__asdlc__complete_task(task_id="TASK-001")  # → completed
-mcp__asdlc__block_task(task_id="TASK-001", reason="Waiting for API")
+mcp__asdlc__block_task(task_id="TASK-001")     # → blocked
 ```
 
 ## Sprint Integration

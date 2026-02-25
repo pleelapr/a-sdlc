@@ -542,21 +542,28 @@ async def prd_detail(request: Request, prd_id: str):
 
 @app.put("/prds/{prd_id}/content")
 async def update_prd_content(prd_id: str, request: Request):
-    """Update PRD content."""
+    """Update PRD content by writing directly to file."""
     storage = get_storage()
     data = await request.json()
     content = data.get("content", "")
 
-    prd = storage.update_prd(prd_id, content=content)
+    prd = storage.get_prd(prd_id)
     if not prd:
         return HTMLResponse(content="PRD not found", status_code=404)
+
+    # Write content directly to file
+    from pathlib import Path
+    if prd.get("file_path"):
+        storage._content_mgr.write_content(Path(prd["file_path"]), content)
+    else:
+        storage._content_mgr.write_prd(prd["project_id"], prd_id, prd["title"], content)
 
     return {"success": True}
 
 
 @app.put("/prds/{prd_id}/design")
 async def update_design_content(prd_id: str, request: Request):
-    """Update design document content."""
+    """Update design document content by writing directly to file."""
     storage = get_storage()
     data = await request.json()
     content = data.get("content", "")
@@ -564,15 +571,22 @@ async def update_design_content(prd_id: str, request: Request):
     # Check if design exists; create if not
     existing = storage.get_design_by_prd(prd_id)
     if existing:
-        design = storage.update_design(prd_id, content=content)
+        # Write content directly to file
+        from pathlib import Path
+        if existing.get("file_path"):
+            storage._content_mgr.write_content(Path(existing["file_path"]), content)
+        else:
+            storage._content_mgr.write_design(existing["project_id"], prd_id, content)
     else:
         prd = storage.get_prd(prd_id)
         if not prd:
             return HTMLResponse(content="PRD not found", status_code=404)
-        design = storage.create_design(prd_id=prd_id, project_id=prd["project_id"], content=content)
-
-    if not design:
-        return HTMLResponse(content="Failed to save design", status_code=500)
+        # Create design (empty file) then write content
+        design = storage.create_design(prd_id=prd_id, project_id=prd["project_id"])
+        if not design:
+            return HTMLResponse(content="Failed to save design", status_code=500)
+        from pathlib import Path
+        storage._content_mgr.write_content(Path(design["file_path"]), content)
 
     return {"success": True}
 

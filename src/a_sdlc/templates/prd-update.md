@@ -76,20 +76,20 @@ If edit selected:
 - Collect new content from user
 - Track modified sections
 
-### 4. Save Updates to Database
+### 4. Save Updates
 
+For **content changes**, edit the PRD file directly:
+```
+prd = mcp__asdlc__get_prd(prd_id="<prd_id>")
+Edit(file_path=prd["prd"]["file_path"], old_string="...", new_string="...")
+```
+
+For **metadata changes** (status, version, sprint):
 ```
 mcp__asdlc__update_prd(
     prd_id="<prd_id>",
-    content="<updated_markdown_content>"
-)
-```
-
-Or update status only:
-```
-mcp__asdlc__update_prd(
-    prd_id="<prd_id>",
-    status="ready"
+    status="ready",
+    version="1.1.0"
 )
 ```
 
@@ -186,7 +186,8 @@ Available sections:
 | Tool | Purpose |
 |------|---------|
 | `mcp__asdlc__get_prd` | Load PRD content |
-| `mcp__asdlc__update_prd` | Save PRD updates |
+| `mcp__asdlc__update_prd` | Update PRD metadata (status, version) |
+| `Edit` | Edit PRD content directly in file |
 | `mcp__asdlc__list_prds` | Show available PRDs (for errors) |
 
 ## PRD Status Values

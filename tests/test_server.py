@@ -1058,7 +1058,7 @@ class TestDesignMCPTools:
 
         mock_get_pid.return_value = None
 
-        result = create_design(prd_id="TEST-P0001", content="# Design")
+        result = create_design(prd_id="TEST-P0001")
         assert result["status"] == "error"
         assert "No project context" in result["message"]
 
@@ -1073,13 +1073,13 @@ class TestDesignMCPTools:
         mock_get_storage.return_value = mock_storage
         mock_storage.get_prd.return_value = None
 
-        result = create_design(prd_id="NONEXISTENT", content="# Design")
+        result = create_design(prd_id="NONEXISTENT")
         assert result["status"] == "not_found"
 
     @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server._get_current_project_id")
     def test_create_design_success(self, mock_get_pid, mock_get_storage):
-        """Test successful design creation."""
+        """Test successful design creation returns file_path."""
         from a_sdlc.server import create_design
 
         mock_get_pid.return_value = "test-project"
@@ -1091,14 +1091,15 @@ class TestDesignMCPTools:
             "id": "TEST-P0001",
             "prd_id": "TEST-P0001",
             "project_id": "test-project",
-            "content": "# Design",
+            "file_path": "/tmp/design.md",
         }
 
-        result = create_design(prd_id="TEST-P0001", content="# Design")
+        result = create_design(prd_id="TEST-P0001")
         assert result["status"] == "created"
         assert result["design"]["prd_id"] == "TEST-P0001"
+        assert result["file_path"] == "/tmp/design.md"
         mock_storage.create_design.assert_called_once_with(
-            prd_id="TEST-P0001", project_id="test-project", content="# Design"
+            prd_id="TEST-P0001", project_id="test-project"
         )
 
     @patch("a_sdlc.server.get_storage")
@@ -1113,14 +1114,14 @@ class TestDesignMCPTools:
         mock_storage.get_prd.return_value = {"id": "TEST-P0001", "title": "Test PRD"}
         mock_storage.get_design_by_prd.return_value = {"id": "existing-design"}
 
-        result = create_design(prd_id="TEST-P0001", content="# Design")
+        result = create_design(prd_id="TEST-P0001")
         assert result["status"] == "error"
         assert "already exists" in result["message"]
 
     @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server._get_current_project_id")
-    def test_create_design_default_empty_content(self, mock_get_pid, mock_get_storage):
-        """Test create_design with default empty content."""
+    def test_create_design_returns_file_path(self, mock_get_pid, mock_get_storage):
+        """Test create_design returns file_path for content writing."""
         from a_sdlc.server import create_design
 
         mock_get_pid.return_value = "test-project"
@@ -1132,13 +1133,14 @@ class TestDesignMCPTools:
             "id": "TEST-P0001",
             "prd_id": "TEST-P0001",
             "project_id": "test-project",
-            "content": "",
+            "file_path": "/tmp/designs/TEST-P0001.md",
         }
 
         result = create_design(prd_id="TEST-P0001")
         assert result["status"] == "created"
+        assert result["file_path"] == "/tmp/designs/TEST-P0001.md"
         mock_storage.create_design.assert_called_once_with(
-            prd_id="TEST-P0001", project_id="test-project", content=""
+            prd_id="TEST-P0001", project_id="test-project"
         )
 
     @patch("a_sdlc.server.get_storage")
@@ -1169,36 +1171,6 @@ class TestDesignMCPTools:
         result = get_design(prd_id="TEST-P0001")
         assert result["status"] == "ok"
         assert result["design"]["content"] == "# Design Content"
-
-    @patch("a_sdlc.server.get_storage")
-    def test_update_design_success(self, mock_get_storage):
-        """Test successful design update."""
-        from a_sdlc.server import update_design
-
-        mock_storage = MagicMock()
-        mock_get_storage.return_value = mock_storage
-        mock_storage.update_design.return_value = {
-            "id": "TEST-P0001",
-            "prd_id": "TEST-P0001",
-            "content": "# Updated",
-        }
-
-        result = update_design(prd_id="TEST-P0001", content="# Updated")
-        assert result["status"] == "updated"
-        assert result["design"]["content"] == "# Updated"
-        mock_storage.update_design.assert_called_once_with("TEST-P0001", content="# Updated")
-
-    @patch("a_sdlc.server.get_storage")
-    def test_update_design_not_found(self, mock_get_storage):
-        """Test update_design when design doesn't exist."""
-        from a_sdlc.server import update_design
-
-        mock_storage = MagicMock()
-        mock_get_storage.return_value = mock_storage
-        mock_storage.update_design.return_value = None
-
-        result = update_design(prd_id="NONEXISTENT", content="# New")
-        assert result["status"] == "not_found"
 
     @patch("a_sdlc.server.get_storage")
     def test_delete_design_success(self, mock_get_storage):

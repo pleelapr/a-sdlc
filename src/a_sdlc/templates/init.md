@@ -214,19 +214,19 @@ After initialization, the following MCP tools are available:
 
 ### PRD Management
 - `mcp__asdlc__list_prds()` - List PRDs
-- `mcp__asdlc__get_prd(prd_id)` - Get full PRD content
-- `mcp__asdlc__create_prd(title, content)` - Create new PRD
-- `mcp__asdlc__update_prd(prd_id, ...)` - Update PRD
+- `mcp__asdlc__get_prd(prd_id)` - Get full PRD with file_path
+- `mcp__asdlc__create_prd(title)` - Create PRD (returns file_path → Write content)
+- `mcp__asdlc__update_prd(prd_id, status?, version?)` - Update PRD metadata
 - `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
 
 ### Task Management
 - `mcp__asdlc__list_tasks()` - List tasks (filterable)
-- `mcp__asdlc__get_task(task_id)` - Get task details
-- `mcp__asdlc__create_task(title, description, ...)` - Create task
-- `mcp__asdlc__update_task(task_id, ...)` - Update task
+- `mcp__asdlc__get_task(task_id)` - Get task details with file_path
+- `mcp__asdlc__create_task(title, prd_id?, priority?)` - Create task (returns file_path → Write content)
+- `mcp__asdlc__update_task(task_id, status?, priority?)` - Update task metadata
 - `mcp__asdlc__start_task(task_id)` - Mark as in_progress
 - `mcp__asdlc__complete_task(task_id)` - Mark as completed
-- `mcp__asdlc__block_task(task_id, reason)` - Mark as blocked
+- `mcp__asdlc__block_task(task_id)` - Mark as blocked
 - `mcp__asdlc__delete_task(task_id)` - Delete task
 
 ### Sprint Management

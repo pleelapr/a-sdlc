@@ -118,7 +118,6 @@ class TestProjectDashboard:
             prd_id="TEST-P0001",
             project_id="test-proj",
             title="Test PRD",
-            content="Some content",
         )
 
         client = _make_client(storage_with_project, monkeypatch)

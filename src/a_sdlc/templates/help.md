@@ -96,27 +96,26 @@ All commands use the a-sdlc MCP server tools:
 
 ### PRD Operations
 - `mcp__asdlc__list_prds()` - List PRDs
-- `mcp__asdlc__get_prd(prd_id)` - Get full PRD
-- `mcp__asdlc__create_prd(title, content, ...)` - Create PRD
-- `mcp__asdlc__update_prd(prd_id, ...)` - Update PRD
+- `mcp__asdlc__get_prd(prd_id)` - Get full PRD with file_path
+- `mcp__asdlc__create_prd(title)` - Create PRD (returns file_path → Write content)
+- `mcp__asdlc__update_prd(prd_id, status?, version?, sprint_id?)` - Update PRD metadata
 - `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
-- `mcp__asdlc__split_prd(prd_id)` - Decompose PRD into tasks with dependency graph
+- `mcp__asdlc__split_prd(prd_id, task_specs)` - Decompose PRD into tasks
 
 ### Design Operations
-- `mcp__asdlc__create_design(prd_id, content)` - Create design doc for PRD
-- `mcp__asdlc__get_design(prd_id)` - Get design doc with content
-- `mcp__asdlc__update_design(prd_id, content)` - Update design doc
+- `mcp__asdlc__create_design(prd_id)` - Create design doc (returns file_path → Write content)
+- `mcp__asdlc__get_design(prd_id)` - Get design doc with file_path and content
 - `mcp__asdlc__delete_design(prd_id)` - Delete design doc
 - `mcp__asdlc__list_designs()` - List design docs for current project
 
 ### Task Operations
 - `mcp__asdlc__list_tasks(status?, sprint_id?, prd_id?)` - List tasks
-- `mcp__asdlc__get_task(task_id)` - Get task details
-- `mcp__asdlc__create_task(title, description, ...)` - Create task
-- `mcp__asdlc__update_task(task_id, ...)` - Update task
+- `mcp__asdlc__get_task(task_id)` - Get task details with file_path
+- `mcp__asdlc__create_task(title, prd_id?, priority?, component?)` - Create task (returns file_path → Write content)
+- `mcp__asdlc__update_task(task_id, status?, priority?, ...)` - Update task metadata
 - `mcp__asdlc__start_task(task_id)` - Mark in_progress
 - `mcp__asdlc__complete_task(task_id)` - Mark completed
-- `mcp__asdlc__block_task(task_id, reason?)` - Mark blocked
+- `mcp__asdlc__block_task(task_id)` - Mark blocked
 - `mcp__asdlc__delete_task(task_id)` - Delete task
 
 ### Sprint Operations

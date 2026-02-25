@@ -319,19 +319,17 @@ AskUserQuestion([
 
 ### 5. Save Design Document
 
+For a **new** design:
 ```
-mcp__asdlc__create_design(
-    prd_id="{prd_id}",
-    content="{assembled_markdown}"
-)
+result = mcp__asdlc__create_design(prd_id="{prd_id}")
+# Then write content to the returned file_path:
+Write(file_path=result["file_path"], content="{assembled_markdown}")
 ```
 
-If design already existed and user chose to overwrite:
+If design already existed and user chose to overwrite, get the file path and edit directly:
 ```
-mcp__asdlc__update_design(
-    prd_id="{prd_id}",
-    content="{assembled_markdown}"
-)
+design = mcp__asdlc__get_design(prd_id="{prd_id}")
+Write(file_path=design["design"]["file_path"], content="{assembled_markdown}")
 ```
 
 ### 6. Display Summary
@@ -368,8 +366,8 @@ The user must explicitly run one of these commands to continue:
 | `mcp__asdlc__get_context` | Load project context |
 | `mcp__asdlc__get_prd` | Load PRD content |
 | `mcp__asdlc__get_design` | Check for existing design |
-| `mcp__asdlc__create_design` | Save new design document |
-| `mcp__asdlc__update_design` | Update existing design document |
+| `mcp__asdlc__create_design` | Create design document (returns file_path) |
+| `Write` / `Edit` | Write or edit design content directly |
 
 ## Notes
 

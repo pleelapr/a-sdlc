@@ -92,8 +92,19 @@ Entry points defined in `pyproject.toml`:
 
 1. **Never reference `.sdlc/tasks/`** — Tasks are stored in `~/.a-sdlc/content/tasks/`
 2. **Never reference `.sdlc/sprints/mappings.json`** — Mappings are in the database
-3. **Always use MCP tools** — Don't read/write PRD/Task/Sprint files directly
+3. **Use MCP tools for metadata, files for content** — See Content Editing Pattern below
 4. **Artifacts stay in `.sdlc/`** — Generated docs belong with the project
+
+## Content Editing Pattern
+
+PRD, Design, and Task content is managed via files, not MCP parameters:
+
+- **Create**: `create_*(metadata)` → returns `file_path` → Write content with `Write` tool
+- **Read**: `get_*(id)` → returns `file_path` + content
+- **Edit content**: Read `file_path` → Edit with `Edit` tool (diff-based, token efficient)
+- **Update metadata**: `update_*(id, status=..., ...)` → DB only, never touches file
+
+Never pass content/description through MCP tools. Edit files directly.
 
 ## Entity Hierarchy
 
@@ -138,7 +149,7 @@ Templates in `src/a_sdlc/templates/` are operational guides for Claude agents �
 | `sprint-run.md` | `get_sprint()`, `get_task()`, `update_task()` |
 | `sprint-sync.md` | `sync_sprint()`, `list_sync_mappings()` |
 
-Content file generation: Agent generates markdown → calls MCP tool → tool inserts metadata into SQLite + writes content to `~/.a-sdlc/content/` + stores file_path in DB.
+Content editing pattern: `create_*()` returns `file_path` → agent writes content via `Write` tool → `update_*()` for metadata only.
 
 ## MCP Tools Reference
 
@@ -150,16 +161,22 @@ Content file generation: Agent generates markdown → calls MCP tool → tool in
 - `switch_project(project_id)` — Switch project context
 
 ### PRD Tools
-- `create_prd(title, content, sprint_id?)` — Creates PRD + content file
-- `get_prd(prd_id)` — Returns metadata + content
-- `update_prd(prd_id, ...)` — Updates fields + content
+- `create_prd(title)` — Creates PRD + skeleton file, returns `file_path`
+- `get_prd(prd_id)` — Returns metadata + content + `file_path`
+- `update_prd(prd_id, status?, version?, sprint_id?)` — Metadata only (DB)
 - `list_prds(sprint_id?, status?)` — Filter PRDs
 - `delete_prd(prd_id)` — Removes PRD + content file
 
+### Design Tools
+- `create_design(prd_id)` — Creates design + empty file, returns `file_path`
+- `get_design(prd_id)` — Returns metadata + content + `file_path`
+- `delete_design(prd_id)` — Removes design + content file
+- `list_designs()` — List design docs
+
 ### Task Tools
-- `create_task(prd_id, title, content, ...)` — Creates task + content file
-- `get_task(task_id)` — Returns metadata + content (derives sprint from PRD)
-- `update_task(task_id, status?, ...)` — Updates task
+- `create_task(title, prd_id?, priority?, component?)` — Creates task + skeleton file, returns `file_path`
+- `get_task(task_id)` — Returns metadata + content + `file_path` (derives sprint from PRD)
+- `update_task(task_id, status?, priority?, component?)` — Metadata only (DB)
 - `list_tasks(sprint_id?, prd_id?, status?)` — Filter tasks
 
 ### Sprint Tools
@@ -226,7 +243,8 @@ corrections.log → retrospective → lesson-learn.md → preflight checks
 ### Storage Mistakes
 - **WRONG**: Reading tasks from `.sdlc/tasks/` → **RIGHT**: `get_task(task_id)` via MCP
 - **WRONG**: Storing mappings in `.sdlc/sprints/mappings.json` → **RIGHT**: `sync_mappings` table via MCP
-- **WRONG**: Writing PRD content directly to files → **RIGHT**: `create_prd()` which handles DB + file
+- **WRONG**: Passing content/description through MCP tools → **RIGHT**: `create_*()` returns `file_path`, write with `Write` tool
+- **WRONG**: Using `update_prd(content=...)` → **RIGHT**: Edit the file directly, use `update_prd(status=...)` for metadata
 
 ### Hierarchy Mistakes
 - **WRONG**: Adding `sprint_id` column to tasks → **RIGHT**: Tasks inherit sprint via PRD

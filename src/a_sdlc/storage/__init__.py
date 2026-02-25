@@ -163,14 +163,13 @@ class HybridStorage:
         prd_id: str,
         project_id: str,
         title: str,
-        content: str = "",
         status: str = "draft",
         source: str | None = None,
         sprint_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create a new PRD."""
-        # Write content file
-        file_path = self._content_mgr.write_prd(project_id, prd_id, title, content)
+        """Create a new PRD with skeleton file."""
+        # Write skeleton file (just title header)
+        file_path = self._content_mgr.write_prd(project_id, prd_id, title, "")
 
         # Register in database
         prd = self._db.create_prd(
@@ -183,10 +182,9 @@ class HybridStorage:
             sprint_id=sprint_id,
         )
 
-        # Add content to response for backward compatibility
-        prd_with_content = dict(prd)
-        prd_with_content["content"] = content
-        return prd_with_content
+        prd_result = dict(prd)
+        prd_result["file_path"] = str(file_path)
+        return prd_result
 
     def get_prd(self, prd_id: str) -> dict[str, Any] | None:
         """Get PRD by ID with content."""
@@ -215,30 +213,20 @@ class HybridStorage:
         return self._db.list_prds(project_id, sprint_id=sprint_id, status=status)
 
     def update_prd(self, prd_id: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Update PRD fields."""
+        """Update PRD metadata (DB only, no file operations).
+
+        Content changes should be made by editing the file directly.
+        """
         prd = self._db.get_prd(prd_id)
         if not prd:
             return None
 
-        # Handle content update
-        if "content" in kwargs:
-            content = kwargs.pop("content")
-            title = kwargs.get("title", prd["title"])
-            file_path = self._content_mgr.write_prd(
-                prd["project_id"], prd_id, title, content
-            )
-            kwargs["file_path"] = str(file_path)
-        elif "title" in kwargs:
-            # Update file with new title
-            existing_content = self._content_mgr.read_prd(prd["project_id"], prd_id) or ""
-            file_path = self._content_mgr.write_prd(
-                prd["project_id"], prd_id, kwargs["title"], existing_content
-            )
-            kwargs["file_path"] = str(file_path)
+        # Remove content if accidentally passed — it's no longer handled here
+        kwargs.pop("content", None)
 
         updated = self._db.update_prd(prd_id, **kwargs)
         if updated:
-            # Add content to response
+            # Read content from file for response
             content = self._content_mgr.read_prd(updated["project_id"], prd_id)
             updated_with_content = dict(updated)
             updated_with_content["content"] = content or ""
@@ -266,20 +254,19 @@ class HybridStorage:
         task_id: str,
         project_id: str,
         title: str,
-        description: str = "",
         status: str = "pending",
         priority: str = "medium",
         prd_id: str | None = None,
         component: str | None = None,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Create a new task."""
-        # Write content file
+        """Create a new task with skeleton file."""
+        # Write skeleton file
         file_path = self._content_mgr.write_task(
             project_id=project_id,
             task_id=task_id,
             title=title,
-            description=description,
+            description="",
             priority=priority,
             status=status,
             component=component,
@@ -299,11 +286,9 @@ class HybridStorage:
             component=component,
         )
 
-        # Add description and data to response for backward compatibility
-        task_with_content = dict(task)
-        task_with_content["description"] = description
-        task_with_content["data"] = data
-        return task_with_content
+        task_result = dict(task)
+        task_result["file_path"] = str(file_path)
+        return task_result
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         """Get task by ID with content."""
@@ -406,63 +391,18 @@ class HybridStorage:
         return tasks
 
     def update_task(self, task_id: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Update task fields."""
+        """Update task metadata (DB only, no file operations).
+
+        Content changes should be made by editing the file directly.
+        """
         task = self._db.get_task(task_id)
         if not task:
             return None
 
-        # Handle full content update (like PRD handling)
-        content = kwargs.pop("content", None)
-        if content is not None:
-            # Write raw content directly to file (preserves all custom formatting)
-            file_path = self._content_mgr.get_task_path(task["project_id"], task_id)
-            self._content_mgr.write_content(file_path, content)
-            kwargs["file_path"] = str(file_path)
-            # Update database and return
-            updated = self._db.update_task(task_id, **kwargs)
-            if updated:
-                return self.get_task(task_id)
-            return None
-
-        # Handle description and data updates via content file (legacy/field-based updates)
-        description = kwargs.pop("description", None)
-        data = kwargs.pop("data", None)
-
-        if description is not None or data is not None or any(
-            k in kwargs for k in ["title", "priority", "status", "component", "prd_id"]
-        ):
-            # Read existing content
-            existing_content = self._content_mgr.read_task(task["project_id"], task_id)
-            existing_data = {}
-            if existing_content:
-                existing_data = self._content_mgr.parse_task_content(existing_content)
-
-            # Merge updates
-            new_title = kwargs.get("title", task["title"])
-            new_description = description if description is not None else existing_data.get("description", "")
-            new_priority = kwargs.get("priority", task["priority"])
-            new_status = kwargs.get("status", task["status"])
-            new_component = kwargs.get("component", task["component"])
-            new_prd_id = kwargs.get("prd_id", task.get("prd_id"))
-            if new_prd_id == "":
-                new_prd_id = None
-
-            merged_data = data if data is not None else {}
-            if "dependencies" not in merged_data and "dependencies" in existing_data:
-                merged_data["dependencies"] = existing_data["dependencies"]
-
-            file_path = self._content_mgr.write_task(
-                project_id=task["project_id"],
-                task_id=task_id,
-                title=new_title,
-                description=new_description,
-                priority=new_priority,
-                status=new_status,
-                component=new_component,
-                prd_id=new_prd_id,
-                data=merged_data if merged_data else None,
-            )
-            kwargs["file_path"] = str(file_path)
+        # Remove content/description/data if accidentally passed — no longer handled here
+        kwargs.pop("content", None)
+        kwargs.pop("description", None)
+        kwargs.pop("data", None)
 
         updated = self._db.update_task(task_id, **kwargs)
         if updated:
@@ -497,23 +437,21 @@ class HybridStorage:
         self,
         prd_id: str,
         project_id: str,
-        content: str = "",
     ) -> dict[str, Any]:
-        """Create a new design document.
+        """Create a new design document with empty file.
 
-        Follows file-first persistence: writes content file before DB record.
+        Follows file-first persistence: writes empty file before DB record.
         Design documents have a 1:1 relationship with PRDs.
 
         Args:
             prd_id: Parent PRD ID (also used as design ID)
             project_id: Parent project ID
-            content: Design document markdown content
 
         Returns:
-            Combined dict with metadata and content
+            Dict with metadata and file_path for content writing
         """
-        # Write content file first
-        file_path = self._content_mgr.write_design(project_id, prd_id, content)
+        # Write empty file
+        file_path = self._content_mgr.write_design(project_id, prd_id, "")
 
         # Create DB record (design_id = prd_id for 1:1 relationship)
         design = self._db.create_design(
@@ -523,10 +461,9 @@ class HybridStorage:
             file_path=str(file_path),
         )
 
-        # Add content to response
-        design_with_content = dict(design)
-        design_with_content["content"] = content
-        return design_with_content
+        design_result = dict(design)
+        design_result["file_path"] = str(file_path)
+        return design_result
 
     def get_design_by_prd(self, prd_id: str) -> dict[str, Any] | None:
         """Get design document by parent PRD ID with content.
@@ -562,39 +499,6 @@ class HybridStorage:
             List of design metadata dicts (no content)
         """
         return self._db.list_designs(project_id)
-
-    def update_design(self, prd_id: str, content: str | None = None) -> dict[str, Any] | None:
-        """Update a design document.
-
-        Args:
-            prd_id: PRD identifier (design_id = prd_id)
-            content: New content to write (if provided)
-
-        Returns:
-            Combined dict with metadata and content, or None if not found
-        """
-        design = self._db.get_design_by_prd(prd_id)
-        if not design:
-            return None
-
-        kwargs: dict[str, Any] = {}
-
-        # Handle content update
-        if content is not None:
-            file_path = self._content_mgr.write_design(
-                design["project_id"], prd_id, content
-            )
-            kwargs["file_path"] = str(file_path)
-
-        # Update DB record
-        updated = self._db.update_design(prd_id, **kwargs)
-        if updated:
-            # Read content for response
-            read_content = self._content_mgr.read_design(updated["project_id"], prd_id)
-            updated_with_content = dict(updated)
-            updated_with_content["content"] = read_content or ""
-            return updated_with_content
-        return None
 
     def delete_design(self, prd_id: str) -> bool:
         """Delete a design document.

@@ -50,11 +50,11 @@ Create a PRD with the issue key as initial title:
 ```python
 result = mcp__asdlc__create_prd(
     title="PROJ-123",  # Placeholder, will be updated by sync
-    content="Importing from Jira...",
     status="draft",
     source="jira:PROJ-123"
 )
 prd_id = result["prd"]["id"]  # e.g., "PROJ-P0001"
+# Content will be populated by sync_prd_from() in step 4
 ```
 
 ### 3. Link PRD to External System

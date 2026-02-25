@@ -333,12 +333,11 @@ Automatically apply all non-breaking fixes (warnings + info), prompt for errors.
 
 **Applying Updates:**
 
+Edit the PRD file directly, then update metadata:
 ```
-mcp__asdlc__update_prd(
-    prd_id="<prd_id>",
-    content="<updated_markdown_content>",
-    version="<incremented_version>"
-)
+prd = mcp__asdlc__get_prd(prd_id="<prd_id>")
+Edit(file_path=prd["prd"]["file_path"], old_string="...", new_string="...")
+mcp__asdlc__update_prd(prd_id="<prd_id>", version="<incremented_version>")
 ```
 
 **Confirmation Output:**
@@ -367,7 +366,8 @@ mcp__asdlc__update_prd(
 |------|---------|
 | `mcp__asdlc__get_context()` | Get project info and statistics |
 | `mcp__asdlc__get_prd(prd_id)` | Load PRD content |
-| `mcp__asdlc__update_prd(prd_id, content, version)` | Apply PRD changes |
+| `mcp__asdlc__update_prd(prd_id, version)` | Update PRD metadata |
+| `Edit` | Edit PRD content directly in file |
 | `Read` | Read artifacts and source files |
 | `Grep` | Search for patterns in codebase |
 | `Glob` | Find files by name pattern |

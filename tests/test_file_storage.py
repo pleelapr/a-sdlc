@@ -79,7 +79,6 @@ class TestPRDOperations:
             prd_id="feature-auth",
             project_id="test-project",
             title="Authentication Feature",
-            content="Implement user authentication",
             status="draft"
         )
         assert prd["id"] == "feature-auth"
@@ -745,32 +744,32 @@ class TestHybridStorageDesign:
                 prd_id="TEST-P0001",
                 project_id="test-project",
                 title="Test PRD",
-                content="# Test PRD Content",
             )
             yield storage
 
     def test_create_design_writes_file_and_db(self, hybrid_storage):
-        """Test that create_design writes content file and DB record."""
+        """Test that create_design writes empty file and DB record."""
         design = hybrid_storage.create_design(
             prd_id="TEST-P0001",
             project_id="test-project",
-            content="# Architecture\n\nDesign content",
         )
         assert design is not None
         assert design["prd_id"] == "TEST-P0001"
         assert "file_path" in design
-        assert design["content"] == "# Architecture\n\nDesign content"
 
     def test_get_design_by_prd_with_content(self, hybrid_storage):
         """Test that get_design_by_prd returns content from file."""
-        hybrid_storage.create_design(
+        design = hybrid_storage.create_design(
             prd_id="TEST-P0001",
             project_id="test-project",
-            content="# Architecture Design",
         )
-        design = hybrid_storage.get_design_by_prd("TEST-P0001")
-        assert design is not None
-        assert design["content"] == "# Architecture Design"
+        # Write content directly to file (file-first pattern)
+        file_path = Path(design["file_path"])
+        file_path.write_text("# Architecture Design", encoding="utf-8")
+
+        fetched = hybrid_storage.get_design_by_prd("TEST-P0001")
+        assert fetched is not None
+        assert fetched["content"] == "# Architecture Design"
 
     def test_get_design_by_prd_not_found(self, hybrid_storage):
         """Test get_design_by_prd returns None for nonexistent."""
@@ -782,7 +781,6 @@ class TestHybridStorageDesign:
         hybrid_storage.create_design(
             prd_id="TEST-P0001",
             project_id="test-project",
-            content="# Design",
         )
         designs = hybrid_storage.list_designs("test-project")
         assert len(designs) == 1
@@ -790,32 +788,11 @@ class TestHybridStorageDesign:
         # list_designs returns metadata only, no content key expected
         assert "content" not in designs[0]
 
-    def test_update_design_updates_both(self, hybrid_storage):
-        """Test that update_design updates file and DB."""
-        hybrid_storage.create_design(
-            prd_id="TEST-P0001",
-            project_id="test-project",
-            content="# Original",
-        )
-        updated = hybrid_storage.update_design("TEST-P0001", content="# Updated Design")
-        assert updated is not None
-        assert updated["content"] == "# Updated Design"
-
-        # Verify via get
-        fetched = hybrid_storage.get_design_by_prd("TEST-P0001")
-        assert fetched["content"] == "# Updated Design"
-
-    def test_update_design_not_found(self, hybrid_storage):
-        """Test update_design returns None for nonexistent."""
-        result = hybrid_storage.update_design("NONEXISTENT", content="# New")
-        assert result is None
-
     def test_delete_design_removes_both(self, hybrid_storage):
         """Test that delete_design removes file and DB record."""
         hybrid_storage.create_design(
             prd_id="TEST-P0001",
             project_id="test-project",
-            content="# To Delete",
         )
         result = hybrid_storage.delete_design("TEST-P0001")
         assert result is True
@@ -827,22 +804,19 @@ class TestHybridStorageDesign:
         assert result is False
 
     def test_create_and_verify_file_exists(self, hybrid_storage):
-        """Test that creating a design actually writes a file to disk."""
+        """Test that creating a design writes an empty file to disk."""
         design = hybrid_storage.create_design(
             prd_id="TEST-P0001",
             project_id="test-project",
-            content="# File Test",
         )
         file_path = Path(design["file_path"])
         assert file_path.exists()
-        assert file_path.read_text(encoding="utf-8") == "# File Test"
 
     def test_delete_design_removes_file(self, hybrid_storage):
         """Test that deleting a design removes the content file from disk."""
         design = hybrid_storage.create_design(
             prd_id="TEST-P0001",
             project_id="test-project",
-            content="# To Remove",
         )
         file_path = Path(design["file_path"])
         assert file_path.exists()

@@ -22,16 +22,17 @@ This command creates **database-backed tasks**, not Claude Code internal tasks.
 
 ## Usage
 
-Use the MCP tool to create a task:
+Create task metadata, then write content to the returned file:
 
 ```
-mcp__asdlc__create_task(
+result = mcp__asdlc__create_task(
     title="Implement user authentication",
-    description="Add JWT-based authentication to the API",
     priority="high",
     component="auth-service",
     prd_id="feature-auth"  # Optional - task inherits sprint from PRD
 )
+# Then write task content to the returned file_path:
+Write(file_path=result["file_path"], content="<task description markdown>")
 ```
 
 ## Parameters
@@ -39,7 +40,6 @@ mcp__asdlc__create_task(
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `title` | Yes | Task title |
-| `description` | No | Detailed description |
 | `project_id` | No | Project ID (auto-detected) |
 | `prd_id` | No | Link to parent PRD (task inherits sprint from PRD) |
 | `priority` | No | low, medium, high, critical (default: medium) |
@@ -51,17 +51,17 @@ mcp__asdlc__create_task(
 ```json
 {
   "status": "created",
-  "message": "Task created: TASK-001",
+  "message": "Task created: PROJ-T00001",
   "task": {
-    "id": "TASK-001",
+    "id": "PROJ-T00001",
     "title": "Implement user authentication",
-    "description": "Add JWT-based authentication to the API",
     "status": "pending",
     "priority": "high",
     "component": "auth-service",
     "prd_id": "feature-auth",
     "created_at": "2025-01-26T10:00:00Z"
-  }
+  },
+  "file_path": "~/.a-sdlc/content/proj/tasks/PROJ-T00001.md"
 }
 ```
 

@@ -428,30 +428,31 @@ AskUserQuestion([
 
 **Wait for explicit user approval before saving.**
 
-### 5. Save PRD to Database
+### 5. Save PRD
 
 ```
-mcp__asdlc__create_prd(
-    prd_id="<slug>",
-    title="<title>",
-    content="<markdown_content>"
-)
+result = mcp__asdlc__create_prd(title="<title>")
 ```
 
-The slug is generated from the title (lowercase, hyphens).
+This creates a DB record and skeleton file. Then write the full content:
+
+```
+Write(file_path=result["file_path"], content="<markdown_content>")
+```
 
 Returns:
 ```json
 {
   "status": "created",
-  "message": "PRD created: feature-auth",
+  "message": "PRD created: PROJ-P0001",
   "prd": {
-    "id": "feature-auth",
+    "id": "PROJ-P0001",
     "title": "User Authentication System",
     "status": "draft",
     "sprint_id": null,
     "created_at": "2025-01-26T12:00:00Z"
-  }
+  },
+  "file_path": "~/.a-sdlc/content/proj/prds/PROJ-P0001.md"
 }
 ```
 

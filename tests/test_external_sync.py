@@ -60,7 +60,6 @@ class TestPRDSprintRelationship:
             prd_id="feature-auth",
             project_id=project_id,
             title="Authentication Feature",
-            content="Implement user authentication",
             status="draft",
             sprint_id=sprint_id,
         )

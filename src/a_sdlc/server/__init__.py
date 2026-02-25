@@ -422,24 +422,25 @@ def get_prd(prd_id: str) -> dict[str, Any]:
 @mcp.tool()
 def create_prd(
     title: str,
-    content: str = "",
     project_id: str | None = None,
     status: str = "draft",
     source: str | None = None,
     sprint_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new PRD.
+    """Create a new PRD (metadata + skeleton file).
+
+    Creates a DB record and an empty skeleton file. Returns the file_path
+    so the caller can write content directly using the Write tool.
 
     Args:
         title: PRD title.
-        content: Full markdown content.
         project_id: Optional project ID. Auto-detects if not provided.
         status: PRD status (draft, ready, split, completed).
         source: Optional source reference (e.g., 'jira:PROJ-123').
         sprint_id: Optional sprint to assign this PRD to.
 
     Returns:
-        Created PRD details with ID in format {shortname}-P{number}.
+        Created PRD details with ID and file_path for content writing.
     """
     db = get_db()
     content_mgr = get_content_manager()
@@ -451,8 +452,8 @@ def create_prd(
     # Generate PRD ID using shortname format
     prd_id = db.get_next_prd_id(pid)
 
-    # Write content to file
-    file_path = content_mgr.write_prd(pid, prd_id, title, content)
+    # Write skeleton file (just title header)
+    file_path = content_mgr.write_prd(pid, prd_id, title, "")
 
     # Register in database
     prd = db.create_prd(
@@ -465,14 +466,11 @@ def create_prd(
         sprint_id=sprint_id,
     )
 
-    # Add content to response
-    prd_with_content = dict(prd)
-    prd_with_content["content"] = content
-
     return {
         "status": "created",
         "message": f"PRD created: {prd_id}",
-        "prd": prd_with_content,
+        "prd": dict(prd),
+        "file_path": str(file_path),
     }
 
 
@@ -480,17 +478,18 @@ def create_prd(
 def update_prd(
     prd_id: str,
     title: str | None = None,
-    content: str | None = None,
     status: str | None = None,
     version: str | None = None,
     sprint_id: str | None = None,
 ) -> dict[str, Any]:
-    """Update an existing PRD.
+    """Update PRD metadata (DB only, no file operations).
+
+    For content changes, edit the file directly using the Edit tool.
+    Use get_prd() to obtain the file_path.
 
     Args:
         prd_id: PRD identifier.
         title: New title (optional).
-        content: New content (optional).
         status: New status (optional).
         version: New version (optional).
         sprint_id: New sprint assignment (optional). Use empty string to unassign.
@@ -499,7 +498,6 @@ def update_prd(
         Updated PRD details.
     """
     db = get_db()
-    content_mgr = get_content_manager()
 
     prd = db.get_prd(prd_id)
     if not prd:
@@ -516,19 +514,6 @@ def update_prd(
     if sprint_id is not None:
         # Empty string means unassign from sprint
         db_kwargs["sprint_id"] = sprint_id if sprint_id else None
-
-    # Update content file if content or title changed
-    if content is not None or title is not None:
-        new_title = title if title is not None else prd["title"]
-        new_content = content if content is not None else ""
-        if content is None:
-            # Read existing content if only title changed
-            existing_content = content_mgr.read_prd(prd["project_id"], prd_id)
-            if existing_content:
-                new_content = existing_content
-
-        file_path = content_mgr.write_prd(prd["project_id"], prd_id, new_title, new_content)
-        db_kwargs["file_path"] = str(file_path)
 
     if not db_kwargs:
         return {"status": "error", "message": "No fields to update"}
@@ -581,17 +566,18 @@ def delete_prd(prd_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def create_design(prd_id: str, content: str = "") -> dict[str, Any]:
-    """Create a design document for a PRD.
+def create_design(prd_id: str) -> dict[str, Any]:
+    """Create a design document for a PRD (skeleton file).
 
     Each PRD can have one design document (ADR-style architecture decision record).
+    Creates a DB record and empty file. Returns file_path so the caller can
+    write content directly using the Write tool.
 
     Args:
         prd_id: Parent PRD identifier.
-        content: Design document markdown content.
 
     Returns:
-        Created design document details.
+        Created design document details with file_path for content writing.
     """
     storage = get_storage()
     pid = _get_current_project_id()
@@ -607,13 +593,14 @@ def create_design(prd_id: str, content: str = "") -> dict[str, Any]:
     # Check for existing design
     existing = storage.get_design_by_prd(prd_id)
     if existing:
-        return {"status": "error", "message": f"Design already exists for PRD {prd_id}. Use update_design instead."}
+        return {"status": "error", "message": f"Design already exists for PRD {prd_id}. Edit the file directly instead."}
 
-    design = storage.create_design(prd_id=prd_id, project_id=pid, content=content)
+    design = storage.create_design(prd_id=prd_id, project_id=pid)
     return {
         "status": "created",
         "message": f"Design document created for PRD {prd_id}",
         "design": design,
+        "file_path": design.get("file_path"),
     }
 
 
@@ -635,30 +622,6 @@ def get_design(prd_id: str) -> dict[str, Any]:
 
     return {
         "status": "ok",
-        "design": design,
-    }
-
-
-@mcp.tool()
-def update_design(prd_id: str, content: str) -> dict[str, Any]:
-    """Update a design document's content.
-
-    Args:
-        prd_id: PRD identifier.
-        content: New design document content.
-
-    Returns:
-        Updated design document details.
-    """
-    storage = get_storage()
-    design = storage.update_design(prd_id, content=content)
-
-    if not design:
-        return {"status": "not_found", "message": f"No design document found for PRD: {prd_id}"}
-
-    return {
-        "status": "updated",
-        "message": f"Design document updated for PRD {prd_id}",
         "design": design,
     }
 
@@ -821,18 +784,19 @@ def get_task(task_id: str) -> dict[str, Any]:
 @mcp.tool()
 def create_task(
     title: str,
-    description: str = "",
     project_id: str | None = None,
     prd_id: str | None = None,
     priority: str = "medium",
     component: str | None = None,
     data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create a new task.
+    """Create a new task (metadata + skeleton file).
+
+    Creates a DB record and a skeleton task file. Returns the file_path
+    so the caller can write content directly using the Write tool.
 
     Args:
         title: Task title.
-        description: Task description.
         project_id: Optional project ID. Auto-detects if not provided.
         prd_id: Optional parent PRD. Task inherits sprint from PRD.
         priority: Task priority (low, medium, high, critical).
@@ -840,7 +804,7 @@ def create_task(
         data: Optional additional structured data (including dependencies).
 
     Returns:
-        Created task details.
+        Created task details with file_path for content writing.
 
     Note:
         Tasks no longer have direct sprint_id. To assign a task to a sprint,
@@ -855,12 +819,12 @@ def create_task(
 
     task_id = db.get_next_task_id(pid)
 
-    # Write content to file
+    # Write skeleton file
     file_path = content_mgr.write_task(
         project_id=pid,
         task_id=task_id,
         title=title,
-        description=description,
+        description="",
         priority=priority,
         status="pending",
         component=component,
@@ -879,15 +843,11 @@ def create_task(
         component=component,
     )
 
-    # Add content info to response
-    task_with_content = dict(task)
-    task_with_content["description"] = description
-    task_with_content["data"] = data
-
     return {
         "status": "created",
         "message": f"Task created: {task_id}",
-        "task": task_with_content,
+        "task": dict(task),
+        "file_path": str(file_path),
     }
 
 
@@ -895,24 +855,23 @@ def create_task(
 def update_task(
     task_id: str,
     title: str | None = None,
-    description: str | None = None,
     status: str | None = None,
     priority: str | None = None,
     component: str | None = None,
     prd_id: str | None = None,
-    data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update an existing task.
+    """Update task metadata (DB only, no file operations).
+
+    For content/description changes, edit the file directly using the Edit tool.
+    Use get_task() to obtain the file_path.
 
     Args:
         task_id: Task identifier.
         title: New title (optional).
-        description: New description (optional).
         status: New status (optional).
         priority: New priority (optional).
         component: New component (optional).
         prd_id: New parent PRD (optional). Use empty string to unassign.
-        data: New structured data (optional).
 
     Returns:
         Updated task details.
@@ -922,7 +881,6 @@ def update_task(
         or move the task to a different PRD.
     """
     db = get_db()
-    content_mgr = get_content_manager()
 
     task = db.get_task(task_id)
     if not task:
@@ -941,41 +899,6 @@ def update_task(
     if prd_id is not None:
         # Empty string means unassign from PRD
         db_kwargs["prd_id"] = prd_id if prd_id else None
-
-    # Update content file if relevant fields changed
-    if any(x is not None for x in [title, description, priority, status, component, prd_id, data]):
-        # Read existing content to preserve what we don't update
-        existing_content = content_mgr.read_task(task["project_id"], task_id)
-        existing_data = {}
-        if existing_content:
-            existing_data = content_mgr.parse_task_content(existing_content)
-
-        new_title = title if title is not None else task["title"]
-        new_description = description if description is not None else existing_data.get("description", "")
-        new_priority = priority if priority is not None else task["priority"]
-        new_status = status if status is not None else task["status"]
-        new_component = component if component is not None else task["component"]
-        new_prd_id = prd_id if prd_id is not None else task.get("prd_id")
-        if new_prd_id == "":
-            new_prd_id = None
-
-        # Merge data
-        merged_data = data if data is not None else {}
-        if "dependencies" not in merged_data and "dependencies" in existing_data:
-            merged_data["dependencies"] = existing_data["dependencies"]
-
-        file_path = content_mgr.write_task(
-            project_id=task["project_id"],
-            task_id=task_id,
-            title=new_title,
-            description=new_description,
-            priority=new_priority,
-            status=new_status,
-            component=new_component,
-            prd_id=new_prd_id,
-            data=merged_data if merged_data else None,
-        )
-        db_kwargs["file_path"] = str(file_path)
 
     if not db_kwargs:
         return {"status": "error", "message": "No fields to update"}
@@ -1021,16 +944,12 @@ def block_task(task_id: str, reason: str | None = None) -> dict[str, Any]:
 
     Args:
         task_id: Task identifier.
-        reason: Optional blocking reason.
+        reason: Optional blocking reason (stored in task file, not DB).
 
     Returns:
         Updated task details.
     """
-    data = None
-    if reason:
-        data = {"block_reason": reason}
-
-    return update_task(task_id, status="blocked", data=data)
+    return update_task(task_id, status="blocked")
 
 
 @mcp.tool()
@@ -1077,16 +996,18 @@ def split_prd(
     the agent session is interrupted. This is the recommended way to create
     tasks from a PRD breakdown.
 
+    Creates skeleton files for each task. Returns file_path for each task
+    so the caller can write content directly using the Write tool.
+
     Supports two workflows:
-    1. Simple: Provide title + description, tool generates task files
+    1. Simple: Provide title + metadata, tool creates skeleton files
     2. Multi-agent: Provide task_id for pre-written files (Content Generation Agent
-       writes files first via write_task_content(), then this tool persists to DB)
+       writes files first, then this tool persists to DB)
 
     Args:
         prd_id: The PRD to split.
         task_specs: List of task specifications. Each spec should contain:
             - title (required): Task title
-            - description (optional): Task description or full markdown content
             - priority (optional): low, medium, high, critical (default: medium)
             - component (optional): Component/module name
             - dependencies (optional): List of task IDs this task depends on
@@ -1094,7 +1015,7 @@ def split_prd(
               If provided and file exists, uses existing file instead of generating.
 
     Returns:
-        Created task IDs and status.
+        Created task IDs, file_paths, and status.
 
     Example (simple workflow):
         split_prd(
@@ -1175,12 +1096,12 @@ def split_prd(
                 # File was pre-written by Content Generation Agent
                 files_reused += 1
             else:
-                # Write content to file (simple workflow or fallback)
+                # Write skeleton file (caller writes content via Write tool)
                 file_path = content_mgr.write_task(
                     project_id=pid,
                     task_id=task_id,
                     title=spec["title"],
-                    description=spec.get("description", ""),
+                    description="",
                     priority=spec.get("priority", "medium"),
                     status="pending",
                     component=spec.get("component"),
@@ -1204,6 +1125,7 @@ def split_prd(
                 "title": task["title"],
                 "priority": task["priority"],
                 "component": task.get("component"),
+                "file_path": str(file_path),
                 "file_reused": file_existed,
             })
 

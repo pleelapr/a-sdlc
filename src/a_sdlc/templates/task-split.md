@@ -99,7 +99,7 @@ def decompose_requirement(req, architecture, sprint_id=None):
 
 ### 4. Create Tasks via MCP API
 
-For each task, use `mcp__asdlc__create_task()` to create the task in the database.
+For each task, use `mcp__asdlc__create_task()` to create a DB record and skeleton file, then write the task content to the returned `file_path`.
 
 **Example task structure:**
 
@@ -159,8 +159,7 @@ Implement only the changes described above. Do not:
 - Refactor existing code unless necessary
 ```
 
-Tasks are created using `mcp__asdlc__create_task()` and stored in the database (~/.a-sdlc/data.db).
-Task content is stored in ~/.a-sdlc/content/tasks/{project}/.
+Tasks are created using `mcp__asdlc__create_task()` which returns a `file_path`. Write task content to that file using the `Write` tool. Task metadata is stored in the database (~/.a-sdlc/data.db), task content is stored in ~/.a-sdlc/content/tasks/{project}/.
 
 ### 5. Sync to External System (if configured)
 

@@ -400,10 +400,9 @@ AskUserQuestion({
 4. **Save approved PRDs**:
 
 ```
-mcp__asdlc__create_prd(
-    title="<title>",
-    content="<markdown_content>"
-)
+result = mcp__asdlc__create_prd(title="<title>")
+# Then write content to the returned file_path:
+Write(file_path=result["file_path"], content="<markdown_content>")
 ```
 
 ### Final Summary
