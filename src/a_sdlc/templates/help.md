@@ -26,51 +26,57 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:ideate "<idea>"        Explore a vague idea → one or more PRDs
   /sdlc:prd-generate "<desc>"  Create PRD via interactive Q&A
   /sdlc:prd-architect "<id>"   Generate ADR-style design doc for PRD
+  /sdlc:prd-split "<id>"       Decompose PRD into tasks (design required)
   /sdlc:prd-import jira <key>  Import Jira issue as PRD
   /sdlc:prd-list               List all PRDs
-  /sdlc:prd "<id>"             View PRD details
-  /sdlc:prd-split "<id>"       Decompose PRD into tasks
+  /sdlc:prd "<id>"             PRD management hub
   /sdlc:prd-update "<id>"      Update existing PRD
   /sdlc:prd-delete <id>        Delete a PRD
   /sdlc:prd-investigate "<id>" Validate PRD against codebase
 
-🔍 Investigation & Debugging
+🔍 Investigation & Analysis
 
   /sdlc:investigate "<problem>"     Root cause analysis for bugs/errors
   /sdlc:investigate --error "<msg>" Analyze error message or stack trace
-
-🔍 Code Review
-
-  /sdlc:pr-feedback                Fetch & process PR review comments
+  /sdlc:pr-feedback                 Fetch & process PR review comments
+  /sdlc:sonar-scan                  SonarQube scan & auto-fix
 
 📋 Task Management
 
+  /sdlc:task                   Task management hub
   /sdlc:task-list              List all tasks
   /sdlc:task-show <id>         Show task details
   /sdlc:task-create            Create a new task
   /sdlc:task-start <id>        Mark task as in-progress
   /sdlc:task-complete <id>     Mark task as completed
+  /sdlc:task-split <id>        Split task into subtasks
+  /sdlc:task-link <id>         Link task to external system
   /sdlc:task-delete <id>       Delete a task
 
 🏃 Sprint Management
 
+  /sdlc:sprint                 Sprint management hub
   /sdlc:sprint-create          Create a new sprint
   /sdlc:sprint-list            List all sprints
   /sdlc:sprint-show <id>       Show sprint details + tasks
   /sdlc:sprint-start <id>      Activate a sprint
-  /sdlc:sprint-run <id>        Execute tasks in order
-  /sdlc:sprint-complete <id>   Close a sprint
+  /sdlc:sprint-run <id>        Execute tasks in dependency order
+  /sdlc:sprint-complete <id>   Close sprint + retrospective
   /sdlc:sprint-delete <id>     Delete a sprint
 
 🔄 External Sync (Jira/Linear)
 
   /sdlc:sprint-import          Import sprints from Jira/Linear
   /sdlc:sprint-link            Link local sprint to external
-  /sdlc:sprint-sync            Bidirectional sync
-  /sdlc:sprint-unlink          Remove external link
-  /sdlc:prd-link               Link PRD to Jira issue
-  /sdlc:prd-sync               Sync single PRD to/from Jira
-  /sdlc:prd-unlink             Remove PRD external link
+  /sdlc:sprint-sync            Bidirectional sprint sync
+  /sdlc:sprint-sync-to         Push sprint to external system
+  /sdlc:sprint-sync-from       Pull sprint from external system
+  /sdlc:sprint-unlink          Remove external sprint link
+  /sdlc:sprint-mappings        View all sync mappings
+
+📤 Publishing
+
+  /sdlc:publish                Publish artifacts to Confluence
 
 📖 Help
 
@@ -86,6 +92,7 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__init_project(name?)` - Initialize project
 - `mcp__asdlc__list_projects()` - List all projects
 - `mcp__asdlc__switch_project(project_id)` - Change project
+- `mcp__asdlc__relocate_project(shortname)` - Re-link project to current directory
 
 ### PRD Operations
 - `mcp__asdlc__list_prds()` - List PRDs
@@ -93,6 +100,7 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__create_prd(title, content, ...)` - Create PRD
 - `mcp__asdlc__update_prd(prd_id, ...)` - Update PRD
 - `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
+- `mcp__asdlc__split_prd(prd_id)` - Decompose PRD into tasks with dependency graph
 
 ### Design Operations
 - `mcp__asdlc__create_design(prd_id, content)` - Create design doc for PRD
@@ -113,35 +121,63 @@ All commands use the a-sdlc MCP server tools:
 
 ### Sprint Operations
 - `mcp__asdlc__list_sprints()` - List sprints
-- `mcp__asdlc__get_sprint(sprint_id)` - Get sprint with tasks
+- `mcp__asdlc__get_sprint(sprint_id)` - Get sprint details
 - `mcp__asdlc__create_sprint(title, goal?)` - Create sprint
 - `mcp__asdlc__start_sprint(sprint_id)` - Activate sprint
 - `mcp__asdlc__complete_sprint(sprint_id)` - Complete sprint
-- `mcp__asdlc__add_tasks_to_sprint(sprint_id, task_ids)` - Add tasks
-- `mcp__asdlc__remove_tasks_from_sprint(sprint_id, task_ids)` - Remove tasks
+- `mcp__asdlc__add_prd_to_sprint(sprint_id, prd_id)` - Assign PRD to sprint
+- `mcp__asdlc__remove_prd_from_sprint(prd_id)` - Remove PRD from sprint
+- `mcp__asdlc__get_sprint_prds(sprint_id)` - List PRDs in sprint
+- `mcp__asdlc__get_sprint_tasks(sprint_id)` - List tasks in sprint (derived via PRDs)
 - `mcp__asdlc__delete_sprint(sprint_id)` - Delete sprint
 
+### Sprint Sync Operations
+- `mcp__asdlc__link_sprint(sprint_id, system, external_id)` - Link sprint to external
+- `mcp__asdlc__unlink_sprint(sprint_id)` - Remove sprint link
+- `mcp__asdlc__sync_sprint(sprint_id, strategy?)` - Bidirectional sync
+- `mcp__asdlc__sync_sprint_to(sprint_id)` - Push to external
+- `mcp__asdlc__sync_sprint_from(sprint_id)` - Pull from external
+- `mcp__asdlc__import_from_linear()` - Import cycles from Linear
+- `mcp__asdlc__import_from_jira()` - Import sprints from Jira
+- `mcp__asdlc__list_sync_mappings()` - View all sync mappings
+
 ### PRD Sync Operations
-- `mcp__asdlc__link_prd(prd_id, system, external_id)` - Link PRD to Jira issue
+- `mcp__asdlc__link_prd(prd_id, system, external_id)` - Link PRD to external issue
 - `mcp__asdlc__unlink_prd(prd_id)` - Remove PRD link
 - `mcp__asdlc__sync_prd(prd_id, strategy?, dry_run?)` - Bidirectional sync
-- `mcp__asdlc__sync_prd_to(prd_id)` - Push PRD to Jira
-- `mcp__asdlc__sync_prd_from(prd_id)` - Pull from Jira to PRD
+- `mcp__asdlc__sync_prd_to(prd_id)` - Push PRD to external
+- `mcp__asdlc__sync_prd_from(prd_id)` - Pull from external to PRD
+
+### Worktree & PR Operations
+- `mcp__asdlc__setup_prd_worktree(prd_id)` - Create git worktree for PRD
+- `mcp__asdlc__cleanup_prd_worktree(prd_id)` - Remove PRD worktree
+- `mcp__asdlc__create_prd_pr(prd_id)` - Create PR from PRD worktree
+
+### Integration Configuration
+- `mcp__asdlc__configure_linear(api_key, team_id)` - Configure Linear
+- `mcp__asdlc__configure_jira(url, email, api_token, project_key)` - Configure Jira
+- `mcp__asdlc__configure_confluence(url, email, api_token, space_key)` - Configure Confluence
+- `mcp__asdlc__configure_github(token)` - Configure GitHub
+- `mcp__asdlc__get_integrations()` - List configured integrations
+- `mcp__asdlc__remove_integration(system)` - Remove integration
 
 ### Quality Tools
 - `mcp__asdlc__log_correction(context_type, context_id, category, description)` - Log a correction to `.sdlc/corrections.log`
+- `mcp__asdlc__get_pr_feedback(pr_url?)` - Fetch and parse PR review comments
 
 ## Quick Start Workflow
 
 ```
 1. /sdlc:init                              # Initialize (once per project)
-2. /sdlc:status                            # Check project context
+2. /sdlc:scan                              # Generate codebase artifacts
 3. /sdlc:ideate "vague idea"               # (Optional) Explore idea → PRDs
-4. /sdlc:prd-generate "Feature description" # Create PRD (if you know what to build)
-5. /sdlc:sprint-create "Sprint 1"          # Create sprint
-6. /sdlc:prd-split "prd-id" --sprint SPRINT-01  # Generate tasks
-7. /sdlc:sprint-start SPRINT-01            # Activate sprint
-8. /sdlc:sprint-run SPRINT-01              # Execute tasks
+4. /sdlc:prd-generate "Feature description" # Create PRD
+5. /sdlc:prd-architect "<prd-id>"          # Generate design document
+6. /sdlc:prd-split "<prd-id>"             # Decompose into tasks
+7. /sdlc:sprint-create "Sprint 1"          # Create sprint
+   → use add_prd_to_sprint to assign PRDs  # Link PRDs to sprint
+8. /sdlc:sprint-start "<sprint-id>"        # Activate sprint
+9. /sdlc:sprint-run "<sprint-id>"          # Execute tasks in order
 ```
 
 ## Lessons Learned System
@@ -181,6 +217,7 @@ a-sdlc includes a built-in quality feedback loop:
 ## Data Storage
 
 - All data stored in user-level SQLite: `~/.a-sdlc/data.db`
+- Content files: `~/.a-sdlc/content/{project_id}/prds/` and `tasks/`
 - Lesson-learn files: `.sdlc/lesson-learn.md` (project), `~/.a-sdlc/lesson-learn.md` (global)
 - Correction log: `.sdlc/corrections.log` (append-only)
 - Data persists across Claude Code sessions
