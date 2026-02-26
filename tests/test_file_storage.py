@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from a_sdlc.core.database import SCHEMA_VERSION
 from a_sdlc.storage import FileStorage, ensure_templates, get_template_path
 
 
@@ -528,7 +529,7 @@ class TestMigrationV3ToV4:
         # Verify migration ran
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
-            assert cursor.fetchone()[0] == 5
+            assert cursor.fetchone()[0] == SCHEMA_VERSION
 
         # Verify backfill: ready PRD
         prd_ready = db.get_prd("P-READY")

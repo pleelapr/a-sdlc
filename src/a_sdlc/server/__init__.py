@@ -14,9 +14,9 @@ Usage:
 """
 
 import atexit
-import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -33,6 +33,11 @@ _ui_process: subprocess.Popen | None = None
 
 from a_sdlc.core.database import Database, get_db
 from a_sdlc.core.content import ContentManager, get_content_manager
+from a_sdlc.core.git_config import (
+    get_effective_config_summary,
+    load_git_safety_config,
+    save_git_safety_config,
+)
 from a_sdlc.storage import get_storage
 
 # Initialize FastMCP server
@@ -1011,6 +1016,8 @@ def split_prd(
             - priority (optional): low, medium, high, critical (default: medium)
             - component (optional): Component/module name
             - dependencies (optional): List of task IDs this task depends on
+            - traces_to (optional): List of PRD requirement IDs (e.g., ["FR-001", "AC-002"])
+            - design_compliance (optional): List of design decision IDs (e.g., ["DD-1"])
             - task_id (optional): Pre-specified task ID for multi-agent workflow.
               If provided and file exists, uses existing file instead of generating.
 
@@ -1082,11 +1089,16 @@ def split_prd(
             # Use pre-specified task_id if provided, otherwise auto-generate
             task_id = spec.get("task_id") or db.get_next_task_id(pid)
 
-            # Build data dict if dependencies provided, resolving shorthand IDs
-            data = None
+            # Build data dict for dependencies, traces, and design compliance
+            raw_data = {}
             if spec.get("dependencies"):
                 resolved_deps = [resolve_dep_id(d) for d in spec["dependencies"]]
-                data = {"dependencies": resolved_deps}
+                raw_data["dependencies"] = resolved_deps
+            if spec.get("traces_to"):
+                raw_data["traces_to"] = spec["traces_to"]
+            if spec.get("design_compliance"):
+                raw_data["design_compliance"] = spec["design_compliance"]
+            data = raw_data if raw_data else None
 
             # Check if file was pre-written (multi-agent workflow)
             file_path = content_mgr.get_task_path(pid, task_id)
@@ -1559,28 +1571,95 @@ remove_tasks_from_sprint = remove_prd_from_sprint
 
 
 # =============================================================================
-# PRD Worktree Isolation Tools
+# Git Safety Configuration Tools
 # =============================================================================
 
 
-def _get_worktree_state_path() -> Path:
-    """Get path to .worktrees/.state.json in current working directory."""
-    return Path(os.getcwd()) / ".worktrees" / ".state.json"
+@mcp.tool()
+def configure_git_safety(
+    auto_pr: bool | None = None,
+    auto_merge: bool | None = None,
+    worktree_enabled: bool | None = None,
+    scope: str = "project",
+) -> dict[str, Any]:
+    """Configure git safety settings for agent operations.
+
+    Controls which git operations agents are allowed to perform.
+    Global config provides defaults (all off); project config can override.
+
+    Destructive operations (force push, branch deletion) always require
+    explicit user confirmation regardless of these settings.
+
+    Args:
+        auto_pr: Allow agent to create pull requests.
+        auto_merge: Allow agent to merge branches.
+        worktree_enabled: Use git worktree isolation for PRD execution.
+        scope: Where to save — "global" or "project" (default: project).
+
+    Returns:
+        Updated effective configuration with sources.
+    """
+    if scope not in ("global", "project"):
+        return {
+            "status": "error",
+            "message": f"Invalid scope: {scope}. Use 'global' or 'project'.",
+        }
+
+    # Build settings dict from provided arguments only
+    settings: dict[str, bool] = {}
+    if auto_pr is not None:
+        settings["auto_pr"] = auto_pr
+    if auto_merge is not None:
+        settings["auto_merge"] = auto_merge
+    if worktree_enabled is not None:
+        settings["worktree_enabled"] = worktree_enabled
+
+    if not settings:
+        # No settings provided — return current config
+        summary = get_effective_config_summary()
+        return {
+            "status": "ok",
+            "message": "Current git safety configuration (no changes made).",
+            "config": summary,
+        }
+
+    try:
+        config_path = save_git_safety_config(
+            settings=settings,
+            target=scope,  # type: ignore[arg-type]
+        )
+    except ValueError as e:
+        return {"status": "error", "message": str(e)}
+
+    summary = get_effective_config_summary()
+    return {
+        "status": "configured",
+        "message": f"Git safety settings saved to {scope} config ({config_path}).",
+        "config": summary,
+    }
 
 
-def _load_worktree_state() -> dict[str, Any]:
-    """Load worktree state from .state.json, returning empty state if missing."""
-    state_path = _get_worktree_state_path()
-    if state_path.exists():
-        return json.loads(state_path.read_text())
-    return {"sprint_id": None, "created_at": None, "worktrees": {}}
+@mcp.tool()
+def get_git_safety_config() -> dict[str, Any]:
+    """Get the current effective git safety configuration.
+
+    Shows the merged result of global defaults + project overrides,
+    along with the source of each setting.
+
+    Returns:
+        Effective configuration with sources.
+    """
+    summary = get_effective_config_summary()
+    return {
+        "status": "ok",
+        "config": summary,
+    }
 
 
-def _save_worktree_state(state: dict[str, Any]) -> None:
-    """Save worktree state to .state.json."""
-    state_path = _get_worktree_state_path()
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2))
+# =============================================================================
+# PRD Worktree Isolation Tools
+# =============================================================================
+
 
 
 def _ensure_gitignore_entry(repo_root: Path, entry: str) -> None:
@@ -1619,29 +1698,39 @@ def setup_prd_worktree(
         Worktree details including path, branch name, and environment config.
     """
     repo_root = Path(os.getcwd())
+
+    # Check git safety config — worktree_enabled must be true
+    git_config = load_git_safety_config(repo_root)
+    if not git_config.is_operation_allowed("worktree_enabled"):
+        return {
+            "status": "disabled",
+            "message": (
+                "Worktree isolation is disabled by git safety configuration. "
+                "Enable it with: configure_git_safety(worktree_enabled=True)"
+            ),
+        }
+
     worktree_dir = repo_root / ".worktrees"
     worktree_path = worktree_dir / prd_id
     branch_name = f"sprint/{sprint_id}/{prd_id}"
 
-    # Check if worktree already exists
-    state = _load_worktree_state()
-    if prd_id in state.get("worktrees", {}):
-        existing = state["worktrees"][prd_id]
-        if Path(existing["path"]).exists():
-            return {
-                "status": "exists",
-                "message": f"Worktree for {prd_id} already exists",
-                "worktree": existing,
-            }
-
-    # Ensure .worktrees/ is in .gitignore
-    _ensure_gitignore_entry(repo_root, ".worktrees/")
-
-    # Get project shortname for compose naming
+    # Get project context and DB
     db = get_db()
     project_id = _get_current_project_id()
     project = db.get_project(project_id) if project_id else None
     shortname = project["shortname"].lower() if project else "proj"
+
+    # Check if worktree already exists in DB
+    existing = db.get_worktree_by_prd(prd_id)
+    if existing and Path(existing["path"]).exists():
+        return {
+            "status": "exists",
+            "message": f"Worktree for {prd_id} already exists",
+            "worktree": existing,
+        }
+
+    # Ensure .worktrees/ is in .gitignore
+    _ensure_gitignore_entry(repo_root, ".worktrees/")
 
     # Create branch from base
     base = base_branch or "HEAD"
@@ -1690,26 +1779,23 @@ def setup_prd_worktree(
     env_path = worktree_path / ".env.prd-override"
     env_path.write_text(env_content)
 
-    # Update state file
-    now = datetime.now(timezone.utc).isoformat()
-    state["sprint_id"] = sprint_id
-    if not state.get("created_at"):
-        state["created_at"] = now
-    state.setdefault("worktrees", {})[prd_id] = {
-        "branch": branch_name,
-        "path": str(worktree_path),
-        "port_offset": port_offset,
-        "compose_name": compose_name,
-        "status": "active",
-        "pr_url": None,
-        "created_at": now,
-    }
-    _save_worktree_state(state)
+    # Record worktree in database
+    worktree_id = db.get_next_worktree_id(project_id) if project_id else prd_id
+    db.create_worktree(
+        worktree_id=worktree_id,
+        project_id=project_id or "",
+        prd_id=prd_id,
+        branch_name=branch_name,
+        path=str(worktree_path),
+        sprint_id=sprint_id,
+        status="active",
+    )
 
     return {
         "status": "created",
         "message": f"Worktree created for {prd_id}",
         "worktree": {
+            "id": worktree_id,
             "prd_id": prd_id,
             "branch": branch_name,
             "path": str(worktree_path),
@@ -1724,35 +1810,67 @@ def setup_prd_worktree(
 def cleanup_prd_worktree(
     prd_id: str,
     remove_branch: bool = False,
+    confirm_branch_delete: bool = False,
     docker_cleanup: bool = True,
 ) -> dict[str, Any]:
     """Clean up a PRD's git worktree and optionally its Docker resources.
 
+    Looks up worktree state from the database. If no DB record exists but
+    an orphaned worktree directory is found on disk, cleans it up anyway.
+
+    Branch deletion is a destructive operation and always requires explicit
+    confirmation via confirm_branch_delete=True, regardless of git safety
+    configuration.
+
     Args:
         prd_id: PRD identifier.
         remove_branch: If True, also delete the worktree's branch.
+        confirm_branch_delete: Must be True to actually delete the branch.
+            Required as a safety measure for destructive operations.
         docker_cleanup: If True, run docker compose down for the PRD's namespace.
 
     Returns:
         Cleanup status.
     """
     repo_root = Path(os.getcwd())
-    state = _load_worktree_state()
-    worktree_info = state.get("worktrees", {}).get(prd_id)
+    db = get_db()
+    worktree_info = db.get_worktree_by_prd(prd_id)
 
+    # Fallback: detect orphan worktree on disk when DB has no record
     if not worktree_info:
+        orphan_path = repo_root / ".worktrees" / prd_id
+        if orphan_path.exists():
+            return _cleanup_orphan_worktree(repo_root, orphan_path, prd_id)
         return {
             "status": "not_found",
             "message": f"No worktree found for {prd_id}",
         }
 
     worktree_path = Path(worktree_info["path"])
-    branch_name = worktree_info["branch"]
-    compose_name = worktree_info.get("compose_name", "")
+    branch_name = worktree_info["branch_name"]
+
+    # Branch deletion requires explicit confirmation (destructive operation)
+    if remove_branch and not confirm_branch_delete:
+        return {
+            "status": "confirmation_required",
+            "message": (
+                f"Branch deletion is a destructive operation that always requires "
+                f"explicit confirmation. To delete branch '{branch_name}', "
+                f"call again with confirm_branch_delete=True."
+            ),
+            "branch": branch_name,
+        }
 
     errors = []
 
-    # Docker cleanup
+    # Docker cleanup (compose_name not stored in DB -- derive from project)
+    compose_name = ""
+    project_id = worktree_info.get("project_id")
+    if project_id:
+        project = db.get_project(project_id)
+        if project:
+            compose_name = f"{project['shortname'].lower()}-{prd_id.lower()}"
+
     if docker_cleanup and compose_name:
         try:
             subprocess.run(
@@ -1765,20 +1883,33 @@ def cleanup_prd_worktree(
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
             errors.append(f"Docker cleanup warning: {e}")
 
-    # Remove worktree
+    # Remove worktree directory via git
+    if worktree_path.exists():
+        try:
+            subprocess.run(
+                ["git", "worktree", "remove", str(worktree_path), "--force"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            errors.append(f"Worktree removal warning: {e.stderr.strip()}")
+
+    # Prune stale worktree references
     try:
         subprocess.run(
-            ["git", "worktree", "remove", str(worktree_path), "--force"],
+            ["git", "worktree", "prune"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
             check=True,
         )
     except subprocess.CalledProcessError as e:
-        errors.append(f"Worktree removal warning: {e.stderr.strip()}")
+        errors.append(f"Worktree prune warning: {e.stderr.strip()}")
 
-    # Remove branch if requested
-    if remove_branch:
+    # Remove branch if requested AND confirmed
+    if remove_branch and confirm_branch_delete:
         try:
             subprocess.run(
                 ["git", "branch", "-D", branch_name],
@@ -1790,15 +1921,77 @@ def cleanup_prd_worktree(
         except subprocess.CalledProcessError as e:
             errors.append(f"Branch deletion warning: {e.stderr.strip()}")
 
-    # Update state
-    state["worktrees"][prd_id]["status"] = "removed"
-    _save_worktree_state(state)
+    # Update worktree status in database
+    db.update_worktree(worktree_info["id"], status="abandoned")
 
     result: dict[str, Any] = {
         "status": "cleaned",
         "message": f"Worktree for {prd_id} cleaned up",
-        "branch_removed": remove_branch,
+        "branch_removed": remove_branch and confirm_branch_delete,
         "docker_cleaned": docker_cleanup,
+    }
+    if errors:
+        result["warnings"] = errors
+
+    return result
+
+
+def _cleanup_orphan_worktree(
+    repo_root: Path,
+    orphan_path: Path,
+    prd_id: str,
+) -> dict[str, Any]:
+    """Clean up an orphaned worktree directory that has no database record.
+
+    This handles the edge case where a worktree exists on disk (e.g. from
+    a previous run, manual creation, or DB reset) but has no corresponding
+    database entry.
+
+    Args:
+        repo_root: Repository root path.
+        orphan_path: Path to the orphaned worktree directory.
+        prd_id: PRD identifier.
+
+    Returns:
+        Cleanup result dict.
+    """
+    errors: list[str] = []
+
+    # Try git worktree remove first
+    try:
+        subprocess.run(
+            ["git", "worktree", "remove", str(orphan_path), "--force"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        errors.append(f"Worktree removal warning: {e.stderr.strip()}")
+        # Fall back to manual directory removal if git worktree remove fails
+        try:
+            shutil.rmtree(str(orphan_path))
+        except OSError as rm_err:
+            errors.append(f"Manual removal warning: {rm_err}")
+
+    # Prune stale worktree references
+    try:
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        errors.append(f"Worktree prune warning: {e.stderr.strip()}")
+
+    result: dict[str, Any] = {
+        "status": "cleaned",
+        "message": f"Orphaned worktree for {prd_id} cleaned up (no DB record found)",
+        "orphan": True,
+        "branch_removed": False,
+        "docker_cleaned": False,
     }
     if errors:
         result["warnings"] = errors
@@ -1829,8 +2022,20 @@ def create_prd_pr(
         PR URL and details.
     """
     repo_root = Path(os.getcwd())
-    state = _load_worktree_state()
-    worktree_info = state.get("worktrees", {}).get(prd_id)
+
+    # Check git safety config — auto_pr must be enabled
+    git_config = load_git_safety_config(repo_root)
+    if not git_config.is_operation_allowed("auto_pr"):
+        return {
+            "status": "disabled",
+            "message": (
+                "Automatic PR creation is disabled by git safety configuration. "
+                "Enable it with: configure_git_safety(auto_pr=True)"
+            ),
+        }
+
+    db = get_db()
+    worktree_info = db.get_worktree_by_prd(prd_id)
 
     if not worktree_info:
         return {
@@ -1838,10 +2043,9 @@ def create_prd_pr(
             "message": f"No worktree found for {prd_id}. Run setup_prd_worktree first.",
         }
 
-    branch_name = worktree_info["branch"]
+    branch_name = worktree_info["branch_name"]
 
     # Get PRD metadata for auto-generated title/body
-    db = get_db()
     prd = db.get_prd(prd_id)
     prd_title = prd["title"] if prd else prd_id
 
@@ -1888,10 +2092,8 @@ def create_prd_pr(
             "message": f"Failed to create PR: {e.stderr.strip()}",
         }
 
-    # Update state with PR URL
-    state["worktrees"][prd_id]["pr_url"] = pr_url
-    state["worktrees"][prd_id]["status"] = "pr_created"
-    _save_worktree_state(state)
+    # Update worktree status and store PR URL in database
+    db.update_worktree(worktree_info["id"], status="pr_created", pr_url=pr_url)
 
     return {
         "status": "created",
@@ -1900,6 +2102,233 @@ def create_prd_pr(
         "branch": branch_name,
         "title": pr_title,
     }
+
+
+@mcp.tool()
+def list_worktrees(
+    project_id: str | None = None,
+    status: str | None = None,
+    sprint_id: str | None = None,
+) -> dict[str, Any]:
+    """List tracked worktrees with optional filters.
+
+    Returns all worktrees for the current project with their state,
+    associated PRD/sprint, branch name, and path.
+
+    Args:
+        project_id: Optional project ID. Auto-detects if not provided.
+        status: Filter by worktree status (active, completed, abandoned).
+        sprint_id: Filter by sprint ID.
+
+    Returns:
+        List of worktree summaries.
+    """
+    db = get_db()
+    pid = project_id or _get_current_project_id()
+
+    if not pid:
+        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+
+    worktrees = db.list_worktrees(pid, status=status, sprint_id=sprint_id)
+    return {
+        "status": "ok",
+        "project_id": pid,
+        "filters": {
+            "status": status,
+            "sprint_id": sprint_id,
+        },
+        "count": len(worktrees),
+        "worktrees": [
+            {
+                "id": w["id"],
+                "prd_id": w["prd_id"],
+                "sprint_id": w.get("sprint_id"),
+                "branch_name": w["branch_name"],
+                "path": w["path"],
+                "status": w["status"],
+                "created_at": w["created_at"],
+                "cleaned_at": w.get("cleaned_at"),
+            }
+            for w in worktrees
+        ],
+    }
+
+
+@mcp.tool()
+def complete_prd_worktree(
+    prd_id: str,
+    action: str,
+    base_branch: str | None = None,
+    pr_title: str | None = None,
+    pr_body: str | None = None,
+    confirm_discard: bool = False,
+) -> dict[str, Any]:
+    """Complete a PRD worktree by applying a chosen action.
+
+    After all tasks for a PRD pass review, use this tool to finalize
+    the worktree. Four actions are available:
+
+    - **merge**: Merge the worktree branch into the base branch locally.
+      Requires auto_merge to be enabled in git safety config.
+      Worktree is cleaned up after merge.
+    - **pr**: Create a pull request for the worktree branch.
+      Requires auto_pr to be enabled in git safety config.
+      Worktree is kept (not cleaned up) so the branch stays available.
+    - **keep**: Keep the worktree and branch as-is for manual handling.
+      No cleanup is performed.
+    - **discard**: Remove the worktree and branch entirely.
+      Requires confirm_discard=True as a safety measure.
+      Worktree is cleaned up and branch is deleted.
+
+    Args:
+        prd_id: PRD identifier.
+        action: Completion action — one of "merge", "pr", "keep", "discard".
+        base_branch: Target branch for merge/PR. Defaults to repo default branch.
+        pr_title: Custom PR title (for "pr" action). Auto-generated if not provided.
+        pr_body: Custom PR body (for "pr" action). Auto-generated if not provided.
+        confirm_discard: Must be True to execute "discard" action. Safety measure.
+
+    Returns:
+        Completion result with action taken and any relevant details.
+    """
+    valid_actions = ("merge", "pr", "keep", "discard")
+    if action not in valid_actions:
+        return {
+            "status": "error",
+            "message": (
+                f"Invalid action: '{action}'. "
+                f"Valid actions: {', '.join(valid_actions)}"
+            ),
+        }
+
+    repo_root = Path(os.getcwd())
+    db = get_db()
+    worktree_info = db.get_worktree_by_prd(prd_id)
+
+    if not worktree_info:
+        return {
+            "status": "not_found",
+            "message": f"No active worktree found for {prd_id}.",
+        }
+
+    branch_name = worktree_info["branch_name"]
+    sprint_id = worktree_info.get("sprint_id", "")
+
+    git_config = load_git_safety_config(repo_root)
+
+    # --- action: keep ---
+    if action == "keep":
+        return {
+            "status": "kept",
+            "message": f"Worktree for {prd_id} kept as-is. Branch: {branch_name}",
+            "worktree_id": worktree_info["id"],
+            "branch": branch_name,
+            "path": worktree_info["path"],
+        }
+
+    # --- action: discard ---
+    if action == "discard":
+        if not confirm_discard:
+            return {
+                "status": "confirmation_required",
+                "message": (
+                    f"Discard is a destructive operation. It will remove the worktree "
+                    f"and delete branch '{branch_name}'. "
+                    f"Call again with confirm_discard=True to proceed."
+                ),
+                "branch": branch_name,
+            }
+        # Delegate to cleanup_prd_worktree with branch removal
+        return cleanup_prd_worktree(
+            prd_id=prd_id,
+            remove_branch=True,
+            confirm_branch_delete=True,
+            docker_cleanup=True,
+        )
+
+    # --- action: pr ---
+    if action == "pr":
+        if not git_config.is_operation_allowed("auto_pr"):
+            return {
+                "status": "disabled",
+                "message": (
+                    "Automatic PR creation is disabled by git safety configuration. "
+                    "Enable it with: configure_git_safety(auto_pr=True)"
+                ),
+            }
+        # Delegate to create_prd_pr
+        return create_prd_pr(
+            prd_id=prd_id,
+            sprint_id=sprint_id,
+            base_branch=base_branch,
+            title=pr_title,
+            body=pr_body,
+        )
+
+    # --- action: merge ---
+    if action == "merge":
+        if not git_config.is_operation_allowed("auto_merge"):
+            return {
+                "status": "disabled",
+                "message": (
+                    "Automatic merge is disabled by git safety configuration. "
+                    "Enable it with: configure_git_safety(auto_merge=True)"
+                ),
+            }
+
+        # Determine base branch
+        target_branch = base_branch
+        if not target_branch:
+            try:
+                result = subprocess.run(
+                    ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                    cwd=str(repo_root),
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    # e.g., "refs/remotes/origin/main" -> "main"
+                    target_branch = result.stdout.strip().split("/")[-1]
+            except Exception:
+                pass
+            if not target_branch:
+                target_branch = "main"
+
+        # Merge the worktree branch into target
+        try:
+            subprocess.run(
+                ["git", "merge", branch_name, "--no-ff",
+                 "-m", f"Merge {prd_id} ({branch_name}) into {target_branch}"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            return {
+                "status": "error",
+                "message": f"Merge failed: {e.stderr.strip()}",
+            }
+
+        # Cleanup worktree after successful merge (no branch removal —
+        # branch is merged, can be deleted separately if desired)
+        cleanup_result = cleanup_prd_worktree(
+            prd_id=prd_id,
+            remove_branch=False,
+            docker_cleanup=True,
+        )
+
+        return {
+            "status": "merged",
+            "message": f"Branch {branch_name} merged into {target_branch}. Worktree cleaned up.",
+            "worktree_id": worktree_info["id"],
+            "branch": branch_name,
+            "target_branch": target_branch,
+            "cleanup": cleanup_result,
+        }
+
+    # Should not reach here due to validation above, but satisfy type checker
+    return {"status": "error", "message": "Unexpected action."}
 
 
 # =============================================================================

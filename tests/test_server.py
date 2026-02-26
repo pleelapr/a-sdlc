@@ -1,6 +1,6 @@
 """Tests for MCP server tools."""
 
-import json
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -226,20 +226,43 @@ class TestGetSprintTasksGroupByPrd:
 class TestSetupPrdWorktree:
     """Test setup_prd_worktree MCP tool."""
 
+    def _enabled_git_config(self):
+        """Return a GitSafetyConfig with worktree_enabled=True."""
+        from a_sdlc.core.git_config import GitSafetyConfig
+        return GitSafetyConfig(worktree_enabled=True)
+
+    def _make_worktree_record(self, tmp_path, prd_id="TEST-P0001"):
+        """Return a DB-style worktree dict."""
+        return {
+            "id": "TEST-W0001",
+            "project_id": "test-project",
+            "prd_id": prd_id,
+            "sprint_id": "TEST-S0001",
+            "branch_name": f"sprint/TEST-S0001/{prd_id}",
+            "path": str(tmp_path / ".worktrees" / prd_id),
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "cleaned_at": None,
+        }
+
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_creates_worktree_successfully(
-        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, tmp_path
+        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, mock_git_config, tmp_path
     ):
         from a_sdlc.server import setup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
         mock_get_pid.return_value = "test-project"
+        mock_git_config.return_value = self._enabled_git_config()
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_project.return_value = {"shortname": "TEST"}
+        mock_db.get_worktree_by_prd.return_value = None
+        mock_db.get_next_worktree_id.return_value = "TEST-W0001"
 
         # Create .gitignore so _ensure_gitignore_entry can work
         (tmp_path / ".gitignore").write_text("")
@@ -257,47 +280,43 @@ class TestSetupPrdWorktree:
         assert result["worktree"]["branch"] == "sprint/TEST-S0001/TEST-P0001"
         assert result["worktree"]["port_offset"] == 0
         assert result["worktree"]["compose_name"] == "test-test-p0001"
+        assert result["worktree"]["id"] == "TEST-W0001"
 
         # Verify git commands were called
         assert mock_run.call_count == 2  # git branch + git worktree add
 
-        # Verify state file was written (env file is in the worktree created by git)
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        assert state_path.exists()
-        state = json.loads(state_path.read_text())
-        assert "TEST-P0001" in state["worktrees"]
-        assert state["worktrees"]["TEST-P0001"]["status"] == "active"
-        assert state["sprint_id"] == "TEST-S0001"
+        # Verify worktree was recorded in database
+        mock_db.create_worktree.assert_called_once_with(
+            worktree_id="TEST-W0001",
+            project_id="test-project",
+            prd_id="TEST-P0001",
+            branch_name="sprint/TEST-S0001/TEST-P0001",
+            path=str(tmp_path / ".worktrees" / "TEST-P0001"),
+            sprint_id="TEST-S0001",
+            status="active",
+        )
 
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_returns_exists_if_already_setup(
-        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, tmp_path
+        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, mock_git_config, tmp_path
     ):
         from a_sdlc.server import setup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_get_pid.return_value = "test-project"
+        mock_git_config.return_value = self._enabled_git_config()
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_project.return_value = {"shortname": "TEST"}
 
-        # Pre-create worktree state and directory
+        # Pre-create worktree directory and DB record
         worktree_path = tmp_path / ".worktrees" / "TEST-P0001"
         worktree_path.mkdir(parents=True)
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(worktree_path),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
 
         result = setup_prd_worktree(
             prd_id="TEST-P0001",
@@ -308,12 +327,13 @@ class TestSetupPrdWorktree:
         # Should not call git at all
         mock_run.assert_not_called()
 
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_handles_branch_already_exists(
-        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, tmp_path
+        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, mock_git_config, tmp_path
     ):
         """If branch already exists (resume), should proceed to worktree add."""
         import subprocess as sp
@@ -322,9 +342,12 @@ class TestSetupPrdWorktree:
 
         mock_getcwd.return_value = str(tmp_path)
         mock_get_pid.return_value = "test-project"
+        mock_git_config.return_value = self._enabled_git_config()
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_project.return_value = {"shortname": "TEST"}
+        mock_db.get_worktree_by_prd.return_value = None
+        mock_db.get_next_worktree_id.return_value = "TEST-W0001"
         (tmp_path / ".gitignore").write_text("")
 
         # First call (git branch) fails with "already exists"
@@ -340,20 +363,24 @@ class TestSetupPrdWorktree:
         assert result["status"] == "created"
         assert mock_run.call_count == 2
 
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_gitignore_entry_added(
-        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, tmp_path
+        self, mock_getcwd, mock_get_db, mock_get_pid, mock_run, mock_git_config, tmp_path
     ):
         from a_sdlc.server import setup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
         mock_get_pid.return_value = "test-project"
+        mock_git_config.return_value = self._enabled_git_config()
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_project.return_value = {"shortname": "TEST"}
+        mock_db.get_worktree_by_prd.return_value = None
+        mock_db.get_next_worktree_id.return_value = "TEST-W0001"
         (tmp_path / ".gitignore").write_text("node_modules/\n")
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -362,6 +389,21 @@ class TestSetupPrdWorktree:
         gitignore_content = (tmp_path / ".gitignore").read_text()
         assert ".worktrees/" in gitignore_content
         assert "node_modules/" in gitignore_content
+
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_blocked_when_worktree_disabled(self, mock_getcwd, mock_git_config, tmp_path):
+        """Worktree creation is blocked when worktree_enabled is False (default)."""
+        from a_sdlc.core.git_config import GitSafetyConfig
+        from a_sdlc.server import setup_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = GitSafetyConfig()  # all defaults = False
+
+        result = setup_prd_worktree(prd_id="TEST-P0001", sprint_id="TEST-S0001")
+
+        assert result["status"] == "disabled"
+        assert "worktree_enabled" in result["message"]
 
 
 # =============================================================================
@@ -372,32 +414,35 @@ class TestSetupPrdWorktree:
 class TestCleanupPrdWorktree:
     """Test cleanup_prd_worktree MCP tool."""
 
+    def _make_worktree_record(self, tmp_path, prd_id="TEST-P0001"):
+        """Return a DB-style worktree dict."""
+        return {
+            "id": "TEST-W0001",
+            "project_id": "test-project",
+            "prd_id": prd_id,
+            "sprint_id": "TEST-S0001",
+            "branch_name": f"sprint/TEST-S0001/{prd_id}",
+            "path": str(tmp_path / ".worktrees" / prd_id),
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "cleaned_at": None,
+        }
+
     @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_cleanup_removes_worktree(self, mock_getcwd, mock_run, tmp_path):
+    def test_cleanup_removes_worktree(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
         from a_sdlc.server import cleanup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
 
-        # Create state file
+        # Create worktree directory and DB record
         worktree_path = tmp_path / ".worktrees" / "TEST-P0001"
         worktree_path.mkdir(parents=True)
-        state = {
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(worktree_path),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.write_text(json.dumps(state))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+        mock_db.get_project.return_value = {"shortname": "TEST"}
 
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -407,43 +452,72 @@ class TestCleanupPrdWorktree:
         assert result["branch_removed"] is False
 
         # Verify git worktree remove was called
-        git_calls = [c for c in mock_run.call_args_list if "worktree" in str(c)]
-        assert len(git_calls) == 1
+        remove_calls = [
+            c for c in mock_run.call_args_list
+            if c[0][0][:3] == ["git", "worktree", "remove"]
+        ]
+        assert len(remove_calls) == 1
 
-        # State should be updated
-        updated_state = json.loads(state_path.read_text())
-        assert updated_state["worktrees"]["TEST-P0001"]["status"] == "removed"
+        # Verify git worktree prune was called
+        prune_calls = [
+            c for c in mock_run.call_args_list
+            if c[0][0] == ["git", "worktree", "prune"]
+        ]
+        assert len(prune_calls) == 1
+
+        # Verify DB status was updated
+        mock_db.update_worktree.assert_called_once_with("TEST-W0001", status="abandoned")
 
     @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_cleanup_with_branch_removal(self, mock_getcwd, mock_run, tmp_path):
+    def test_cleanup_with_branch_removal_requires_confirmation(
+        self, mock_getcwd, mock_get_db, mock_run, tmp_path
+    ):
+        """Branch deletion without confirm_branch_delete returns confirmation_required."""
         from a_sdlc.server import cleanup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
 
         worktree_path = tmp_path / ".worktrees" / "TEST-P0001"
         worktree_path.mkdir(parents=True)
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(worktree_path),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        result = cleanup_prd_worktree(
+            prd_id="TEST-P0001",
+            remove_branch=True,
+            docker_cleanup=False,
+        )
+
+        assert result["status"] == "confirmation_required"
+        assert "branch" in result
+        # git should not have been called at all
+        mock_run.assert_not_called()
+
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_cleanup_with_branch_removal_confirmed(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+        """Branch deletion proceeds when confirm_branch_delete=True."""
+        from a_sdlc.server import cleanup_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+
+        worktree_path = tmp_path / ".worktrees" / "TEST-P0001"
+        worktree_path.mkdir(parents=True)
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+        mock_db.get_project.return_value = {"shortname": "TEST"}
 
         mock_run.return_value = MagicMock(returncode=0)
 
         result = cleanup_prd_worktree(
             prd_id="TEST-P0001",
             remove_branch=True,
+            confirm_branch_delete=True,
             docker_cleanup=False,
         )
 
@@ -454,40 +528,34 @@ class TestCleanupPrdWorktree:
         branch_calls = [c for c in mock_run.call_args_list if "branch" in str(c)]
         assert len(branch_calls) >= 1
 
+    @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_cleanup_not_found(self, mock_getcwd, tmp_path):
+    def test_cleanup_not_found(self, mock_getcwd, mock_get_db, tmp_path):
         from a_sdlc.server import cleanup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = None
 
         result = cleanup_prd_worktree(prd_id="NONEXISTENT")
 
         assert result["status"] == "not_found"
 
     @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_cleanup_with_docker(self, mock_getcwd, mock_run, tmp_path):
+    def test_cleanup_with_docker(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
         from a_sdlc.server import cleanup_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
 
         worktree_path = tmp_path / ".worktrees" / "TEST-P0001"
         worktree_path.mkdir(parents=True)
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(worktree_path),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+        mock_db.get_project.return_value = {"shortname": "TEST"}
 
         mock_run.return_value = MagicMock(returncode=0)
 
@@ -500,6 +568,133 @@ class TestCleanupPrdWorktree:
         docker_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "docker"]
         assert len(docker_calls) == 1
 
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_cleanup_orphan_worktree_on_disk(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+        """Orphaned worktree on disk (no DB record) is cleaned up."""
+        from a_sdlc.server import cleanup_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = None
+
+        # Create orphan worktree directory on disk
+        orphan_path = tmp_path / ".worktrees" / "ORPHAN-P0001"
+        orphan_path.mkdir(parents=True)
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = cleanup_prd_worktree(prd_id="ORPHAN-P0001")
+
+        assert result["status"] == "cleaned"
+        assert result["orphan"] is True
+        assert "no DB record" in result["message"]
+        assert result["branch_removed"] is False
+        assert result["docker_cleaned"] is False
+
+        # Verify git worktree remove and prune were called
+        remove_calls = [c for c in mock_run.call_args_list if "remove" in str(c)]
+        assert len(remove_calls) == 1
+        prune_calls = [c for c in mock_run.call_args_list if "prune" in str(c)]
+        assert len(prune_calls) == 1
+
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_cleanup_orphan_fallback_to_rmtree(
+        self, mock_getcwd, mock_get_db, mock_run, tmp_path
+    ):
+        """Orphan cleanup falls back to shutil.rmtree when git worktree remove fails."""
+        from a_sdlc.server import cleanup_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = None
+
+        orphan_path = tmp_path / ".worktrees" / "ORPHAN-P0001"
+        orphan_path.mkdir(parents=True)
+
+        # git worktree remove fails, git worktree prune succeeds
+        def side_effect(*args, **kwargs):
+            cmd = args[0]
+            if "remove" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="not a valid worktree")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = side_effect
+
+        result = cleanup_prd_worktree(prd_id="ORPHAN-P0001")
+
+        assert result["status"] == "cleaned"
+        assert result["orphan"] is True
+        # The orphan directory should be removed (via shutil.rmtree fallback)
+        assert not orphan_path.exists()
+
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_cleanup_db_record_but_no_directory(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+        """Worktree in DB but directory missing on disk -- prune and update DB."""
+        from a_sdlc.server import cleanup_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+
+        # DB record exists but the directory does NOT exist on disk
+        record = self._make_worktree_record(tmp_path)
+        mock_db.get_worktree_by_prd.return_value = record
+        mock_db.get_project.return_value = {"shortname": "TEST"}
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = cleanup_prd_worktree(prd_id="TEST-P0001", docker_cleanup=False)
+
+        assert result["status"] == "cleaned"
+
+        # git worktree remove should NOT be called (directory doesn't exist)
+        remove_calls = [
+            c for c in mock_run.call_args_list
+            if len(c[0]) > 0 and "remove" in str(c[0][0])
+        ]
+        assert len(remove_calls) == 0
+
+        # git worktree prune SHOULD be called
+        prune_calls = [c for c in mock_run.call_args_list if "prune" in str(c)]
+        assert len(prune_calls) == 1
+
+        # DB status should still be updated
+        mock_db.update_worktree.assert_called_once_with("TEST-W0001", status="abandoned")
+
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_cleanup_branch_removed_false_when_not_confirmed(
+        self, mock_getcwd, mock_get_db, mock_run, tmp_path
+    ):
+        """branch_removed is False when remove_branch=True but confirm_branch_delete=False."""
+        from a_sdlc.server import cleanup_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+
+        worktree_path = tmp_path / ".worktrees" / "TEST-P0001"
+        worktree_path.mkdir(parents=True)
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        result = cleanup_prd_worktree(
+            prd_id="TEST-P0001",
+            remove_branch=True,
+            confirm_branch_delete=False,
+        )
+
+        # Should get confirmation_required, not proceed
+        assert result["status"] == "confirmation_required"
+
 
 # =============================================================================
 # create_prd_pr
@@ -509,34 +704,38 @@ class TestCleanupPrdWorktree:
 class TestCreatePrdPr:
     """Test create_prd_pr MCP tool."""
 
+    def _enabled_git_config(self):
+        """Return a GitSafetyConfig with auto_pr=True."""
+        from a_sdlc.core.git_config import GitSafetyConfig
+        return GitSafetyConfig(auto_pr=True)
+
+    def _make_worktree_record(self, tmp_path, prd_id="TEST-P0001"):
+        """Return a DB-style worktree dict."""
+        return {
+            "id": "TEST-W0001",
+            "project_id": "test-project",
+            "prd_id": prd_id,
+            "sprint_id": "TEST-S0001",
+            "branch_name": f"sprint/TEST-S0001/{prd_id}",
+            "path": str(tmp_path / ".worktrees" / prd_id),
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "cleaned_at": None,
+        }
+
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_creates_pr_successfully(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+    def test_creates_pr_successfully(self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path):
         from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_prd.return_value = {"title": "Auth Feature"}
-
-        # Setup state file
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.parent.mkdir(parents=True)
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(tmp_path / ".worktrees" / "TEST-P0001"),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
 
         # git push succeeds, gh pr create returns URL
         mock_run.side_effect = [
@@ -554,50 +753,42 @@ class TestCreatePrdPr:
         assert result["branch"] == "sprint/TEST-S0001/TEST-P0001"
         assert "Auth Feature" in result["title"]
 
-        # Verify state updated with PR URL
-        updated_state = json.loads(state_path.read_text())
-        assert updated_state["worktrees"]["TEST-P0001"]["pr_url"] == "https://github.com/org/repo/pull/42"
-        assert updated_state["worktrees"]["TEST-P0001"]["status"] == "pr_created"
+        # Verify DB was updated with pr_created status and pr_url
+        mock_db.update_worktree.assert_called_once_with(
+            "TEST-W0001", status="pr_created", pr_url="https://github.com/org/repo/pull/42"
+        )
 
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_pr_no_worktree(self, mock_getcwd, tmp_path):
+    def test_pr_no_worktree(self, mock_getcwd, mock_get_db, mock_git_config, tmp_path):
         from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = None
 
         result = create_prd_pr(prd_id="NONEXISTENT", sprint_id="TEST-S0001")
 
         assert result["status"] == "not_found"
 
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_pr_push_failure(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+    def test_pr_push_failure(self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path):
         import subprocess as sp
 
         from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_prd.return_value = {"title": "Auth Feature"}
-
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.parent.mkdir(parents=True)
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(tmp_path / ".worktrees" / "TEST-P0001"),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
 
         mock_run.side_effect = sp.CalledProcessError(1, "git", stderr="remote rejected")
 
@@ -606,33 +797,19 @@ class TestCreatePrdPr:
         assert result["status"] == "error"
         assert "push" in result["message"].lower()
 
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_pr_custom_title_and_body(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+    def test_pr_custom_title_and_body(self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path):
         from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_prd.return_value = {"title": "Auth Feature"}
-
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.parent.mkdir(parents=True)
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": str(tmp_path / ".worktrees" / "TEST-P0001"),
-                    "port_offset": 0,
-                    "compose_name": "test-test-p0001",
-                    "status": "active",
-                    "pr_url": None,
-                },
-            },
-        }))
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
 
         mock_run.side_effect = [
             MagicMock(returncode=0),
@@ -649,93 +826,20 @@ class TestCreatePrdPr:
         assert result["status"] == "created"
         assert result["title"] == "Custom PR Title"
 
-
-# =============================================================================
-# Worktree state helpers
-# =============================================================================
-
-
-class TestWorktreeStateHelpers:
-    """Test _load_worktree_state and _save_worktree_state."""
-
+    @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.os.getcwd")
-    def test_load_empty_state(self, mock_getcwd, tmp_path):
-        from a_sdlc.server import _load_worktree_state
+    def test_pr_blocked_when_auto_pr_disabled(self, mock_getcwd, mock_git_config, tmp_path):
+        """PR creation is blocked when auto_pr is False (default)."""
+        from a_sdlc.core.git_config import GitSafetyConfig
+        from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = GitSafetyConfig()  # all defaults = False
 
-        state = _load_worktree_state()
+        result = create_prd_pr(prd_id="TEST-P0001", sprint_id="TEST-S0001")
 
-        assert state["sprint_id"] is None
-        assert state["worktrees"] == {}
-
-    @patch("a_sdlc.server.os.getcwd")
-    def test_load_existing_state(self, mock_getcwd, tmp_path):
-        from a_sdlc.server import _load_worktree_state
-
-        mock_getcwd.return_value = str(tmp_path)
-
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        state_path.parent.mkdir(parents=True)
-        state_path.write_text(json.dumps({
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {"TEST-P0001": {"status": "active"}},
-        }))
-
-        state = _load_worktree_state()
-
-        assert state["sprint_id"] == "TEST-S0001"
-        assert "TEST-P0001" in state["worktrees"]
-
-    @patch("a_sdlc.server.os.getcwd")
-    def test_save_creates_directory(self, mock_getcwd, tmp_path):
-        from a_sdlc.server import _save_worktree_state
-
-        mock_getcwd.return_value = str(tmp_path)
-
-        state = {
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-01-01",
-            "worktrees": {"TEST-P0001": {"status": "active"}},
-        }
-        _save_worktree_state(state)
-
-        state_path = tmp_path / ".worktrees" / ".state.json"
-        assert state_path.exists()
-        loaded = json.loads(state_path.read_text())
-        assert loaded["sprint_id"] == "TEST-S0001"
-
-    @patch("a_sdlc.server.os.getcwd")
-    def test_roundtrip(self, mock_getcwd, tmp_path):
-        from a_sdlc.server import _load_worktree_state, _save_worktree_state
-
-        mock_getcwd.return_value = str(tmp_path)
-
-        state = {
-            "sprint_id": "TEST-S0001",
-            "created_at": "2026-02-06T12:00:00+00:00",
-            "worktrees": {
-                "TEST-P0001": {
-                    "branch": "sprint/TEST-S0001/TEST-P0001",
-                    "path": "/tmp/test/.worktrees/TEST-P0001",
-                    "port_offset": 0,
-                    "status": "active",
-                    "pr_url": None,
-                },
-                "TEST-P0002": {
-                    "branch": "sprint/TEST-S0001/TEST-P0002",
-                    "path": "/tmp/test/.worktrees/TEST-P0002",
-                    "port_offset": 100,
-                    "status": "completed",
-                    "pr_url": "https://github.com/org/repo/pull/42",
-                },
-            },
-        }
-        _save_worktree_state(state)
-        loaded = _load_worktree_state()
-
-        assert loaded == state
+        assert result["status"] == "disabled"
+        assert "auto_pr" in result["message"]
 
 
 # =============================================================================
@@ -789,6 +893,476 @@ class TestEnsureGitignoreEntry:
 
         content = gitignore.read_text()
         assert content == "node_modules/\n.worktrees/\n"
+
+
+# =============================================================================
+# list_worktrees
+# =============================================================================
+
+
+class TestListWorktrees:
+    """Test list_worktrees MCP tool."""
+
+    def _make_worktree_record(self, prd_id="TEST-P0001", status="active", sprint_id="TEST-S0001"):
+        """Return a DB-style worktree dict."""
+        return {
+            "id": f"TEST-W{prd_id[-4:]}",
+            "project_id": "test-project",
+            "prd_id": prd_id,
+            "sprint_id": sprint_id,
+            "branch_name": f"sprint/{sprint_id}/{prd_id}",
+            "path": f"/tmp/.worktrees/{prd_id}",
+            "status": status,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "cleaned_at": None,
+        }
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_lists_all_worktrees(self, mock_get_db, mock_get_pid):
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.list_worktrees.return_value = [
+            self._make_worktree_record("TEST-P0001"),
+            self._make_worktree_record("TEST-P0002", status="completed"),
+        ]
+
+        result = list_worktrees()
+
+        assert result["status"] == "ok"
+        assert result["project_id"] == "test-project"
+        assert result["count"] == 2
+        assert len(result["worktrees"]) == 2
+        assert result["worktrees"][0]["prd_id"] == "TEST-P0001"
+        assert result["worktrees"][0]["status"] == "active"
+        assert result["worktrees"][1]["status"] == "completed"
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_lists_worktrees_empty(self, mock_get_db, mock_get_pid):
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.list_worktrees.return_value = []
+
+        result = list_worktrees()
+
+        assert result["status"] == "ok"
+        assert result["count"] == 0
+        assert result["worktrees"] == []
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_filters_by_status(self, mock_get_db, mock_get_pid):
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.list_worktrees.return_value = [
+            self._make_worktree_record("TEST-P0001", status="active"),
+        ]
+
+        result = list_worktrees(status="active")
+
+        assert result["status"] == "ok"
+        assert result["filters"]["status"] == "active"
+        mock_db.list_worktrees.assert_called_once_with(
+            "test-project", status="active", sprint_id=None,
+        )
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_filters_by_sprint_id(self, mock_get_db, mock_get_pid):
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.list_worktrees.return_value = []
+
+        result = list_worktrees(sprint_id="TEST-S0002")
+
+        assert result["filters"]["sprint_id"] == "TEST-S0002"
+        mock_db.list_worktrees.assert_called_once_with(
+            "test-project", status=None, sprint_id="TEST-S0002",
+        )
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_no_project_returns_error(self, mock_get_db, mock_get_pid):
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = None
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+
+        result = list_worktrees()
+
+        assert result["status"] == "error"
+        assert "No project context" in result["message"]
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_explicit_project_id(self, mock_get_db, mock_get_pid):
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = "auto-detected"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.list_worktrees.return_value = []
+
+        result = list_worktrees(project_id="explicit-project")
+
+        assert result["project_id"] == "explicit-project"
+        mock_db.list_worktrees.assert_called_once_with(
+            "explicit-project", status=None, sprint_id=None,
+        )
+
+    @patch("a_sdlc.server._get_current_project_id")
+    @patch("a_sdlc.server.get_db")
+    def test_worktree_fields_in_response(self, mock_get_db, mock_get_pid):
+        """Verify all expected fields are present in each worktree entry."""
+        from a_sdlc.server import list_worktrees
+
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.list_worktrees.return_value = [self._make_worktree_record()]
+
+        result = list_worktrees()
+
+        w = result["worktrees"][0]
+        expected_keys = {"id", "prd_id", "sprint_id", "branch_name", "path", "status", "created_at", "cleaned_at"}
+        assert set(w.keys()) == expected_keys
+
+
+# =============================================================================
+# complete_prd_worktree
+# =============================================================================
+
+
+class TestCompletePrdWorktree:
+    """Test complete_prd_worktree MCP tool."""
+
+    def _make_worktree_record(self, tmp_path, prd_id="TEST-P0001"):
+        """Return a DB-style worktree dict."""
+        return {
+            "id": "TEST-W0001",
+            "project_id": "test-project",
+            "prd_id": prd_id,
+            "sprint_id": "TEST-S0001",
+            "branch_name": f"sprint/TEST-S0001/{prd_id}",
+            "path": str(tmp_path / ".worktrees" / prd_id),
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "cleaned_at": None,
+        }
+
+    def _enabled_git_config(self, auto_pr=False, auto_merge=False):
+        """Return a GitSafetyConfig with specified settings."""
+        from a_sdlc.core.git_config import GitSafetyConfig
+        return GitSafetyConfig(auto_pr=auto_pr, auto_merge=auto_merge, worktree_enabled=True)
+
+    def test_invalid_action_returns_error(self):
+        from a_sdlc.server import complete_prd_worktree
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="invalid")
+
+        assert result["status"] == "error"
+        assert "Invalid action" in result["message"]
+        assert "merge" in result["message"]
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_no_worktree_returns_not_found(self, mock_getcwd, mock_get_db, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = None
+
+        result = complete_prd_worktree(prd_id="NONEXISTENT", action="keep")
+
+        assert result["status"] == "not_found"
+
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_keep_action(self, mock_getcwd, mock_get_db, mock_git_config, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="keep")
+
+        assert result["status"] == "kept"
+        assert result["branch"] == "sprint/TEST-S0001/TEST-P0001"
+        assert result["worktree_id"] == "TEST-W0001"
+        # No cleanup should happen
+        mock_db.update_worktree.assert_not_called()
+
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_discard_requires_confirmation(self, mock_getcwd, mock_get_db, mock_git_config, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="discard")
+
+        assert result["status"] == "confirmation_required"
+        assert "confirm_discard" in result["message"]
+        assert result["branch"] == "sprint/TEST-S0001/TEST-P0001"
+
+    @patch("a_sdlc.server.cleanup_prd_worktree")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_discard_confirmed_calls_cleanup(self, mock_getcwd, mock_get_db, mock_git_config, mock_cleanup, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config()
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        mock_cleanup.return_value = {"status": "cleaned", "message": "done"}
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="discard", confirm_discard=True)
+
+        mock_cleanup.assert_called_once_with(
+            prd_id="TEST-P0001",
+            remove_branch=True,
+            confirm_branch_delete=True,
+            docker_cleanup=True,
+        )
+        assert result["status"] == "cleaned"
+
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_pr_blocked_when_disabled(self, mock_getcwd, mock_get_db, mock_git_config, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_pr=False)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="pr")
+
+        assert result["status"] == "disabled"
+        assert "auto_pr" in result["message"]
+
+    @patch("a_sdlc.server.create_prd_pr")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_pr_delegates_to_create_prd_pr(self, mock_getcwd, mock_get_db, mock_git_config, mock_create_pr, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_pr=True)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        mock_create_pr.return_value = {
+            "status": "created",
+            "pr_url": "https://github.com/org/repo/pull/42",
+            "branch": "sprint/TEST-S0001/TEST-P0001",
+            "title": "[TEST-S0001] Test PRD",
+        }
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="pr")
+
+        mock_create_pr.assert_called_once_with(
+            prd_id="TEST-P0001",
+            sprint_id="TEST-S0001",
+            base_branch=None,
+            title=None,
+            body=None,
+        )
+        assert result["status"] == "created"
+        assert result["pr_url"] == "https://github.com/org/repo/pull/42"
+
+    @patch("a_sdlc.server.create_prd_pr")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_pr_passes_custom_title_and_body(self, mock_getcwd, mock_get_db, mock_git_config, mock_create_pr, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_pr=True)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        mock_create_pr.return_value = {"status": "created", "pr_url": "https://example.com/pr/1"}
+
+        complete_prd_worktree(
+            prd_id="TEST-P0001",
+            action="pr",
+            base_branch="develop",
+            pr_title="Custom Title",
+            pr_body="Custom Body",
+        )
+
+        mock_create_pr.assert_called_once_with(
+            prd_id="TEST-P0001",
+            sprint_id="TEST-S0001",
+            base_branch="develop",
+            title="Custom Title",
+            body="Custom Body",
+        )
+
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_merge_blocked_when_disabled(self, mock_getcwd, mock_get_db, mock_git_config, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_merge=False)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="merge")
+
+        assert result["status"] == "disabled"
+        assert "auto_merge" in result["message"]
+
+    @patch("a_sdlc.server.cleanup_prd_worktree")
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_merge_success(self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_merge=True)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        # git symbolic-ref succeeds (find default branch), then git merge succeeds
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="refs/remotes/origin/main\n"),  # symbolic-ref
+            MagicMock(returncode=0, stdout="", stderr=""),  # git merge
+        ]
+        mock_cleanup.return_value = {"status": "cleaned"}
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="merge")
+
+        assert result["status"] == "merged"
+        assert result["target_branch"] == "main"
+        assert result["branch"] == "sprint/TEST-S0001/TEST-P0001"
+        assert result["cleanup"]["status"] == "cleaned"
+
+        mock_cleanup.assert_called_once_with(
+            prd_id="TEST-P0001",
+            remove_branch=False,
+            docker_cleanup=True,
+        )
+
+    @patch("a_sdlc.server.cleanup_prd_worktree")
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_merge_with_explicit_base_branch(self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_merge=True)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_cleanup.return_value = {"status": "cleaned"}
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="merge", base_branch="develop")
+
+        assert result["status"] == "merged"
+        assert result["target_branch"] == "develop"
+        # Should NOT call symbolic-ref since base_branch is provided
+        assert mock_run.call_count == 1  # only git merge
+
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_merge_failure(self, mock_getcwd, mock_get_db, mock_git_config, mock_run, tmp_path):
+        import subprocess as sp
+
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_merge=True)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        # symbolic-ref succeeds, merge fails
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="refs/remotes/origin/main\n"),
+            sp.CalledProcessError(1, "git", stderr="CONFLICT in file.txt"),
+        ]
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="merge")
+
+        assert result["status"] == "error"
+        assert "Merge failed" in result["message"]
+
+    @patch("a_sdlc.server.cleanup_prd_worktree")
+    @patch("a_sdlc.server.subprocess.run")
+    @patch("a_sdlc.server.load_git_safety_config")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_merge_defaults_to_main_when_symbolic_ref_fails(
+        self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path
+    ):
+        from a_sdlc.server import complete_prd_worktree
+
+        mock_getcwd.return_value = str(tmp_path)
+        mock_git_config.return_value = self._enabled_git_config(auto_merge=True)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_worktree_by_prd.return_value = self._make_worktree_record(tmp_path)
+
+        # symbolic-ref fails (no remote), merge succeeds
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout=""),  # symbolic-ref fails
+            MagicMock(returncode=0, stdout="", stderr=""),  # merge succeeds
+        ]
+        mock_cleanup.return_value = {"status": "cleaned"}
+
+        result = complete_prd_worktree(prd_id="TEST-P0001", action="merge")
+
+        assert result["status"] == "merged"
+        assert result["target_branch"] == "main"
 
 
 class TestLogCorrection:

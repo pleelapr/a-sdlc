@@ -162,6 +162,112 @@ Design document found for PRD {prd_id}
 Design decisions will be used to guide task breakdown.
 ```
 
+Proceed to Step 1.5b.
+
+---
+
+### Step 1.5b: Extract PRD Requirements
+
+Parse the PRD content and extract all identifiable requirements into a structured `requirement_list`. This list is used downstream by the Plan agent (Step 3), the traceability matrix (Step 3.5), and the coverage checker (Step 3.6).
+
+**1.5b.1: Scan PRD for Requirement IDs**
+
+Scan the PRD content for requirement identifiers matching these patterns:
+- `FR-xxx` — Functional Requirements
+- `NFR-xxx` — Non-Functional Requirements
+- `AC-xxx` — Acceptance Criteria
+
+For each match, extract:
+- **ID**: The requirement identifier (e.g., `FR-001`)
+- **Type**: `Functional`, `Non-Functional`, or `Acceptance Criteria`
+- **Description**: The text following the ID on the same line
+
+**1.5b.2: Build requirement_list**
+
+```
+requirement_list = [
+    { "id": "FR-001", "type": "Functional", "description": "..." },
+    { "id": "FR-002", "type": "Functional", "description": "..." },
+    { "id": "NFR-001", "type": "Non-Functional", "description": "..." },
+    { "id": "AC-001", "type": "Acceptance Criteria", "description": "..." },
+    ...
+]
+```
+
+**1.5b.3: Validate Extraction**
+
+If `requirement_list` is empty (no FR-xxx, NFR-xxx, or AC-xxx found in the PRD):
+
+```
+⚠️ WARNING: No structured requirements found in PRD {prd_id}.
+The PRD does not contain identifiable requirement IDs (FR-xxx, NFR-xxx, AC-xxx).
+Traceability coverage will be limited.
+
+Recommendation: Update the PRD to include structured requirement IDs,
+then re-run /sdlc:prd-split.
+
+Proceeding with unstructured analysis...
+```
+
+If requirements found, display confirmation:
+```
+Extracted {N} requirements from PRD {prd_id}:
+  - {count_FR} Functional Requirements (FR-xxx)
+  - {count_NFR} Non-Functional Requirements (NFR-xxx)
+  - {count_AC} Acceptance Criteria (AC-xxx)
+```
+
+**Store Output As:** `requirement_list`
+
+Proceed to Step 1.5c.
+
+---
+
+### Step 1.5c: Extract Design Decisions
+
+Parse the design document and extract all key design decisions into a structured `design_decisions` list. This list is used downstream by the Plan agent (Step 3), the traceability matrix (Step 3.5), and the coverage checker (Step 3.6).
+
+**1.5c.1: Scan Design Document for Decisions**
+
+Scan the `design_content` for design decisions. Look for:
+- Explicitly numbered decisions (e.g., `DD-1`, `DD-2`, or `Decision 1:`)
+- Key decisions in the "Decision" or "Approach" sections
+- Architecture choices with clear rationale
+
+For each decision, extract:
+- **ID**: Assign `DD-{N}` identifiers (sequentially numbered)
+- **Description**: A concise summary of the decision
+- **Rationale**: The reasoning behind the decision (if stated)
+
+**1.5c.2: Build design_decisions**
+
+```
+design_decisions = [
+    { "id": "DD-1", "description": "...", "rationale": "..." },
+    { "id": "DD-2", "description": "...", "rationale": "..." },
+    ...
+]
+```
+
+**1.5c.3: Validate Extraction**
+
+If `design_decisions` is empty:
+
+```
+⚠️ WARNING: No design decisions could be extracted from the design document.
+The design document may lack explicit decision sections.
+Design traceability will be limited.
+
+Proceeding with requirement traceability only...
+```
+
+If decisions found, display confirmation:
+```
+Extracted {N} design decisions from design document for PRD {prd_id}.
+```
+
+**Store Output As:** `design_decisions`
+
 Proceed to Step 2.
 
 ---
@@ -295,6 +401,31 @@ Use the design document to:
 - Ensure the task breakdown covers ALL design decisions (100% coverage required)
 - Include a "Design Compliance" mapping for each task showing which design decisions it implements
 
+## PRD Requirements (Extracted)
+{requirement_list}
+
+This is the structured list of all PRD requirements (FR-xxx, NFR-xxx, AC-xxx) extracted in Step 1.5b.
+Every task MUST trace back to at least one requirement from this list via its `traces_to` field.
+
+## Design Decisions (Extracted)
+{design_decisions}
+
+This is the structured list of all design decisions (DD-N) extracted in Step 1.5c.
+Every task MUST declare which design decisions it implements via its `design_compliance` field.
+
+## Traceability Mapping Instructions
+
+When designing the task breakdown, ensure full traceability:
+
+1. **Requirement-to-Task Mapping:** For each task, identify which PRD requirements (FR-xxx, NFR-xxx, AC-xxx) it addresses. Record these in the task's `traces_to` field.
+2. **Design Decision-to-Task Mapping:** For each task, identify which design decisions (DD-N) it implements. Record these in the task's `design_compliance` field.
+3. **Coverage Validation:** After designing all tasks, verify:
+   - Every requirement in `requirement_list` is referenced by at least one task's `traces_to`
+   - Every decision in `design_decisions` is referenced by at least one task's `design_compliance`
+4. **Gap Resolution:** If any requirement or design decision is not covered:
+   - Add a task to cover it, OR
+   - Flag it explicitly in the output as an uncovered item
+
 ## Task Design Guidelines
 
 ### Granularity: {granularity}
@@ -341,6 +472,8 @@ Components involved: [list]
 - **Dependencies:** [list of task IDs or "None"]
 - **Goal:** [Single sentence describing what this accomplishes]
 - **Key Requirements:** [From PRD acceptance criteria]
+- **Traces To:** [List of PRD requirement IDs this task addresses, e.g., FR-001, AC-002, NFR-001]
+- **Design Compliance:** [List of design decision IDs this task implements, e.g., DD-1, DD-3]
 - **Files to Modify:** [Specific paths from investigation]
 - **Existing Code to Leverage:** [From investigation report]
 
@@ -356,68 +489,197 @@ Components involved: [list]
 1. [task_id]: [reason it's first]
 2. [task_id]: [dependency on previous]
 ...
+
+### Requirement Coverage Summary
+| Requirement ID | Type | Covered By Task(s) | Status |
+|----------------|------|---------------------|--------|
+| FR-001         | Functional | {task_id_1}, {task_id_2} | Covered |
+| NFR-001        | Non-Functional | {task_id_3} | Covered |
+| AC-001         | Acceptance Criteria | {task_id_1} | Covered |
+| FR-003         | Functional | — | UNCOVERED |
+
+### Design Decision Coverage Summary
+| Decision ID | Description | Implemented By Task(s) | Status |
+|-------------|-------------|------------------------|--------|
+| DD-1        | [description] | {task_id_1} | Covered |
+| DD-2        | [description] | — | UNCOVERED |
+
+### Uncovered Items (if any)
+List any requirements or design decisions not covered by the task breakdown.
+If all items are covered, state: "Full coverage achieved — all requirements and design decisions are traced to tasks."
 ```
 
 **Store Output As:** `task_breakdown`
 
 ---
 
-### Step 3.5: Design Decision Traceability Matrix
+### Step 3.5: Unified Traceability Matrix
 
-Before presenting tasks for approval, generate and verify a traceability matrix.
+Before presenting tasks for approval, merge PRD requirements and design decisions into a single traceability view. This ensures every requirement and design decision is accounted for in the task breakdown.
 
-**3.5.1: Extract Design Decisions**
-From the design document, extract each key decision from the Decision and Approach sections.
+**3.5.1: Build Matrix**
 
-**3.5.2: Map Decisions to Tasks**
-For each design decision, identify which task(s) implement it:
+Cross-reference `requirement_list` (from Step 1.5b) and `design_decisions` (from Step 1.5c) against all tasks' `traces_to` and `design_compliance` fields:
 
 ```
-## Design Decision Traceability Matrix
+## Traceability Matrix
 
-| Design Decision | Implementing Task(s) | Coverage |
-|----------------|----------------------|----------|
-| {decision_1}   | {task_id_1}, {task_id_2} | Covered |
-| {decision_2}   | {task_id_3}              | Covered |
-| {decision_3}   | —                        | GAP     |
+### PRD Requirements Coverage
+| Requirement | Type | Description | Implementing Task(s) | Coverage |
+|-------------|------|-------------|---------------------|----------|
+| FR-001      | Functional | {desc} | {task_id_1}, {task_id_2} | Covered |
+| FR-002      | Functional | {desc} | {task_id_3} | Covered |
+| NFR-001     | Non-Functional | {desc} | — | GAP |
+| AC-001      | Acceptance Criteria | {desc} | {task_id_1} | Covered |
+
+### Design Decision Coverage
+| Decision | Description | Implementing Task(s) | Coverage |
+|----------|-------------|---------------------|----------|
+| DD-1     | {desc} | {task_id_2} | Covered |
+| DD-2     | {desc} | {task_id_1}, {task_id_3} | Covered |
+| DD-3     | {desc} | — | GAP |
 ```
 
-**3.5.3: Verify 100% Coverage**
-Every design decision must have at least one implementing task.
+**3.5.2: Identify Cross-Cutting Concerns**
+
+Scan the traceability matrix for cross-cutting patterns:
+- **Requirements appearing in 3+ tasks** are cross-cutting concerns (e.g., a security NFR implemented across many tasks)
+- **NFRs that apply globally** (performance, security, accessibility) are flagged even if they appear in fewer tasks
+
+Display as a separate table:
+
+```
+### Cross-Cutting Concerns
+| Item | Type | Appears In | Nature |
+|------|------|-----------|--------|
+| NFR-001 | Non-Functional | T00001, T00003, T00005, T00007 | Security — applies across all API tasks |
+| FR-003  | Functional | T00002, T00004, T00006 | Logging — spans multiple components |
+```
+
+If no cross-cutting concerns found:
+```
+No cross-cutting concerns identified — all requirements are isolated to 1-2 tasks.
+```
+
+**3.5.3: Verify Coverage**
+
+Every requirement in `requirement_list` and every decision in `design_decisions` must have at least one implementing task.
 
 If gaps found:
 ```
 AskUserQuestion({
   questions: [{
-    question: "Design traceability found {N} uncovered decisions. How to proceed?",
-    header: "Traceability",
+    question: "Traceability matrix found {N} uncovered items ({R} requirements, {D} design decisions). How to proceed?",
+    header: "Traceability Gaps",
     options: [
-      { label: "Add tasks", description: "Go back and add tasks to cover the gaps" },
-      { label: "Acknowledge gaps", description: "Gaps are intentional — proceed with current breakdown" },
-      { label: "Cancel", description: "Abort and rethink the breakdown" }
+      { label: "Add tasks", description: "Return to Step 3 to design additional tasks covering the gaps" },
+      { label: "Acknowledge gaps", description: "Gaps are intentional — proceed with documented gaps" },
+      { label: "Cancel", description: "Abort splitting and rethink the breakdown" }
     ],
     multiSelect: false
   }]
 })
 ```
 
+If "Add tasks" selected: Return to Step 3 (Plan Agent) with gap information to design additional tasks.
+If "Acknowledge gaps": Record the acknowledged gaps and proceed.
+If "Cancel": Abort the splitting process.
+
 If 100% covered:
 ```
-Design Traceability: All {N} design decisions are covered by the task breakdown.
+Traceability: All {N} requirements and {M} design decisions are covered by the task breakdown.
 ```
 
-Present the matrix to the user as part of the task breakdown in Step 4.
+**Store Output As:** `traceability_matrix`
+
+---
+
+### Step 3.6: Coverage Report
+
+Generate a human-readable coverage summary from the traceability matrix built in Step 3.5.
+
+**3.6.1: Calculate Coverage Metrics**
+
+From the traceability matrix, compute:
+- `req_covered`: Count of requirements with at least one implementing task
+- `req_total`: Total count of items in `requirement_list`
+- `req_percentage`: `(req_covered / req_total) * 100`
+- `dd_covered`: Count of design decisions with at least one implementing task
+- `dd_total`: Total count of items in `design_decisions`
+- `dd_percentage`: `(dd_covered / dd_total) * 100`
+- `cross_cutting_count`: Number of cross-cutting concerns identified in Step 3.5.2
+
+**3.6.2: Generate Summary**
+
+```
+## Coverage Summary
+
+- Requirements: {req_covered}/{req_total} covered ({req_percentage}%)
+- Design Decisions: {dd_covered}/{dd_total} covered ({dd_percentage}%)
+- Cross-Cutting Concerns: {cross_cutting_count} identified
+```
+
+**3.6.3: List Uncovered Items (if any)**
+
+If there are uncovered items, list them explicitly:
+
+```
+### Uncovered Items
+| ID | Type | Description |
+|----|------|-------------|
+| NFR-001 | Non-Functional Requirement | {description} |
+| DD-3    | Design Decision | {description} |
+```
+
+**3.6.4: Present Coverage Result**
+
+If 100% covered:
+```
+All {req_total} requirements and {dd_total} design decisions are covered by the task breakdown.
+No action needed — proceeding to user approval.
+```
+
+If gaps exist, present via AskUserQuestion before proceeding to Step 4:
+```
+AskUserQuestion({
+  questions: [{
+    question: "Coverage is incomplete: {req_percentage}% requirements, {dd_percentage}% design decisions. Review the uncovered items above. How to proceed?",
+    header: "Coverage Report",
+    options: [
+      { label: "Add tasks", description: "Return to Step 3 to add tasks for uncovered items" },
+      { label: "Acknowledge gaps", description: "Proceed with incomplete coverage — gaps are documented" },
+      { label: "Cancel", description: "Abort splitting" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If "Add tasks" selected: Return to Step 3 (Plan Agent) with uncovered items to design additional tasks.
+If "Acknowledge gaps": Record the acknowledged gaps and proceed to Step 4.
+If "Cancel": Abort the splitting process.
+
+**Store Output As:** `coverage_summary`
 
 ---
 
 ### Step 4: User Approval
 
-Present the task breakdown to the user for review:
+Present the task breakdown and coverage summary to the user for review:
 
 ```
 ## Proposed Tasks for PRD: {prd_id}
 
 {task_breakdown}
+
+---
+
+## Coverage Summary
+
+- Requirements: {req_covered}/{req_total} covered ({req_percentage}%)
+- Design Decisions: {dd_covered}/{dd_total} covered ({dd_percentage}%)
+- Cross-Cutting Concerns: {cross_cutting_count} identified
+{if gaps: "⚠️ Uncovered items documented — see traceability matrix above."}
 
 ---
 
@@ -532,14 +794,26 @@ Fallback to: Default template structure
 
 {requirements mapped from PRD}
 
+### Traces To
+
+{For each req_id in task.traces_to from the Plan agent output:}
+- **{req_id}**: {look up full description from requirement_list extracted in Step 1.5b}
+
+If the task has no traces_to entries, flag it:
+> ⚠️ This task has no requirement traceability. Every task must trace to at least one PRD requirement.
+
 ### Design Compliance
 
 This task implements the following design decisions:
-- **[Decision from design doc]**: [Brief description]
+{For each dd_id in task.design_compliance from the Plan agent output:}
+- **{dd_id}**: {look up description from design_decisions extracted in Step 1.5c}
 
 **Implementation guidance from design doc:**
-- [Relevant approach/pattern from design's Approach section]
-- [Relevant file paths from design's Impact Analysis]
+- {Relevant approach/pattern from design's Approach section for the referenced decisions}
+- {Relevant file paths from design's Impact Analysis for the referenced decisions}
+
+If the task has no design_compliance entries, include:
+> No specific design decisions mapped to this task.
 
 ### Technical Notes
 
@@ -604,12 +878,22 @@ This task implements the following design decisions:
 - Do not over-engineer for hypothetical futures
 - {task-specific anti-patterns}
 
+## Acceptance Criteria
+
+{For each requirement in task.traces_to, derive testable acceptance criteria from the PRD requirement text:}
+- [ ] {testable criterion derived from the traced PRD requirement description}
+
+Each task MUST have at least one acceptance criterion. Criteria must be:
+- Derived from the traced PRD requirements (not invented)
+- Specific and testable (can be verified as pass/fail)
+- Actionable (describes observable behavior or output)
+
+If no traces_to entries exist, flag:
+> ⚠️ Cannot derive acceptance criteria without requirement traceability. Add traces_to entries first.
+
 ## Success Criteria
 
-{derived from PRD acceptance criteria - checkboxes}
-
-- [ ] {criterion 1}
-- [ ] {criterion 2}
+See Acceptance Criteria above — derived from traced PRD requirements.
 
 ### Quality Gates (Required Before Completion)
 
@@ -637,26 +921,39 @@ This task implements the following design decisions:
 
 ### Step 5.5: Quality Gate — Task Completeness Verification
 
-Before persisting tasks, verify the breakdown covers the PRD completely:
+Before persisting tasks, verify the breakdown covers the PRD completely and traceability is intact:
 
 **5.5.1: Requirements Coverage Check**
 Cross-reference the PRD's Functional Requirements against the proposed tasks:
 - List each FR and the task(s) that address it
 - Flag any FRs with no corresponding task
 
-**5.5.2: Testing Coverage Check**
+**5.5.2: Traceability Completeness Check**
+For each generated task, verify:
+- The `### Traces To` section contains at least 1 requirement ID from `requirement_list`
+- The `### Acceptance Criteria` section contains at least 1 testable criterion
+- Cross-reference against the coverage report from Step 3.6 to ensure no regressions
+
+If a task fails traceability checks:
+```
+⚠️ Traceability gap in {task_id}:
+  - Traces To: {count} entries (minimum: 1) {PASS/FAIL}
+  - Acceptance Criteria: {count} entries (minimum: 1) {PASS/FAIL}
+```
+
+**5.5.3: Testing Coverage Check**
 Verify at least one task includes:
 - Unit test scope for new functionality
 - Integration test scope if multiple components are involved
 
-**5.5.3: Integration Check**
+**5.5.4: Integration Check**
 If the PRD affects 2+ components, verify:
 - At least one task covers wiring/integration between components
 - Dependencies between components are reflected in task dependencies
 
-**5.5.4: Present Results**
+**5.5.5: Present Results**
 
-If gaps found:
+If gaps found (including traceability gaps):
 ```
 AskUserQuestion({
   questions: [{
@@ -664,6 +961,7 @@ AskUserQuestion({
     header: "Quality gate",
     options: [
       { label: "Add tasks", description: "Go back and add missing tasks to cover the gaps" },
+      { label: "Fix traceability", description: "Go back to Step 5 to add missing traces_to or acceptance criteria" },
       { label: "Acknowledged", description: "Gaps are intentional — proceed with current breakdown" },
       { label: "Cancel", description: "Abort and rethink the breakdown" }
     ],
@@ -673,9 +971,9 @@ AskUserQuestion({
 ```
 
 If no gaps found, display:
-> Quality gate passed. All requirements covered, tests included, integration tasks present.
+> Quality gate passed. All requirements covered, traceability complete, tests included, integration tasks present.
 
-**5.5.5: Log Quality Gate Corrections**
+**5.5.6: Log Quality Gate Corrections**
 
 If the quality gate found gaps that were addressed (tasks added/modified), log the corrections:
 
@@ -689,6 +987,7 @@ mcp__asdlc__log_correction(
 ```
 
 For example, if a missing FR was caught and a task was added, log it as `task-completeness`.
+If a traceability gap was found and fixed, log it as `traceability`.
 
 Proceed to Step 6: Persistence.
 
@@ -711,7 +1010,7 @@ Write tool:
 
 **6.2: Call split_prd() with task_ids**
 
-Once all files are written, persist to database:
+Once all files are written, persist to database. Include `traces_to` and `design_compliance` data from each task in the `data` dict so traceability information is stored alongside the task metadata:
 
 ```
 mcp__asdlc__split_prd(
@@ -722,7 +1021,11 @@ mcp__asdlc__split_prd(
             "title": "{title}",
             "priority": "{priority}",
             "component": "{component}",
-            "dependencies": ["{dep_id}", ...]
+            "dependencies": ["{dep_id}", ...],
+            "data": {
+                "traces_to": ["FR-001", "AC-002"],       # PRD requirement IDs this task addresses
+                "design_compliance": ["DD-1", "DD-3"]     # Design decision IDs this task implements
+            }
         },
         ...
     ]

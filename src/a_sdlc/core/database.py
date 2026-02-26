@@ -20,7 +20,7 @@ from typing import Any, Generator
 
 # Schema version for fresh start (hybrid storage with file_path design)
 # Version 2: Added shortname column to projects table
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 
 def get_data_dir() -> Path:
@@ -200,6 +200,27 @@ class Database:
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
             );
             CREATE INDEX idx_external_config_project ON external_config(project_id);
+
+            -- Worktrees table (DB-tracked worktree lifecycle per PRD)
+            CREATE TABLE worktrees (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                prd_id TEXT NOT NULL,
+                sprint_id TEXT,
+                branch_name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                pr_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                cleaned_at TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                FOREIGN KEY (prd_id) REFERENCES prds(id) ON DELETE CASCADE,
+                FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE SET NULL
+            );
+            CREATE INDEX idx_worktrees_project ON worktrees(project_id);
+            CREATE INDEX idx_worktrees_prd ON worktrees(prd_id);
+            CREATE INDEX idx_worktrees_sprint ON worktrees(sprint_id);
+            CREATE INDEX idx_worktrees_status ON worktrees(status);
         """)
 
     def _check_schema_version(self, conn: sqlite3.Connection) -> None:
@@ -226,6 +247,14 @@ class Database:
         if current_version == 4:
             self._migrate_v4_to_v5(conn)
             current_version = 5
+
+        if current_version == 5:
+            self._migrate_v5_to_v6(conn)
+            current_version = 6
+
+        if current_version == 6:
+            self._migrate_v6_to_v7(conn)
+            current_version = 7
 
         if current_version == SCHEMA_VERSION:
             return
@@ -316,6 +345,35 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_designs_project ON designs(project_id);
         """)
         conn.execute("UPDATE schema_version SET version = 5")
+
+    def _migrate_v5_to_v6(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 5 to version 6 (add worktrees table)."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS worktrees (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                prd_id TEXT NOT NULL,
+                sprint_id TEXT,
+                branch_name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                cleaned_at TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                FOREIGN KEY (prd_id) REFERENCES prds(id) ON DELETE CASCADE,
+                FOREIGN KEY (sprint_id) REFERENCES sprints(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_worktrees_project ON worktrees(project_id);
+            CREATE INDEX IF NOT EXISTS idx_worktrees_prd ON worktrees(prd_id);
+            CREATE INDEX IF NOT EXISTS idx_worktrees_sprint ON worktrees(sprint_id);
+            CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status);
+        """)
+        conn.execute("UPDATE schema_version SET version = 6")
+
+    def _migrate_v6_to_v7(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 6 to version 7 (add pr_url to worktrees)."""
+        conn.execute("ALTER TABLE worktrees ADD COLUMN pr_url TEXT")
+        conn.execute("UPDATE schema_version SET version = 7")
 
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -1236,6 +1294,170 @@ class Database:
         """
         with self.connection() as conn:
             cursor = conn.execute("DELETE FROM designs WHERE id = ?", (design_id,))
+            return cursor.rowcount > 0
+
+    # =========================================================================
+    # Worktree Operations
+    # =========================================================================
+
+    def get_next_worktree_id(self, project_id: str) -> str:
+        """Generate next worktree ID for a project.
+
+        Format: {shortname}-W{number:04d} (e.g., PCRA-W0001)
+        Uses project shortname for compact, Jira-style IDs.
+        """
+        project = self.get_project(project_id)
+        if not project:
+            raise ValueError(f"Project not found: {project_id}")
+
+        shortname = project["shortname"]
+
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM worktrees WHERE project_id = ?", (project_id,)
+            )
+            count = cursor.fetchone()[0]
+        return f"{shortname}-W{count + 1:04d}"
+
+    def create_worktree(
+        self,
+        worktree_id: str,
+        project_id: str,
+        prd_id: str,
+        branch_name: str,
+        path: str,
+        sprint_id: str | None = None,
+        status: str = "active",
+    ) -> dict[str, Any]:
+        """Create a new worktree record.
+
+        Args:
+            worktree_id: Unique worktree identifier.
+            project_id: Parent project ID.
+            prd_id: Associated PRD ID.
+            branch_name: Git branch name for the worktree.
+            path: Filesystem path to the worktree directory.
+            sprint_id: Optional sprint ID.
+            status: Worktree status (active, completed, abandoned). Default: active.
+
+        Returns:
+            Created worktree dict.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connection() as conn:
+            conn.execute(
+                """INSERT INTO worktrees
+                   (id, project_id, prd_id, sprint_id, branch_name, path, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (worktree_id, project_id, prd_id, sprint_id, branch_name, path, status, now),
+            )
+        return self.get_worktree(worktree_id)
+
+    def get_worktree(self, worktree_id: str) -> dict[str, Any] | None:
+        """Get worktree by ID.
+
+        Args:
+            worktree_id: Worktree identifier.
+
+        Returns:
+            Worktree dict if found, None otherwise.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM worktrees WHERE id = ?", (worktree_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_worktree_by_prd(self, prd_id: str) -> dict[str, Any] | None:
+        """Get the active worktree for a PRD.
+
+        Args:
+            prd_id: PRD identifier.
+
+        Returns:
+            Active worktree dict if found, None otherwise.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM worktrees WHERE prd_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+                (prd_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def list_worktrees(
+        self,
+        project_id: str,
+        status: str | None = None,
+        sprint_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List worktrees for a project with optional filters.
+
+        Args:
+            project_id: Project identifier.
+            status: Filter by status (active, completed, abandoned).
+            sprint_id: Filter by sprint ID.
+
+        Returns:
+            List of worktree dicts ordered by most recently created.
+        """
+        query = "SELECT * FROM worktrees WHERE project_id = ?"
+        params: list[Any] = [project_id]
+
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+
+        if sprint_id:
+            query += " AND sprint_id = ?"
+            params.append(sprint_id)
+
+        query += " ORDER BY created_at DESC"
+
+        with self.connection() as conn:
+            cursor = conn.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_worktree(self, worktree_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        """Update worktree fields.
+
+        Args:
+            worktree_id: Worktree identifier.
+            **kwargs: Fields to update (status, cleaned_at, etc.).
+
+        Returns:
+            Updated worktree dict or None if not found.
+        """
+        if not kwargs:
+            return self.get_worktree(worktree_id)
+
+        # Handle status transitions with timestamps
+        new_status = kwargs.get("status")
+        if new_status and new_status in ("completed", "abandoned"):
+            now = datetime.now(timezone.utc).isoformat()
+            kwargs.setdefault("cleaned_at", now)
+
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
+        values = list(kwargs.values()) + [worktree_id]
+
+        with self.connection() as conn:
+            conn.execute(f"UPDATE worktrees SET {fields} WHERE id = ?", values)
+        return self.get_worktree(worktree_id)
+
+    def delete_worktree(self, worktree_id: str) -> bool:
+        """Delete a worktree record.
+
+        Args:
+            worktree_id: Worktree identifier.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM worktrees WHERE id = ?", (worktree_id,)
+            )
             return cursor.rowcount > 0
 
     # =========================================================================

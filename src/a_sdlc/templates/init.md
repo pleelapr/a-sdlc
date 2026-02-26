@@ -139,7 +139,15 @@ mkdir -p .sdlc/artifacts
 mkdir -p .sdlc/.cache
 ```
 
-#### 3e. Report Upgrade Results
+#### 3e. Check `.sdlc/config.yaml`
+
+If `.sdlc/config.yaml` does not exist, create it with the default `testing` and `review` sections (see Step 6 below for the full template).
+
+If `.sdlc/config.yaml` exists, read it and check whether `testing` and `review` top-level keys are present:
+- If both sections exist: No changes needed
+- If sections are missing: Append the missing sections to the existing file (preserve existing content)
+
+#### 3f. Report Upgrade Results
 
 Report what was created or updated to the user:
 
@@ -151,13 +159,14 @@ Report what was created or updated to the user:
 
   Checked/Updated:
   - CLAUDE.md: {created a-sdlc block | already current | appended a-sdlc block}
+  - .sdlc/config.yaml: {created | added testing/review sections | already current}
   - .sdlc/lesson-learn.md: {created | already exists}
   - ~/.a-sdlc/lesson-learn.md: {created | already exists}
   - .sdlc/artifacts/: {created | already exists}
   - .sdlc/.cache/: {created | already exists}
 ```
 
-Then skip to the **Output** section (do not repeat Steps 4-5 for existing projects).
+Then skip to the **Output** section (do not repeat Steps 4-6 for existing projects).
 
 ---
 
@@ -202,6 +211,59 @@ Then update `.gitignore` (create if it doesn't exist):
 # a-sdlc artifacts (regenerated via /sdlc:scan)
 .sdlc/artifacts/
 ```
+
+### Step 6: Generate config.yaml
+
+Create `.sdlc/config.yaml` with default testing and review configuration (if it doesn't already exist):
+
+```yaml
+testing:
+  defaults:
+    # Required test types for all tasks (unless overridden or deemed irrelevant)
+    required:
+    - unit
+    - integration
+    # Available test types: unit, integration, e2e, performance, security, accessibility
+  commands:
+    # Commands to run for each test type (project-specific)
+    unit: ""
+    integration: ""
+    e2e: ""
+  coverage:
+    # Minimum coverage threshold (percentage) — 0 to disable
+    min_threshold: 0
+  relevance:
+    # Smart relevance detection — skip test types that don't apply to a change
+    # When enabled, the reviewer assesses which test types are relevant based on change scope
+    enabled: true
+
+review:
+  self_review:
+    # Whether implementing agent must self-review before subagent review
+    enabled: true
+  subagent_review:
+    # Whether a fresh subagent performs independent review after self-review
+    enabled: true
+  # Maximum self-heal iterations before escalating to user
+  max_rounds: 3
+  # Require actual test command output before marking task complete
+  evidence_required: true
+```
+
+**Customization prompt**: After writing the default config, ask the user:
+
+> "Default testing and review configuration has been created in `.sdlc/config.yaml`.
+>
+> Would you like to customize your test commands now?
+> - **unit**: Command to run unit tests (e.g., `pytest tests/`, `npm test`)
+> - **integration**: Command to run integration tests (leave empty if not applicable)
+> - **e2e**: Command to run end-to-end tests (leave empty if not applicable)"
+
+If the user provides test commands, update the `testing.commands` section accordingly.
+
+**If `.sdlc/config.yaml` already exists**, read it and check whether `testing` and `review` sections are present:
+- If both sections exist: No changes needed
+- If sections are missing: Append the missing sections to the existing file (preserve existing content like `sonarqube` configuration)
 
 ## MCP Tools Available
 
@@ -256,6 +318,7 @@ After successful initialization, display:
 
   Files generated:
   - CLAUDE.md (project rules + lesson-learn references)
+  - .sdlc/config.yaml (testing and review configuration)
   - .sdlc/lesson-learn.md (project lessons)
   - ~/.a-sdlc/lesson-learn.md (global lessons)
 

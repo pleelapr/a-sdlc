@@ -5,3 +5,35 @@ sonarqube:
   - MAJOR
   project_key: claude-code
   sources: .
+
+testing:
+  defaults:
+    # Required test types for all tasks (unless overridden or deemed irrelevant)
+    required:
+    - unit
+    - integration
+    # Available test types: unit, integration, e2e, performance, security, accessibility
+  commands:
+    # Commands to run for each test type (project-specific)
+    unit: uv run pytest tests/ -v
+    integration: ""
+    e2e: ""
+  coverage:
+    # Minimum coverage threshold (percentage) — 0 to disable
+    min_threshold: 0
+  relevance:
+    # Smart relevance detection — skip test types that don't apply to a change
+    # When enabled, the reviewer assesses which test types are relevant based on change scope
+    enabled: true
+
+review:
+  self_review:
+    # Whether implementing agent must self-review before subagent review
+    enabled: true
+  subagent_review:
+    # Whether a fresh subagent performs independent review after self-review
+    enabled: true
+  # Maximum self-heal iterations before escalating to user
+  max_rounds: 3
+  # Require actual test command output before marking task complete
+  evidence_required: true

@@ -278,6 +278,17 @@ class ContentManager:
 
             deps_str = ", ".join(dependencies) if dependencies else "None"
 
+            # Build optional traceability sections
+            traces_section = ""
+            if data and data.get("traces_to"):
+                traces_items = "\n".join(f"- **{t}**" for t in data["traces_to"])
+                traces_section = f"\n\n### Traces To\n\n{traces_items}"
+
+            design_section = ""
+            if data and data.get("design_compliance"):
+                design_items = "\n".join(f"- **{d}**" for d in data["design_compliance"])
+                design_section = f"\n\n### Design Compliance\n\n{design_items}"
+
             content = f"""# {task_id}: {title}
 
 **Status:** {status}
@@ -289,7 +300,7 @@ class ContentManager:
 ## Description
 
 {description or '_No description_'}
-"""
+{traces_section}{design_section}"""
 
         return self.write_content(file_path, content)
 

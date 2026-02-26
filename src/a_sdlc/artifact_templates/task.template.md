@@ -7,6 +7,25 @@
 **Dependencies:** {{DEPENDENCIES}}
 {{#PRD_REF}}**PRD Reference:** {{PRD_REF}}{{/PRD_REF}}
 
+## Traces To
+
+{{#TRACES_TO}}
+- {{REQ_ID}}: {{REQ_TITLE}}
+{{/TRACES_TO}}
+{{^TRACES_TO}}
+> Link this task to specific PRD requirements (e.g., FR-001, NFR-002, AC-003) to maintain traceability.
+{{/TRACES_TO}}
+
+## Acceptance Criteria
+
+{{#TASK_ACCEPTANCE_CRITERIA}}
+- [ ] {{CRITERION}}
+{{/TASK_ACCEPTANCE_CRITERIA}}
+{{^TASK_ACCEPTANCE_CRITERIA}}
+> Define testable acceptance criteria derived from the linked PRD requirements above.
+> Each criterion should be specific, measurable, and verifiable.
+{{/TASK_ACCEPTANCE_CRITERIA}}
+
 ## Goal
 
 {{GOAL}}
