@@ -741,11 +741,11 @@ class TestWorktreeUpdate:
         updated = temp_db.update_worktree("wt-upd", status="active")
         assert updated["cleaned_at"] is None
 
-    def test_update_worktree_pr_created_does_not_set_cleaned_at(self, temp_db):
-        """Test that setting status to 'pr_created' does NOT set cleaned_at."""
+    def test_update_worktree_active_does_not_set_cleaned_at(self, temp_db):
+        """Test that keeping status as 'active' does NOT set cleaned_at."""
         self._create_worktree(temp_db)
-        updated = temp_db.update_worktree("wt-upd", status="pr_created")
-        assert updated["status"] == "pr_created"
+        updated = temp_db.update_worktree("wt-upd", status="active")
+        assert updated["status"] == "active"
         assert updated["cleaned_at"] is None
 
     def test_update_worktree_pr_url(self, temp_db):
@@ -753,10 +753,9 @@ class TestWorktreeUpdate:
         self._create_worktree(temp_db)
         updated = temp_db.update_worktree(
             "wt-upd",
-            status="pr_created",
             pr_url="https://github.com/org/repo/pull/42",
         )
-        assert updated["status"] == "pr_created"
+        assert updated["status"] == "active"
         assert updated["pr_url"] == "https://github.com/org/repo/pull/42"
 
     def test_update_worktree_pr_url_persists(self, temp_db):
@@ -764,7 +763,6 @@ class TestWorktreeUpdate:
         self._create_worktree(temp_db)
         temp_db.update_worktree(
             "wt-upd",
-            status="pr_created",
             pr_url="https://github.com/org/repo/pull/99",
         )
         wt = temp_db.get_worktree("wt-upd")

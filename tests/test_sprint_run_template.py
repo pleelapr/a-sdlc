@@ -702,7 +702,7 @@ class TestCreatePrdPrConfigGating:
     def test_create_prd_pr_updates_worktree_status(
         self, mock_getcwd, mock_get_db, mock_config, mock_run, tmp_path
     ):
-        """create_prd_pr updates worktree status to pr_created with pr_url."""
+        """create_prd_pr stores pr_url without changing worktree status."""
         from a_sdlc.core.git_config import GitSafetyConfig
         from a_sdlc.server import create_prd_pr
 
@@ -727,7 +727,7 @@ class TestCreatePrdPrConfigGating:
         assert result["status"] == "created"
         assert result["pr_url"] == "https://github.com/org/repo/pull/42"
         mock_db.update_worktree.assert_called_once_with(
-            "TEST-W0001", status="pr_created", pr_url="https://github.com/org/repo/pull/42"
+            "TEST-W0001", pr_url="https://github.com/org/repo/pull/42"
         )
 
 

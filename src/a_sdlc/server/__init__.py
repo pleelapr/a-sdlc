@@ -2092,8 +2092,8 @@ def create_prd_pr(
             "message": f"Failed to create PR: {e.stderr.strip()}",
         }
 
-    # Update worktree status and store PR URL in database
-    db.update_worktree(worktree_info["id"], status="pr_created", pr_url=pr_url)
+    # Store PR URL in database (keep status as "active" — status changes via complete_prd_worktree)
+    db.update_worktree(worktree_info["id"], pr_url=pr_url)
 
     return {
         "status": "created",

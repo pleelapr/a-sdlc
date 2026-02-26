@@ -1432,6 +1432,12 @@ class Database:
         if not kwargs:
             return self.get_worktree(worktree_id)
 
+        # Whitelist allowed field names to prevent SQL injection via kwargs keys
+        allowed_fields = {"status", "cleaned_at", "pr_url", "path", "branch_name", "sprint_id"}
+        invalid_keys = set(kwargs.keys()) - allowed_fields
+        if invalid_keys:
+            raise ValueError(f"Invalid worktree fields: {invalid_keys}. Allowed: {allowed_fields}")
+
         # Handle status transitions with timestamps
         new_status = kwargs.get("status")
         if new_status and new_status in ("completed", "abandoned"):

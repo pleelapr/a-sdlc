@@ -753,9 +753,9 @@ class TestCreatePrdPr:
         assert result["branch"] == "sprint/TEST-S0001/TEST-P0001"
         assert "Auth Feature" in result["title"]
 
-        # Verify DB was updated with pr_created status and pr_url
+        # Verify DB was updated with pr_url only (status stays active)
         mock_db.update_worktree.assert_called_once_with(
-            "TEST-W0001", status="pr_created", pr_url="https://github.com/org/repo/pull/42"
+            "TEST-W0001", pr_url="https://github.com/org/repo/pull/42"
         )
 
     @patch("a_sdlc.server.load_git_safety_config")

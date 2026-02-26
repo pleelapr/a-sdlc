@@ -277,26 +277,32 @@ Gather all relevant context into a single text block. The subagent receives ever
 task = mcp__asdlc__get_task(task_id="{task_id}")
 task_content = task["content"]  # Full markdown from file_path
 
-# 2. Parent PRD content (if linked)
+# 2. Parent PRD content (if linked) — filter to relevant sections only
 prd_section = ""
 if task["prd_id"]:
     prd = mcp__asdlc__get_prd(prd_id=task["prd_id"])
-    prd_section = prd["content"]
+    # Include: title, overview, tech stack, constraints
+    # Include: FR/NFR sections that task traces to (from ### Traces To)
+    # Exclude: unrelated components, appendices, revision history
+    prd_section = prd["content"]  # Filter for conciseness in large PRDs
 
-# 3. Design doc content (if exists)
+# 3. Design doc content (if exists) — filter to relevant decisions
 design_section = ""
 if task["prd_id"]:
     try:
         design = mcp__asdlc__get_design(prd_id=task["prd_id"])
-        design_section = design["content"]
+        # Include: architecture overview, API contracts, decisions for this task's component
+        # Exclude: unrelated component designs, deployment diagrams
+        design_section = design["content"]  # Filter for conciseness in large designs
     except:
         pass  # No design doc — skip
 
-# 4. Codebase artifacts (if scan completed)
+# 4. Codebase artifacts (if scan completed) — extract relevant sections only
 codebase_section = ""
 context = mcp__asdlc__get_context()
 if context["artifacts"]["scan_status"] in ("complete", "partial"):
     codebase_summary = Read(".sdlc/artifacts/codebase-summary.md")
+    # Extract: tech stack, naming conventions, patterns relevant to task component
     codebase_section = codebase_summary
 
 # 5. Review configuration

@@ -874,31 +874,47 @@ For EACH task:
 ### 1. Self-Review
 - Re-read the task's Acceptance Criteria from its context package above
 - Verify EACH acceptance criterion is satisfied by your implementation
-- Read .sdlc/config.yaml (if exists) — run ALL commands under `testing.commands`
+- Read .sdlc/config.yaml (if exists) — run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
 - If no config exists, run the project's default test command
 - Capture and include ACTUAL test output — no self-assertions without evidence
 - If any check fails, fix before proceeding
+- Build a findings list for any issues found
 
 ### 2. Subagent Review
 - Dispatch a fresh reviewer agent via the Task tool:
-  'You are an independent code reviewer. Review the implementation of task {task_id}.
+
+  'You are an independent code reviewer. Review the implementation of task {task_id} against its specification.
+
+  ## Review Materials
   Task spec: {task_spec_summary}
-  Code diff: {your_git_diff}
+  Code diff:
+  ```diff
+  {your_git_diff}
+  ```
   Self-review results: {test_output_and_ac_checklist}
-  Evaluate: spec compliance, code quality, test coverage.
+
+  ## Evaluate
+  - Spec compliance: Are all Acceptance Criteria and Traces To requirements addressed?
+  - Code quality: Does the code follow project patterns? Any duplication, security concerns?
+  - Test coverage: Do tests exist and pass for the new functionality?
+
+  ## Required Output
   REVIEW VERDICT: [APPROVE | REQUEST_CHANGES | ESCALATE_TO_USER]
-  FINDINGS: [list each finding]
+  FINDINGS: [list each finding with severity and detail]
   SUMMARY: [1-2 sentence assessment]'
+
 - Wait for the reviewer verdict
 
 ### 3. Self-Heal Loop
 - If REQUEST_CHANGES: fix cited issues, re-run tests, dispatch a NEW reviewer
 - Max rounds: `review.max_rounds` from .sdlc/config.yaml (default 3)
 - After max rounds: AskUserQuestion to escalate
+  Options: "Override & complete", "Continue fixing", "Block task"
 
 ### 4. Log & Complete
-- For EVERY finding, call: mcp__asdlc__log_correction(context_type='task', context_id=task_id, category='{category}', description='{finding}')
-- Only after APPROVE: call mcp__asdlc__update_task(task_id, status="completed")
+- For EVERY finding (yours or reviewer's), call:
+  mcp__asdlc__log_correction(context_type='task', context_id=task_id, category='{category}', description='{what_was_found_and_fixed}')
+- Only after reviewer APPROVE (or user override): call mcp__asdlc__update_task(task_id, status="completed")
 - If you encounter unresolvable questions, surface them via AskUserQuestion — do NOT guess
 
 When ALL tasks are done:
@@ -1252,26 +1268,7 @@ def dispatch_subagent(task: dict, context_package: str, fresh: bool = False) -> 
     return parse_subagent_result(result)
 
 
-def record_outcome(task: dict, result, outcomes: dict, reason: str = None):
-    """Record a concise outcome summary after subagent completion."""
-    if reason:
-        outcomes[task["id"]] = f"[{reason}]"
-    elif result.success:
-        outcomes[task["id"]] = extract_outcome_summary(result.output)
-    else:
-        outcomes[task["id"]] = f"[failed: {result.error_summary}]"
-
-
-def extract_outcome_summary(agent_output: str) -> str:
-    """Extract 1-2 sentence summary from subagent output.
-
-    Looks for: git commit messages, files changed, test results.
-    Falls back to last commit message if output is too verbose.
-    """
-    # Implementation: parse agent output for commit messages and test results
-    # Return concise summary like:
-    #   "Added OAuth config to src/auth/config.py. 3 tests passing."
-    pass
+# record_outcome() and extract_outcome_summary() — see Step 4.3 above for full definitions
 
 
 def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch):

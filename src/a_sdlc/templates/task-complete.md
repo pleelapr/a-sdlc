@@ -60,7 +60,7 @@ When this skill is invoked after subagent dispatch (from `/sdlc:task-start` or `
 
 1. Check if the task has recent commits by the implementation subagent (`git log --oneline -5`)
 2. Check if corrections were already logged for this task (`grep {task_id} .sdlc/corrections.log`)
-3. If evidence of prior review exists (commits, logged corrections, review verdicts in agent output), **skip directly to Step 6** (DoD Checklist / Summary) to avoid redundant review rounds
+3. If evidence of prior review exists (commits, logged corrections, review verdicts in agent output), **skip directly to Phase 4: Evidence-Based Completion** (the final confirmation and logging steps) to avoid redundant review rounds
 
 If no evidence of prior review is found, proceed with the full review cycle below.
 
