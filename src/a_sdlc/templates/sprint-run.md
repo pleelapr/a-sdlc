@@ -399,7 +399,9 @@ Task(
 4. When you discover and fix issues during implementation, log them:
    mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what was corrected and why}')
    Categories: testing, code-quality, task-completeness, integration, documentation, architecture, security, performance, process
-5. Commit your changes: git add <files> && git commit -m "[{task_id}] {task_title}"
+5. Read .sdlc/config.yaml — check `git.auto_commit`:
+   - If `true`: git add <files> && git commit -m "[{task_id}] {task_title}"
+   - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
 
 ## Review Gates (MANDATORY before completion)
 
@@ -852,7 +854,9 @@ For EACH task:
 1. Read the context package below
 2. Call mcp__asdlc__update_task(task_id, status="in_progress")
 3. Implement the task following the Implementation Steps in its context
-4. Commit changes: git add <files> && git commit -m "[{task_id}] {task_title}"
+4. Read .sdlc/config.yaml — check `git.auto_commit`:
+   - If `true`: git add <files> && git commit -m "[{task_id}] {task_title}"
+   - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
 5. Run review gates (see below)
 6. Only after reviewer APPROVE: call mcp__asdlc__update_task(task_id, status="completed")
 

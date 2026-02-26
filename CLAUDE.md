@@ -252,3 +252,18 @@ corrections.log → retrospective → lesson-learn.md → preflight checks
 
 ### Template Mistakes
 - **WRONG**: Hardcoding file paths in templates → **RIGHT**: Using MCP tool calls that abstract storage
+
+## a-sdlc Integration
+<!-- a-sdlc:managed -->
+
+This project uses a-sdlc for SDLC management.
+
+**Before starting work, read these files:**
+- `.sdlc/lesson-learn.md` — Project-specific lessons and rules
+- `~/.a-sdlc/lesson-learn.md` — Global cross-project lessons
+- `.sdlc/artifacts/` — Generated codebase documentation (if available)
+
+**During work:**
+- Log corrections to `.sdlc/corrections.log` when fixing mistakes
+- Update lesson-learn files when patterns emerge
+- Use `/sdlc:help` for available commands

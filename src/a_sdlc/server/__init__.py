@@ -1577,6 +1577,7 @@ remove_tasks_from_sprint = remove_prd_from_sprint
 
 @mcp.tool()
 def configure_git_safety(
+    auto_commit: bool | None = None,
     auto_pr: bool | None = None,
     auto_merge: bool | None = None,
     worktree_enabled: bool | None = None,
@@ -1591,6 +1592,7 @@ def configure_git_safety(
     explicit user confirmation regardless of these settings.
 
     Args:
+        auto_commit: Allow agent to commit changes automatically.
         auto_pr: Allow agent to create pull requests.
         auto_merge: Allow agent to merge branches.
         worktree_enabled: Use git worktree isolation for PRD execution.
@@ -1607,6 +1609,8 @@ def configure_git_safety(
 
     # Build settings dict from provided arguments only
     settings: dict[str, bool] = {}
+    if auto_commit is not None:
+        settings["auto_commit"] = auto_commit
     if auto_pr is not None:
         settings["auto_pr"] = auto_pr
     if auto_merge is not None:

@@ -44,3 +44,6 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# a-sdlc cache (always excluded)
+.sdlc/.cache/

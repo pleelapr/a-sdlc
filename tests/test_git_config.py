@@ -26,6 +26,7 @@ class TestGitSafetyConfig:
     def test_defaults_all_false(self):
         """Default config has all operations disabled."""
         config = GitSafetyConfig()
+        assert config.auto_commit is False
         assert config.auto_pr is False
         assert config.auto_merge is False
         assert config.worktree_enabled is False
@@ -35,6 +36,7 @@ class TestGitSafetyConfig:
         config = GitSafetyConfig(auto_pr=True, worktree_enabled=True)
         d = config.to_dict()
         assert d == {
+            "auto_commit": False,
             "auto_pr": True,
             "auto_merge": False,
             "worktree_enabled": True,
@@ -42,7 +44,8 @@ class TestGitSafetyConfig:
 
     def test_is_operation_allowed_enabled(self):
         """Allowed operations return True when enabled."""
-        config = GitSafetyConfig(auto_pr=True, auto_merge=True, worktree_enabled=True)
+        config = GitSafetyConfig(auto_commit=True, auto_pr=True, auto_merge=True, worktree_enabled=True)
+        assert config.is_operation_allowed("auto_commit") is True
         assert config.is_operation_allowed("auto_pr") is True
         assert config.is_operation_allowed("auto_merge") is True
         assert config.is_operation_allowed("worktree_enabled") is True
@@ -50,6 +53,7 @@ class TestGitSafetyConfig:
     def test_is_operation_allowed_disabled(self):
         """Disabled operations return False."""
         config = GitSafetyConfig()
+        assert config.is_operation_allowed("auto_commit") is False
         assert config.is_operation_allowed("auto_pr") is False
         assert config.is_operation_allowed("auto_merge") is False
         assert config.is_operation_allowed("worktree_enabled") is False
@@ -74,6 +78,7 @@ class TestGitSafetyConfig:
     def test_requires_confirmation_normal_ops(self):
         """Normal operations do not require confirmation."""
         config = GitSafetyConfig()
+        assert config.requires_confirmation("auto_commit") is False
         assert config.requires_confirmation("auto_pr") is False
         assert config.requires_confirmation("auto_merge") is False
         assert config.requires_confirmation("worktree_enabled") is False
@@ -151,6 +156,7 @@ class TestLoadGitSafetyConfig:
         """Without any config files, all operations are disabled."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_git_safety_config(Path(tmpdir))
+            assert config.auto_commit is False
             assert config.auto_pr is False
             assert config.auto_merge is False
             assert config.worktree_enabled is False
@@ -404,10 +410,12 @@ class TestGetEffectiveConfigSummary:
         with tempfile.TemporaryDirectory() as tmpdir:
             summary = get_effective_config_summary(Path(tmpdir))
 
+            assert summary["effective"]["auto_commit"] is False
             assert summary["effective"]["auto_pr"] is False
             assert summary["effective"]["auto_merge"] is False
             assert summary["effective"]["worktree_enabled"] is False
 
+            assert summary["sources"]["auto_commit"] == "default"
             assert summary["sources"]["auto_pr"] == "default"
             assert summary["sources"]["auto_merge"] == "default"
             assert summary["sources"]["worktree_enabled"] == "default"
@@ -462,6 +470,7 @@ class TestBackwardsCompatibility:
         """A project with no config.yaml has all git operations disabled."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_git_safety_config(Path(tmpdir))
+            assert config.auto_commit is False
             assert config.auto_pr is False
             assert config.auto_merge is False
             assert config.worktree_enabled is False
@@ -477,6 +486,86 @@ class TestBackwardsCompatibility:
             }))
 
             config = load_git_safety_config(project_dir)
+            assert config.auto_commit is False
             assert config.auto_pr is False
             assert config.auto_merge is False
             assert config.worktree_enabled is False
+
+    def test_existing_config_without_auto_commit(self):
+        """Config files from before auto_commit was added still work (defaults to False)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            sdlc_dir = project_dir / ".sdlc"
+            sdlc_dir.mkdir()
+            # Old config without auto_commit key
+            (sdlc_dir / "config.yaml").write_text(yaml.dump({
+                "git": {
+                    "auto_pr": True,
+                    "auto_merge": False,
+                    "worktree_enabled": True,
+                }
+            }))
+
+            config = load_git_safety_config(project_dir)
+            assert config.auto_commit is False  # defaults to False
+            assert config.auto_pr is True
+            assert config.worktree_enabled is True
+
+
+# =============================================================================
+# auto_commit specific tests
+# =============================================================================
+
+
+class TestAutoCommit:
+    """Test auto_commit field behavior across the configuration system."""
+
+    def test_auto_commit_enabled(self):
+        """auto_commit=True allows the operation."""
+        config = GitSafetyConfig(auto_commit=True)
+        assert config.auto_commit is True
+        assert config.is_operation_allowed("auto_commit") is True
+        assert config.to_dict()["auto_commit"] is True
+
+    def test_auto_commit_project_override(self):
+        """Project config can enable auto_commit."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            sdlc_dir = project_dir / ".sdlc"
+            sdlc_dir.mkdir()
+            (sdlc_dir / "config.yaml").write_text(yaml.dump({
+                "git": {"auto_commit": True}
+            }))
+
+            config = load_git_safety_config(project_dir)
+            assert config.auto_commit is True
+            assert config.auto_pr is False  # other defaults unchanged
+
+    def test_save_auto_commit(self):
+        """auto_commit can be saved and loaded."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            (project_dir / ".sdlc").mkdir()
+
+            save_git_safety_config(
+                {"auto_commit": True},
+                target="project",
+                project_dir=project_dir,
+            )
+
+            config = load_git_safety_config(project_dir)
+            assert config.auto_commit is True
+
+    def test_auto_commit_in_summary(self):
+        """auto_commit appears in effective config summary."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            sdlc_dir = project_dir / ".sdlc"
+            sdlc_dir.mkdir()
+            (sdlc_dir / "config.yaml").write_text(yaml.dump({
+                "git": {"auto_commit": True}
+            }))
+
+            summary = get_effective_config_summary(project_dir)
+            assert summary["effective"]["auto_commit"] is True
+            assert summary["sources"]["auto_commit"] == "project"

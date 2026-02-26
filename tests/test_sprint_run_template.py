@@ -596,6 +596,7 @@ class TestGitSafetyConfigOperations:
         config = GitSafetyConfig(auto_pr=True, auto_merge=False, worktree_enabled=True)
         d = config.to_dict()
         assert d == {
+            "auto_commit": False,
             "auto_pr": True,
             "auto_merge": False,
             "worktree_enabled": True,

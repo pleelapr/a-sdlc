@@ -141,10 +141,10 @@ mkdir -p .sdlc/.cache
 
 #### 3e. Check `.sdlc/config.yaml`
 
-If `.sdlc/config.yaml` does not exist, create it with the default `testing` and `review` sections (see Step 6 below for the full template).
+If `.sdlc/config.yaml` does not exist, create it with the default `testing`, `review`, and `git` sections (see Step 6 below for the full template).
 
-If `.sdlc/config.yaml` exists, read it and check whether `testing` and `review` top-level keys are present:
-- If both sections exist: No changes needed
+If `.sdlc/config.yaml` exists, read it and check whether `testing`, `review`, and `git` top-level keys are present:
+- If all sections exist: No changes needed
 - If sections are missing: Append the missing sections to the existing file (preserve existing content)
 
 #### 3f. Report Upgrade Results
@@ -159,7 +159,7 @@ Report what was created or updated to the user:
 
   Checked/Updated:
   - CLAUDE.md: {created a-sdlc block | already current | appended a-sdlc block}
-  - .sdlc/config.yaml: {created | added testing/review sections | already current}
+  - .sdlc/config.yaml: {created | added testing/review/git sections | already current}
   - .sdlc/lesson-learn.md: {created | already exists}
   - ~/.a-sdlc/lesson-learn.md: {created | already exists}
   - .sdlc/artifacts/: {created | already exists}
@@ -214,7 +214,7 @@ Then update `.gitignore` (create if it doesn't exist):
 
 ### Step 6: Generate config.yaml
 
-Create `.sdlc/config.yaml` with default testing and review configuration (if it doesn't already exist):
+Create `.sdlc/config.yaml` with default testing, review, and git configuration (if it doesn't already exist):
 
 ```yaml
 testing:
@@ -248,6 +248,16 @@ review:
   max_rounds: 3
   # Require actual test command output before marking task complete
   evidence_required: true
+
+git:
+  # Allow agent to commit changes automatically (default: false — agent stages only)
+  auto_commit: false
+  # Allow agent to create pull requests
+  auto_pr: false
+  # Allow agent to merge branches
+  auto_merge: false
+  # Use git worktree isolation for PRD execution
+  worktree_enabled: false
 ```
 
 **Customization prompt**: After writing the default config, ask the user:
@@ -261,8 +271,8 @@ review:
 
 If the user provides test commands, update the `testing.commands` section accordingly.
 
-**If `.sdlc/config.yaml` already exists**, read it and check whether `testing` and `review` sections are present:
-- If both sections exist: No changes needed
+**If `.sdlc/config.yaml` already exists**, read it and check whether `testing`, `review`, and `git` sections are present:
+- If all sections exist: No changes needed
 - If sections are missing: Append the missing sections to the existing file (preserve existing content like `sonarqube` configuration)
 
 ## MCP Tools Available
@@ -318,7 +328,7 @@ After successful initialization, display:
 
   Files generated:
   - CLAUDE.md (project rules + lesson-learn references)
-  - .sdlc/config.yaml (testing and review configuration)
+  - .sdlc/config.yaml (testing, review, and git configuration)
   - .sdlc/lesson-learn.md (project lessons)
   - ~/.a-sdlc/lesson-learn.md (global lessons)
 

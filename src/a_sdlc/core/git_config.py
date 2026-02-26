@@ -6,6 +6,7 @@ Global config (~/.config/a-sdlc/config.yaml) defines defaults (all off).
 Project config (.sdlc/config.yaml) can override to enable specific operations.
 
 Configuration keys under the 'git' section:
+    auto_commit: bool      - Allow agent to commit changes (default: False)
     auto_pr: bool          - Allow agent to create PRs (default: False)
     auto_merge: bool       - Allow agent to merge branches (default: False)
     worktree_enabled: bool - Use worktree isolation for PRD execution (default: False)
@@ -28,6 +29,7 @@ PROJECT_CONFIG_FILE = "config.yaml"
 
 # Default git safety settings — all dangerous operations OFF
 _GIT_DEFAULTS: dict[str, bool] = {
+    "auto_commit": False,
     "auto_pr": False,
     "auto_merge": False,
     "worktree_enabled": False,
@@ -67,6 +69,7 @@ class GitSafetyConfig:
     explicit configuration have all dangerous operations disabled.
     """
 
+    auto_commit: bool = False
     auto_pr: bool = False
     auto_merge: bool = False
     worktree_enabled: bool = False
@@ -78,8 +81,9 @@ class GitSafetyConfig:
         False here — they require separate runtime user confirmation.
 
         Args:
-            operation: Operation name. One of 'auto_pr', 'auto_merge',
-                      'worktree_enabled', 'force_push', 'branch_delete'.
+            operation: Operation name. One of 'auto_commit', 'auto_pr',
+                      'auto_merge', 'worktree_enabled', 'force_push',
+                      'branch_delete'.
 
         Returns:
             True if the operation is allowed by configuration.
@@ -95,6 +99,7 @@ class GitSafetyConfig:
             Dictionary of configuration values.
         """
         return {
+            "auto_commit": self.auto_commit,
             "auto_pr": self.auto_pr,
             "auto_merge": self.auto_merge,
             "worktree_enabled": self.worktree_enabled,
@@ -178,6 +183,7 @@ def load_git_safety_config(project_dir: Path | None = None) -> GitSafetyConfig:
 
     # Only keep recognized keys, ensure boolean types
     return GitSafetyConfig(
+        auto_commit=bool(merged.get("auto_commit", False)),
         auto_pr=bool(merged.get("auto_pr", False)),
         auto_merge=bool(merged.get("auto_merge", False)),
         worktree_enabled=bool(merged.get("worktree_enabled", False)),
@@ -196,8 +202,8 @@ def save_git_safety_config(
 
     Args:
         settings: Dictionary of git safety settings to save.
-                 Only recognized keys (auto_pr, auto_merge, worktree_enabled)
-                 are persisted.
+                 Only recognized keys (auto_commit, auto_pr, auto_merge,
+                 worktree_enabled) are persisted.
         target: Where to save — "global" or "project".
         project_dir: Project directory (for project target). Defaults to cwd.
 
@@ -207,7 +213,7 @@ def save_git_safety_config(
     Raises:
         ValueError: If settings contains unrecognized keys.
     """
-    recognized_keys = {"auto_pr", "auto_merge", "worktree_enabled"}
+    recognized_keys = {"auto_commit", "auto_pr", "auto_merge", "worktree_enabled"}
     unknown_keys = set(settings.keys()) - recognized_keys
     if unknown_keys:
         raise ValueError(
@@ -271,7 +277,7 @@ def get_effective_config_summary(project_dir: Path | None = None) -> dict[str, A
         "always_require_confirmation": sorted(ALWAYS_CONFIRM_OPERATIONS),
     }
 
-    for key in ("auto_pr", "auto_merge", "worktree_enabled"):
+    for key in ("auto_commit", "auto_pr", "auto_merge", "worktree_enabled"):
         if key in project_git:
             summary["sources"][key] = "project"
         elif key in global_git:
