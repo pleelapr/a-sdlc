@@ -422,6 +422,7 @@ After all PRDs are processed, display:
 🔗 Next steps:
 - Review PRDs: /sdlc:prd-list
 - Refine a PRD: /sdlc:prd-update "{prd-id}"
+- Design architecture: /sdlc:prd-architect "{prd-id}"  ← recommended before splitting
 - Split into tasks: /sdlc:prd-split "{prd-id}"
 - Investigate feasibility: /sdlc:prd-investigate "{prd-id}"
 ```
@@ -432,7 +433,8 @@ After all PRDs are processed, display:
 
 The user must explicitly run one of these commands to continue:
 - `/sdlc:prd-update` — To refine a PRD
-- `/sdlc:prd-split` — To create tasks from a PRD
+- `/sdlc:prd-architect` — To design architecture before splitting (recommended next step)
+- `/sdlc:prd-split` — To create tasks from a PRD (run architect first)
 - `/sdlc:prd-investigate` — To validate a PRD against the codebase
 
 **Wait for user's next instruction.**

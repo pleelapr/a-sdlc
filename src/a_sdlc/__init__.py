@@ -5,5 +5,5 @@ PRD, task, sprint, and sync management via MCP,
 with skill templates and external system integration.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 __all__ = ["__version__"]

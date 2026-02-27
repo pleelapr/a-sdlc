@@ -470,6 +470,7 @@ Returns:
 🔗 Next steps for user:
 - View PRD: /sdlc:prd-list
 - Mark ready: /sdlc:prd-update "feature-auth" --status ready
+- Design architecture: /sdlc:prd-architect "feature-auth"  ← recommended before splitting
 - Split into tasks: /sdlc:prd-split "feature-auth"
 ```
 
@@ -479,7 +480,8 @@ Returns:
 
 The user must explicitly run one of these commands to continue:
 - `/sdlc:prd-update` - To edit the PRD
-- `/sdlc:prd-split` - To create tasks from the PRD
+- `/sdlc:prd-architect` - To design architecture before splitting (recommended next step)
+- `/sdlc:prd-split` - To create tasks from the PRD (run architect first)
 - `/sdlc:investigate` - To analyze codebase before splitting
 
 **Wait for user's next instruction.**
@@ -599,6 +601,7 @@ User selects: **Cost metrics + Latency benchmarks + Integration tests**, **Promp
 
 🔗 Next steps for user:
 - View: /sdlc:prd-list
+- Design architecture: /sdlc:prd-architect "model-downgrade-gpt4"  ← recommended before splitting
 - Split: /sdlc:prd-split "model-downgrade-gpt4"
 ```
 
@@ -626,4 +629,4 @@ New PRDs are created with status `draft`. Use `/sdlc:prd-update` to change statu
 - PRDs can optionally be assigned to a sprint after creation
 - **PRD Creation Only:** This skill creates PRD documents ONLY.
   It does NOT split into tasks or implement features.
-  Use `/sdlc:prd-split` separately after PRD approval.
+  Use `/sdlc:prd-architect` to design architecture, then `/sdlc:prd-split` to create tasks.

@@ -1,30 +1,269 @@
 # a-sdlc
 
-SDLC Automation System for Claude Code - Generate and maintain BrainGrid-style documentation artifacts.
+**AI-native SDLC automation for Claude Code** — from vague idea to shipped code, with built-in quality feedback loops.
 
-## Overview
+a-sdlc gives Claude Code a structured development workflow: ideation, PRD generation, architecture design, task decomposition, sprint execution, and retrospectives. Every step is grounded in your actual codebase — no hallucinated file paths, no speculative architecture, no scope creep.
 
-a-sdlc streamlines the software development lifecycle by:
+<!-- screenshot placeholder: add workflow demo here -->
 
-- **Generating living documentation** - Automated codebase analysis produces 5 key artifacts
-- **PRD → Requirements → Tasks** - Structured workflow from product specs to implementation
-- **Claude Code integration** - Skills (`/sdlc:*`) work seamlessly in your development flow
-- **External integrations** - Optional sync with Linear, GitHub Issues, and more
+## Install
 
-## Prerequisites
+```bash
+uv tool install git+https://github.com/pleelapr/a-sdlc.git
+a-sdlc setup       # guided wizard: skills, MCP config, optional integrations
+a-sdlc doctor      # verify everything works
+```
+
+To upgrade:
+
+```bash
+uv tool install --force git+https://github.com/pleelapr/a-sdlc.git
+a-sdlc setup --upgrade
+```
+
+> Need pip, pipx, or development install? See [All Installation Methods](#all-installation-methods).
+
+## Quick Start
+
+In Claude Code, inside your project directory:
+
+```
+/sdlc:init      # initialize .sdlc/ structure and register project
+/sdlc:scan      # analyze codebase → generate 5 living documentation artifacts
+/sdlc:status    # check artifact freshness
+```
+
+## The Workflow
+
+a-sdlc models the full development lifecycle as a series of slash commands. Each step feeds into the next, and quality gates prevent drift between what was planned and what gets built.
+
+```
+Ideate → PRD → Design → Decompose → Sprint → Complete
+```
+
+### Ideate
+
+```
+/sdlc:ideate "maybe we need better caching"
+```
+
+Exploratory Socratic dialogue that takes a vague idea and converges on well-defined requirements. Claude asks probing questions — what problem does this solve, who benefits, what constraints exist — and synthesizes the answers into one or more PRDs. No assumptions, no AI-inferred features.
+
+### Generate PRD
+
+```
+/sdlc:prd-generate "Add OAuth authentication"
+```
+
+Structured Q&A that builds a comprehensive Product Requirements Document. Every line traces to a user answer — zero fluff. Clarifying questions cover scope, acceptance criteria, non-functional requirements, and edge cases. The PRD becomes the single source of truth for everything downstream.
+
+### Design Architecture
+
+```
+/sdlc:prd-architect PROJ-P0001
+```
+
+Generates an ADR-style (Architecture Decision Record) design document by analyzing your actual codebase. Every design decision cites real files, real modules, real patterns already in use. If a pattern or library isn't in the codebase and the PRD doesn't require it, it doesn't appear in the design.
+
+### Decompose into Tasks
+
+```
+/sdlc:prd-split PROJ-P0001
+```
+
+Multi-agent orchestration breaks the PRD into implementable tasks. Specialized agents handle investigation, design, content generation, and persistence. Each task gets dependency analysis, implementation steps, acceptance criteria, and a definition of done — all grounded in the design document and codebase.
+
+### Sprint Execution
+
+```
+/sdlc:sprint-run SPRINT-01
+```
+
+Executes sprint tasks using parallel Claude Code agents. Two modes:
+
+- **Simple mode** (single PRD): tasks run in the current branch, respecting dependency chains
+- **Isolated mode** (multiple PRDs): each PRD gets its own git worktree for conflict-free parallel development
+
+Independent tasks run concurrently. Blocked tasks wait for their dependencies to complete.
+
+### Complete & Retrospect
+
+```
+/sdlc:sprint-complete SPRINT-01
+```
+
+Closes the sprint, updates PRD statuses, and runs an automated retrospective. The retrospective reads the correction log accumulated during the sprint, identifies patterns (categories with 2+ corrections), and proposes evidence-based lessons. Each proposed lesson requires user approval before being saved. No generic "best practices" — only lessons grounded in what actually happened.
+
+## Self-Healing Quality System
+
+a-sdlc includes a feedback loop that captures mistakes, distills them into lessons, and enforces them on future work.
+
+```
+  Corrections Log          Retrospective           Lesson-Learn Files
+  ┌──────────────┐    ┌──────────────────┐    ┌──────────────────────┐
+  │ log_correction│───▶│ sprint-complete  │───▶│ .sdlc/lesson-learn.md│
+  │ during work   │    │ analyzes patterns│    │ ~/.a-sdlc/lesson-    │
+  │               │    │ proposes lessons │    │   learn.md           │
+  └──────────────┘    └──────────────────┘    └──────────┬───────────┘
+                                                         │
+                                              ┌──────────▼───────────┐
+                                              │ Preflight Checks     │
+                                              │ prd-split, task-start│
+                                              │ sprint-run           │
+                                              └──────────────────────┘
+```
+
+**How it works:**
+
+1. **Corrections are logged** throughout the sprint via `log_correction()` — during task implementation, PRD splits, PR feedback, and ad-hoc fixes
+2. **Retrospective analyzes patterns** — categories with 2+ corrections become candidate lessons, each citing specific log entries as evidence
+3. **User approves lessons** — choose project-scope, global-scope, or both; set priority (MUST/SHOULD/MAY)
+4. **Preflight checks enforce lessons** — before starting tasks, splitting PRDs, or running sprints, lessons are presented as rules to follow
+
+Additional quality mechanisms:
+- **Self-review**: task completion runs a definition-of-done checklist
+- **Correction logging**: any workflow can record mistakes for future retrospectives
+- **Anti-fluff rules**: PRDs, designs, and retrospectives reject AI-inferred content not backed by user input or codebase evidence
+
+## Living Documentation
+
+`/sdlc:scan` analyzes your codebase and generates 5 artifacts in `.sdlc/artifacts/`:
+
+| Artifact | Content |
+|----------|---------|
+| `directory-structure.md` | Repository file tree |
+| `codebase-summary.md` | Project overview, stack, dependencies |
+| `architecture.md` | Component breakdown and interactions |
+| `data-model.md` | Entity definitions and relationships |
+| `key-workflows.md` | Traced execution flows |
+
+These artifacts stay fresh through incremental updates:
+
+```
+/sdlc:status    # check what's stale
+/sdlc:update    # refresh only changed artifacts
+```
+
+## Investigation & Analysis
+
+```bash
+/sdlc:investigate "login fails after token refresh"   # root cause analysis with web search
+/sdlc:ask "how does the auth middleware work?"         # read-only Q&A about the repo
+/sdlc:pr-feedback                                      # fetch, categorize, resolve PR review comments
+/sdlc:sonar-scan                                       # SonarQube scan with auto-fix
+/sdlc:test                                             # runtime testing via Playwright + API validation
+```
+
+## External Integrations
+
+a-sdlc syncs sprints and tasks with external systems:
+
+| System | What syncs | Setup |
+|--------|-----------|-------|
+| **Linear** | Cycles as sprints, issues as tasks | `a-sdlc connect linear` |
+| **Jira** | Sprints, issues with ADF formatting | `a-sdlc connect jira` |
+| **Confluence** | Publish artifacts as pages | `a-sdlc connect confluence` |
+
+Sync operations:
+
+```
+/sdlc:sprint-import linear          # import cycle as sprint
+/sdlc:sprint-sync SPRINT-01         # bidirectional sync
+/sdlc:sprint-sync-to SPRINT-01      # push to external
+/sdlc:sprint-sync-from SPRINT-01    # pull from external
+```
+
+Status mapping: `pending` ↔ Backlog/To Do, `in_progress` ↔ In Progress, `blocked` ↔ Blocked, `completed` ↔ Done.
+
+## Skills Reference
+
+### Project Setup
+
+| Skill | Purpose |
+|-------|---------|
+| `/sdlc:init` | Initialize `.sdlc/` directory and register project |
+| `/sdlc:scan` | Full repo scan → generate all artifacts |
+| `/sdlc:update` | Incremental update of stale artifacts |
+| `/sdlc:status` | Show artifact freshness |
+
+### PRD Management
+
+| Skill | Purpose |
+|-------|---------|
+| `/sdlc:ideate` | Socratic dialogue → vague idea to PRD(s) |
+| `/sdlc:prd-generate` | Structured Q&A → single PRD |
+| `/sdlc:prd-architect` | Design document from PRD + codebase analysis |
+| `/sdlc:prd-split` | Decompose PRD into tasks |
+| `/sdlc:prd-investigate` | Deep-dive analysis of a PRD |
+| `/sdlc:prd-import` | Import external PRD document |
+| `/sdlc:prd-update` | Update PRD metadata |
+| `/sdlc:prd` | PRD management hub |
+| `/sdlc:prd-list` | List all PRDs |
+| `/sdlc:prd-delete` | Delete a PRD |
+
+### Task Management
+
+| Skill | Purpose |
+|-------|---------|
+| `/sdlc:task-create` | Create a task manually |
+| `/sdlc:task-start` | Begin work on a task (with preflight checks) |
+| `/sdlc:task-complete` | Mark task done (with DoD checklist) |
+| `/sdlc:task-split` | Split a task into subtasks |
+| `/sdlc:task-show` | View task details |
+| `/sdlc:task-link` | Link task to external system |
+| `/sdlc:task` | Task management hub |
+| `/sdlc:task-list` | List all tasks |
+| `/sdlc:task-delete` | Delete a task |
+
+### Sprint Management
+
+| Skill | Purpose |
+|-------|---------|
+| `/sdlc:sprint-create` | Create a new sprint |
+| `/sdlc:sprint-start` | Activate a sprint |
+| `/sdlc:sprint-run` | Execute sprint tasks (parallel agents) |
+| `/sdlc:sprint-complete` | Close sprint + retrospective |
+| `/sdlc:sprint-import` | Import sprint from Linear/Jira |
+| `/sdlc:sprint-sync` | Bidirectional sync with external system |
+| `/sdlc:sprint-sync-to` | Push changes to external |
+| `/sdlc:sprint-sync-from` | Pull changes from external |
+| `/sdlc:sprint-link` | Link sprint to external system |
+| `/sdlc:sprint-unlink` | Unlink sprint from external |
+| `/sdlc:sprint-show` | View sprint details |
+| `/sdlc:sprint` | Sprint management hub |
+| `/sdlc:sprint-list` | List all sprints |
+| `/sdlc:sprint-mappings` | View sync mappings |
+| `/sdlc:sprint-delete` | Delete a sprint |
+
+### Analysis & Quality
+
+| Skill | Purpose |
+|-------|---------|
+| `/sdlc:investigate` | Root cause analysis with web search |
+| `/sdlc:ask` | Read-only Q&A about the repo |
+| `/sdlc:pr-feedback` | Process PR review comments |
+| `/sdlc:sonar-scan` | SonarQube scan + auto-fix |
+| `/sdlc:test` | Runtime testing (Playwright + API) |
+| `/sdlc:publish` | Publish artifacts to Confluence |
+| `/sdlc:help` | List available commands |
+
+---
+
+<details>
+<summary><strong>All Installation Methods</strong></summary>
+
+### Prerequisites
 
 - **Python 3.10+** — Check with `python3 --version`
-- **[uv](https://docs.astral.sh/uv/)** (recommended), pip, or [pipx](https://pypa.github.io/pipx/) — for package installation
+- **[uv](https://docs.astral.sh/uv/)** (recommended), pip, or [pipx](https://pypa.github.io/pipx/)
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — for MCP integration and `/sdlc:*` skills
 
 ```bash
-# Install uv if you don't have it (recommended)
+# Install uv if you don't have it
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 > **Why uv?** uv provides `uvx` which runs Python tools on-demand without permanent installation. This is how a-sdlc runs its MCP server and Serena — they are downloaded and cached automatically on first use.
-
-## Installation
 
 ### Method 1: uv tool install from GitHub (recommended)
 
@@ -83,40 +322,6 @@ uv sync --all-extras
 uv tool install --force --editable ".[all]"
 ```
 
-### Post-Install Setup
-
-After installing the package, run the guided setup wizard:
-
-```bash
-a-sdlc setup
-```
-
-This walks you through prerequisites, deploying skills, MCP config, and optional integrations (Serena, monitoring, SonarQube, Playwright).
-
-To upgrade to a newer version:
-
-```bash
-uv tool install --force git+https://github.com/pleelapr/a-sdlc.git
-a-sdlc setup --upgrade
-```
-
-The first command pulls the latest code. The second force-refreshes templates, runs DB migration, updates MCP config, and offers any new integrations you don't have yet.
-
-Verify everything is working:
-
-```bash
-a-sdlc doctor
-```
-
-### Uninstall
-
-```bash
-a-sdlc uninstall                  # Remove skills, MCP config; keep project data
-a-sdlc uninstall --include-data   # Remove everything including ~/.a-sdlc data
-a-sdlc uninstall --dry-run        # Preview what would be removed
-uv tool uninstall a-sdlc          # Remove the Python package itself
-```
-
 ### Optional Extras
 
 | Extra | What it adds | Install flag |
@@ -126,283 +331,54 @@ uv tool uninstall a-sdlc          # Remove the Python package itself
 | `[sonarqube]` | SonarQube integration (pysonar) | `a-sdlc[sonarqube]` |
 | `[all]` | All of the above plus dev tools | `a-sdlc[all]` |
 
-### How Serena MCP Works
+</details>
 
-Serena is **not permanently installed**. When you run `a-sdlc install --with-serena`:
-
-1. a-sdlc adds this config to `~/.claude/settings.json`:
-   ```json
-   {
-     "mcpServers": {
-       "serena": {
-         "command": "uvx",
-         "args": ["--from", "serena-agent", "serena"]
-       }
-     }
-   }
-   ```
-2. When Claude Code starts, it runs `uvx --from serena-agent serena`
-3. uvx downloads and caches serena-agent from PyPI (first time only)
-4. Serena runs as an MCP server
-
-**Safe to re-run:** If Serena is already configured, `--with-serena` skips setup automatically.
-
-## Quick Start
+<details>
+<summary><strong>CLI Commands Reference</strong></summary>
 
 ```bash
-# In your project directory, using Claude Code:
+# Setup & diagnostics
+a-sdlc setup                 # Guided setup wizard
+a-sdlc setup --upgrade       # Upgrade: refresh templates, migrate DB, update MCP config
+a-sdlc doctor                # Run diagnostics
 
-/sdlc:init      # Initialize .sdlc/ structure
-/sdlc:scan      # Generate all documentation artifacts
-/sdlc:status    # Check artifact freshness
-```
-
-## Skills Reference
-
-| Skill | Purpose |
-|-------|---------|
-| `/sdlc:init` | Initialize `.sdlc/` directory structure |
-| `/sdlc:scan` | Full repo scan → generate all artifacts |
-| `/sdlc:update` | Incremental update of stale artifacts |
-| `/sdlc:prd` | PRD ingestion → draft requirements |
-| `/sdlc:task` | Requirements → actionable tasks |
-| `/sdlc:status` | Show artifact freshness |
-
-## Generated Artifacts
-
-The system generates 5 living documentation artifacts in `.sdlc/artifacts/`:
-
-| Artifact | Content |
-|----------|---------|
-| `directory-structure.md` | Repository file tree |
-| `codebase-summary.md` | Project overview, stack, dependencies |
-| `architecture.md` | Component breakdown and interactions |
-| `data-model.md` | Entity definitions and relationships |
-| `key-workflows.md` | Traced execution flows |
-
-## Directory Structure
-
-After initialization, your project will have:
-
-```
-.sdlc/
-├── artifacts/              # Generated documentation
-│   ├── codebase-summary.md
-│   ├── architecture.md
-│   ├── data-model.md
-│   ├── key-workflows.md
-│   └── directory-structure.md
-├── requirements/           # Requirements management
-│   ├── current.md
-│   └── versions/
-├── tasks/                  # Task tracking
-│   ├── active/
-│   ├── completed/
-│   └── index.json
-├── prd/                    # PRD pipeline
-│   ├── inbox/
-│   └── processed/
-├── templates/              # Customizable templates
-└── config.yaml             # Project configuration
-```
-
-## Workflow Example
-
-### 1. Initialize and Scan
-
-```bash
-/sdlc:init    # Creates .sdlc/ structure
-/sdlc:scan    # Analyzes codebase, generates artifacts
-```
-
-### 2. Import a PRD
-
-```bash
-/sdlc:prd ingest docs/feature-spec.md   # Import PRD
-/sdlc:prd draft                          # Generate requirements
-/sdlc:prd review                         # Approve requirements
-```
-
-### 3. Create and Work Tasks
-
-```bash
-/sdlc:task split               # Create tasks from requirements
-/sdlc:task list                # View all tasks
-/sdlc:task start TASK-001      # Begin work on task
-/sdlc:task complete TASK-001   # Mark task done
-```
-
-### 4. Keep Documentation Fresh
-
-```bash
-/sdlc:status    # Check what's stale
-/sdlc:update    # Refresh changed artifacts
-```
-
-## Plugin System
-
-Task storage can be configured with different backends:
-
-### Local (Default)
-
-Tasks stored as files in `.sdlc/tasks/`:
-
-```yaml
-# .sdlc/config.yaml
-plugins:
-  tasks:
-    provider: "local"
-```
-
-### Linear Integration
-
-Sync tasks with Linear issue tracker:
-
-```bash
-a-sdlc plugins enable linear
-a-sdlc plugins configure linear
-```
-
-```yaml
-# .sdlc/config.yaml
-plugins:
-  tasks:
-    provider: "linear"
-    linear:
-      team_id: "ENG"
-      sync_on_create: true
-      sync_on_complete: true
-```
-
-## External Integrations
-
-a-sdlc supports integration with external systems for sprint/task sync and artifact publishing.
-
-### Linear Setup
-
-```bash
-# Via Claude Code MCP
-# Use configure_linear tool with:
-#   api_key: from Linear Settings > API
-#   team_id: e.g., 'ENG'
-
-# Via CLI
-a-sdlc connect linear --api-key KEY --team-id TEAM [--default-project PROJECT]
-a-sdlc connect linear  # Interactive prompts
-```
-
-### Jira Setup
-
-```bash
-# Via Claude Code MCP
-# Use configure_jira tool with:
-#   base_url: https://company.atlassian.net
-#   email: your@email.com
-#   api_token: from id.atlassian.com/manage-profile/security/api-tokens
-#   project_key: e.g., 'PROJ'
-
-# Via CLI
-a-sdlc connect jira --url URL --email EMAIL --api-token TOKEN --project-key KEY
-a-sdlc connect jira  # Interactive prompts
-```
-
-### Confluence Setup
-
-```bash
-# Via Claude Code MCP
-# Use configure_confluence tool with:
-#   base_url: https://company.atlassian.net
-#   email: your@email.com
-#   api_token: from id.atlassian.com/manage-profile/security/api-tokens
-#   space_key: e.g., 'PROJ'
-
-# Via CLI
-a-sdlc connect confluence --url URL --email EMAIL --api-token TOKEN --space-key KEY
-a-sdlc connect confluence  # Interactive prompts
-```
-
-### Managing Integrations
-
-```bash
-# List configured integrations
-a-sdlc integrations
-
-# Remove an integration
-a-sdlc disconnect linear
-a-sdlc disconnect jira
-a-sdlc disconnect confluence
-```
-
-### Sprint Sync Operations
-
-Once connected to Linear or Jira, you can sync sprints:
-
-```bash
-# Import a sprint from external system
-/sdlc:sprint-import linear           # Import Linear cycle
-/sdlc:sprint-import jira --board-id <id>  # Import Jira sprint
-
-# Link existing sprint to external system
-/sdlc:sprint-link SPRINT-01 linear <cycle-id>
-/sdlc:sprint-link SPRINT-01 jira <sprint-id>
-
-# Sync changes
-/sdlc:sprint-sync SPRINT-01           # Bidirectional sync
-/sdlc:sprint-sync-from SPRINT-01      # Pull from external
-/sdlc:sprint-sync-to SPRINT-01        # Push to external
-
-# Unlink sprint
-/sdlc:sprint-unlink SPRINT-01
-```
-
-### Artifact Publishing (Confluence)
-
-Push generated artifacts to Confluence:
-
-```bash
-# Push all unpublished artifacts
-a-sdlc artifacts push
-
-# Push specific artifact
-a-sdlc artifacts push architecture
-
-# Force republish all
-a-sdlc artifacts push --force
-
-# Check sync status
-a-sdlc artifacts status
-```
-
-## Claude Code Integration
-
-Add artifact references to your project's `.claude/CLAUDE.md`:
-
-```markdown
-# SDLC Context
-@.sdlc/artifacts/codebase-summary.md
-@.sdlc/artifacts/architecture.md
-@.sdlc/artifacts/data-model.md
-@.sdlc/requirements/current.md
-```
-
-This gives Claude Code context about your codebase structure and requirements.
-
-## CLI Commands
-
-```bash
+# Install skills
 a-sdlc install               # Deploy skills to Claude Code
 a-sdlc install --list        # List installed skills
 a-sdlc install --force       # Reinstall all skills
 a-sdlc install --with-serena # Install skills + configure Serena MCP
+
+# MCP setup
 a-sdlc setup-mcp             # Configure Serena MCP server
 a-sdlc setup-mcp --force     # Reconfigure Serena MCP
-a-sdlc doctor                # Run diagnostics
-a-sdlc plugins list          # List available plugins
-a-sdlc plugins enable <name>     # Enable a plugin
-a-sdlc plugins configure <name>  # Configure a plugin
+
+# External integrations
+a-sdlc connect linear        # Connect to Linear (interactive prompts)
+a-sdlc connect jira          # Connect to Jira
+a-sdlc connect confluence    # Connect to Confluence
+a-sdlc integrations          # List configured integrations
+a-sdlc disconnect linear     # Remove integration
+
+# Artifact publishing
+a-sdlc artifacts push        # Push all unpublished artifacts to Confluence
+a-sdlc artifacts push architecture  # Push specific artifact
+a-sdlc artifacts push --force       # Force republish all
+a-sdlc artifacts status             # Check publish status
+
+# SonarQube
+a-sdlc sonarqube configure   # Configure SonarQube connection
+
+# Uninstall
+a-sdlc uninstall                  # Remove skills, MCP config; keep project data
+a-sdlc uninstall --include-data   # Remove everything including ~/.a-sdlc data
+a-sdlc uninstall --dry-run        # Preview what would be removed
+uv tool uninstall a-sdlc          # Remove the Python package itself
 ```
 
-## Configuration
+</details>
+
+<details>
+<summary><strong>Configuration</strong></summary>
 
 Project configuration in `.sdlc/config.yaml`:
 
@@ -433,50 +409,65 @@ tasks:
   auto_dependencies: true
 ```
 
+</details>
+
+<details>
+<summary><strong>Serena MCP Setup</strong></summary>
+
+Serena is **not permanently installed**. When you run `a-sdlc install --with-serena`:
+
+1. a-sdlc adds this config to `~/.claude/settings.json`:
+   ```json
+   {
+     "mcpServers": {
+       "serena": {
+         "command": "uvx",
+         "args": ["--from", "serena-agent", "serena"]
+       }
+     }
+   }
+   ```
+2. When Claude Code starts, it runs `uvx --from serena-agent serena`
+3. uvx downloads and caches serena-agent from PyPI (first time only)
+4. Serena runs as an MCP server providing semantic code understanding
+
+**Safe to re-run:** If Serena is already configured, `--with-serena` skips setup automatically.
+
+</details>
+
+<details>
+<summary><strong>Monitoring Setup</strong></summary>
+
+a-sdlc supports optional observability via Langfuse and SigNoz:
+
+```bash
+a-sdlc setup    # Select monitoring options during guided wizard
+```
+
+The setup wizard will prompt for Langfuse API keys and/or SigNoz configuration if you choose to enable monitoring.
+
+</details>
+
 ## Development
 
 ```bash
-# Clone and set up development environment
 git clone https://github.com/pleelapr/a-sdlc.git
 cd a-sdlc
 uv sync --all-extras
 
-# Run tests
-uv run pytest
-
-# Run linting
-uv run ruff check src/
-uv run mypy src/
+uv run pytest tests/ -v      # run tests
+uv run ruff check src/       # lint
+uv run mypy src/              # type check
+uv run ruff format src/ tests/  # format
 ```
 
-### Local Installation (Editable Mode)
-
-When developing a-sdlc, use editable mode to test changes without reinstalling:
+Development workflow with editable install:
 
 ```bash
-# Install locally in editable mode (run from project root)
-uv tool install --force --editable ".[all]"
-
-# Deploy skills + configure MCP server
-a-sdlc install --force
-
-# Optional: Also configure Serena MCP for code analysis
-a-sdlc install --force --with-serena
+uv tool install --force --editable ".[all]"   # install in editable mode
+a-sdlc install --force                         # redeploy skills + MCP config
+# Restart Claude Code to pick up changes
 ```
-
-**What gets installed:**
-
-| Command | What it does |
-|---------|--------------|
-| `uv tool install ...` | Installs CLI, Python package, all dependencies |
-| `a-sdlc install --force` | Deploys skills to `~/.claude/commands/sdlc/` AND configures a-sdlc MCP server in `~/.claude.json` |
-| `--with-serena` | Also configures Serena MCP in `~/.claude/settings.json` |
-
-**Development workflow:**
-1. Make changes to source code or templates
-2. If you changed Python code: run `uv tool install --force --editable ".[all]"`
-3. If you only changed templates/skills: run `a-sdlc install --force`
-4. Restart Claude Code to pick up changes
 
 ## License
 
