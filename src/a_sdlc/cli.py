@@ -120,7 +120,12 @@ def serve(transport: str, host: str, port: int) -> None:
     default=None,
     help="Custom target directory (default: ~/.claude/commands/sdlc/)"
 )
-def install(list_skills: bool, force: bool, target: Path | None) -> None:
+@click.option(
+    "--with-playwright",
+    is_flag=True,
+    help="Also configure Playwright MCP server for runtime testing"
+)
+def install(list_skills: bool, force: bool, target: Path | None, with_playwright: bool) -> None:
     """Deploy skill templates to Claude Code (non-interactive).
 
     For interactive setup with optional integrations, use: a-sdlc setup
@@ -150,6 +155,9 @@ def install(list_skills: bool, force: bool, target: Path | None) -> None:
             title="[bold]Installation Complete[/bold]",
             border_style="green"
         ))
+
+        if with_playwright:
+            _setup_playwright_mcp(force=force)
 
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")

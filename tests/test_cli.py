@@ -659,6 +659,32 @@ class TestDoctorFixInstructions:
 class TestInstallPlaywright:
     """Tests for Playwright setup via install command."""
 
+    def test_install_with_playwright_calls_setup(self, runner: CliRunner) -> None:
+        """Test install with --with-playwright invokes Playwright setup."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install", "--with-playwright"])
+
+        assert result.exit_code == 0
+        mock_setup.assert_called_once_with(force=False)
+
+    def test_install_with_playwright_force(self, runner: CliRunner) -> None:
+        """Test install with --with-playwright --force passes force flag."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install", "--with-playwright", "--force"])
+
+        assert result.exit_code == 0
+        mock_setup.assert_called_once_with(force=True)
+
     def test_install_without_playwright_does_not_call_setup(self, runner: CliRunner) -> None:
         """Test install without --with-playwright does not invoke Playwright setup."""
         with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
