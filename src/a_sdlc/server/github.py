@@ -6,7 +6,6 @@ Provides REST and GraphQL access to GitHub for PR review comment retrieval.
 
 import re
 import subprocess
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -337,15 +336,15 @@ def detect_git_info() -> tuple[str, str, str]:
             .decode()
             .strip()
         )
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as err:
         raise RuntimeError(
             "Could not get git remote URL. Ensure you're in a git repo with an 'origin' remote."
-        )
+        ) from err
 
     try:
         owner, repo = parse_git_remote(remote_url)
     except ValueError as e:
-        raise RuntimeError(str(e))
+        raise RuntimeError(str(e)) from e
 
     try:
         branch = (
@@ -356,8 +355,8 @@ def detect_git_info() -> tuple[str, str, str]:
             .decode()
             .strip()
         )
-    except subprocess.CalledProcessError:
-        raise RuntimeError("Could not determine current git branch.")
+    except subprocess.CalledProcessError as err:
+        raise RuntimeError("Could not determine current git branch.") from err
 
     if not branch:
         raise RuntimeError(

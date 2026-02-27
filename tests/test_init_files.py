@@ -25,9 +25,11 @@ def temp_project():
 @pytest.fixture
 def temp_global_dir():
     """Create a temporary global directory for ~/.a-sdlc/."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        with patch("a_sdlc.core.init_files.get_data_dir", return_value=Path(tmpdir)):
-            yield Path(tmpdir)
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        patch("a_sdlc.core.init_files.get_data_dir", return_value=Path(tmpdir)),
+    ):
+        yield Path(tmpdir)
 
 
 class TestLoadTemplate:

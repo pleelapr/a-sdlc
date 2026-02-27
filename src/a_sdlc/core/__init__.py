@@ -6,8 +6,8 @@ This module provides the foundational storage layer:
 - ContentManager: Markdown content file operations
 """
 
-from a_sdlc.core.database import Database, get_data_dir, get_db, get_db_path
 from a_sdlc.core.content import ContentManager, get_content_manager
+from a_sdlc.core.database import Database, get_data_dir, get_db, get_db_path
 
 __all__ = [
     "Database",

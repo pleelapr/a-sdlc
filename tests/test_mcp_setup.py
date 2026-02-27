@@ -1,7 +1,6 @@
 """Tests for MCP setup module."""
 
 import json
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -206,7 +205,7 @@ def test_verify_setup_fully_configured(tmp_path: Path):
 
 def test_serena_config_structure():
     """Test that Serena configs have the expected structure."""
-    for method, config in SERENA_CONFIGS.items():
+    for _method, config in SERENA_CONFIGS.items():
         assert "command" in config
         assert "args" in config
         assert "env" in config

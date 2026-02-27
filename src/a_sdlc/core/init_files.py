@@ -29,7 +29,7 @@ def _load_template(template_name: str) -> str:
         fallback = Path(__file__).parent.parent / "artifact_templates" / template_name
         if fallback.exists():
             return fallback.read_text(encoding="utf-8")
-        raise FileNotFoundError(f"Template not found: {template_name}")
+        raise FileNotFoundError(f"Template not found: {template_name}") from None
 
 
 def generate_claude_md(

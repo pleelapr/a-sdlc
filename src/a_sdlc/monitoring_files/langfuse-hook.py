@@ -90,7 +90,7 @@ def load_state() -> dict:
         return {}
     try:
         return json.loads(STATE_FILE.read_text())
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return {}
 
 

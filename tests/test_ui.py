@@ -23,8 +23,9 @@ def temp_storage():
 def app_client(temp_storage, monkeypatch):
     """Create a synchronous test client with mocked storage."""
     from starlette.testclient import TestClient
-    from a_sdlc.ui import app
+
     import a_sdlc.ui as ui_module
+    from a_sdlc.ui import app
 
     monkeypatch.setattr(ui_module, "get_storage", lambda: temp_storage)
     return TestClient(app)
@@ -41,8 +42,9 @@ def storage_with_project(temp_storage, tmp_path):
 def client_with_project(storage_with_project, monkeypatch):
     """Create a test client with a project in storage."""
     from starlette.testclient import TestClient
-    from a_sdlc.ui import app
+
     import a_sdlc.ui as ui_module
+    from a_sdlc.ui import app
 
     monkeypatch.setattr(ui_module, "get_storage", lambda: storage_with_project)
     return TestClient(app)
@@ -51,8 +53,9 @@ def client_with_project(storage_with_project, monkeypatch):
 def _make_client(storage, monkeypatch):
     """Helper to create a test client with given storage."""
     from starlette.testclient import TestClient
-    from a_sdlc.ui import app
+
     import a_sdlc.ui as ui_module
+    from a_sdlc.ui import app
 
     monkeypatch.setattr(ui_module, "get_storage", lambda: storage)
     return TestClient(app)
@@ -1181,7 +1184,7 @@ class TestTaskTimestamps:
         temp_storage.update_sprint("S-0001", status="active")
         sprint = temp_storage._db.get_sprint("S-0001")
         assert sprint["started_at"] is not None
-        first_started = sprint["started_at"]
+        sprint["started_at"]
 
         # active -> planned (full reset)
         temp_storage.update_sprint("S-0001", status="planned")

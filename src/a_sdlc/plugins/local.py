@@ -10,8 +10,13 @@ from datetime import datetime
 from pathlib import Path
 
 from a_sdlc.plugins.base import (
-    Task, TaskPlugin, TaskStatus, Sprint, SprintStatus,
-    ExternalSprintMapping, SyncStatus
+    ExternalSprintMapping,
+    Sprint,
+    SprintStatus,
+    SyncStatus,
+    Task,
+    TaskPlugin,
+    TaskStatus,
 )
 
 

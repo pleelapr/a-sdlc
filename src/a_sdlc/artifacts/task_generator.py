@@ -3,7 +3,7 @@
 import re
 from dataclasses import dataclass
 
-from a_sdlc.plugins.base import Task, TaskPriority, TaskStatus
+from a_sdlc.plugins.base import Task
 
 
 @dataclass

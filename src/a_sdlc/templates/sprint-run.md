@@ -402,6 +402,7 @@ Task(
 5. Read .sdlc/config.yaml — check `git.auto_commit`:
    - If `true`: git add <files> && git commit -m "[{task_id}] {task_title}"
    - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
+6. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
 
 ## Review Gates (MANDATORY before completion)
 
@@ -447,7 +448,27 @@ Do NOT call update_task(status='completed') until the review process completes w
 - After max rounds with no approval: use AskUserQuestion to escalate to the user
   Options: "Override & complete", "Continue fixing", "Block task"
 
-### 4. Log & Complete
+### 4. Runtime Test Gate (if configured)
+
+Read `.sdlc/config.yaml` — check if `testing.runtime` section exists:
+- If `testing.runtime` is **NOT** present → skip to step 5 (Log & Complete)
+- If present:
+  1. Run `/sdlc:test --task {task_id}` to validate the running application
+  2. If runtime tests **FAIL**:
+     - DO NOT call `update_task(status='completed')`
+     - Report failure with test results (screenshots, response bodies)
+     - Log correction via `mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='testing', description='Runtime test failure during sprint execution: {summary}')`
+     - Return to Self-Heal Loop (step 3) for one more fix attempt
+     - If still failing after retry: use `AskUserQuestion` to escalate
+       Options: "Override & complete", "Continue fixing", "Block task"
+  3. If runtime tests **PASS**:
+     - Record: "Runtime tests passed ({passed}/{total})"
+     - Proceed to step 5 (Log & Complete)
+  4. If app is not reachable:
+     - Warn: "Runtime testing configured but app not reachable. Skipping."
+     - Proceed to step 5 (Log & Complete)
+
+### 5. Log & Complete
 - For EVERY finding (yours or reviewer's), call:
   mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what_was_found_and_fixed}')
 - Only after reviewer APPROVE (or user override): call mcp__asdlc__update_task(task_id='{task_id}', status='completed')
@@ -857,8 +878,9 @@ For EACH task:
 4. Read .sdlc/config.yaml — check `git.auto_commit`:
    - If `true`: git add <files> && git commit -m "[{task_id}] {task_title}"
    - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
-5. Run review gates (see below)
-6. Only after reviewer APPROVE: call mcp__asdlc__update_task(task_id, status="completed")
+5. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
+6. Run review gates (see below)
+7. Only after reviewer APPROVE: call mcp__asdlc__update_task(task_id, status="completed")
 
 ## Batch 1 (independent tasks):
 
@@ -915,7 +937,27 @@ For EACH task:
 - After max rounds: AskUserQuestion to escalate
   Options: "Override & complete", "Continue fixing", "Block task"
 
-### 4. Log & Complete
+### 4. Runtime Test Gate (if configured)
+
+Read `.sdlc/config.yaml` — check if `testing.runtime` section exists:
+- If `testing.runtime` is **NOT** present → skip to step 5 (Log & Complete)
+- If present:
+  1. Run `/sdlc:test --task {task_id}` to validate the running application
+  2. If runtime tests **FAIL**:
+     - DO NOT call `update_task(status='completed')`
+     - Report failure with test results (screenshots, response bodies)
+     - Log correction via `mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='testing', description='Runtime test failure during sprint execution: {summary}')`
+     - Return to Self-Heal Loop (step 3) for one more fix attempt
+     - If still failing after retry: use `AskUserQuestion` to escalate
+       Options: "Override & complete", "Continue fixing", "Block task"
+  3. If runtime tests **PASS**:
+     - Record: "Runtime tests passed ({passed}/{total})"
+     - Proceed to step 5 (Log & Complete)
+  4. If app is not reachable:
+     - Warn: "Runtime testing configured but app not reachable. Skipping."
+     - Proceed to step 5 (Log & Complete)
+
+### 5. Log & Complete
 - For EVERY finding (yours or reviewer's), call:
   mcp__asdlc__log_correction(context_type='task', context_id=task_id, category='{category}', description='{what_was_found_and_fixed}')
 - Only after reviewer APPROVE (or user override): call mcp__asdlc__update_task(task_id, status="completed")

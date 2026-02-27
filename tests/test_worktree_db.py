@@ -739,12 +739,6 @@ class TestWorktreeUpdate:
         """Test that setting status to 'active' does NOT set cleaned_at."""
         self._create_worktree(temp_db)
         updated = temp_db.update_worktree("wt-upd", status="active")
-        assert updated["cleaned_at"] is None
-
-    def test_update_worktree_active_does_not_set_cleaned_at(self, temp_db):
-        """Test that keeping status as 'active' does NOT set cleaned_at."""
-        self._create_worktree(temp_db)
-        updated = temp_db.update_worktree("wt-upd", status="active")
         assert updated["status"] == "active"
         assert updated["cleaned_at"] is None
 

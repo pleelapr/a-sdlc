@@ -12,6 +12,38 @@ Parse the user's arguments for these flags:
 - `--filter <username>` — Only show comments from this GitHub reviewer
 - `--unresolved` — Only show unresolved review threads
 
+## Phase 0: Runtime Validation (Optional)
+
+**Config-gated**: Only runs if `testing.runtime` is configured in `.sdlc/config.yaml`.
+
+### Step 0.1: Check Configuration
+
+Read `.sdlc/config.yaml`:
+- If `testing.runtime` is NOT present → skip to Phase 1
+- If present → continue
+
+### Step 0.2: Run Full Runtime Tests
+
+Execute `/sdlc:test --full` to validate the running application:
+- This runs all known test scenarios across all PRDs
+- Includes both browser tests (if Playwright available) and API tests
+
+### Step 0.3: Report Results
+
+**If all tests pass:**
+- Display: "Runtime validation passed. Proceeding to PR feedback."
+- Continue to Phase 1
+
+**If any tests fail:**
+- Display failure report with details
+- Use `AskUserQuestion` to ask:
+  - "Runtime tests failed. Would you like to:"
+    - **Fix issues first** — Exit and fix before continuing
+    - **Proceed anyway** — Continue to PR feedback despite failures
+- This is ADVISORY, not blocking — the developer decides
+
+**Rationale**: PR feedback processes existing review comments. Blocking would prevent developers from addressing reviewer feedback. Warning is sufficient.
+
 ## Phase 1: Fetch Comments
 
 **You MUST call the `mcp__asdlc__get_pr_feedback` MCP tool** — do NOT use `gh` CLI or Bash:

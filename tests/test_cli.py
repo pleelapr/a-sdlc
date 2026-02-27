@@ -21,7 +21,7 @@ def test_version(runner: CliRunner) -> None:
     """Test version command."""
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.2.0" in result.output
 
 
 def test_doctor(runner: CliRunner) -> None:
@@ -38,6 +38,7 @@ class TestDoctorSchemaVersion:
     def test_doctor_schema_version_pass(self, runner: CliRunner) -> None:
         """Test doctor reports PASS when schema version matches."""
         from unittest.mock import MagicMock
+
         from a_sdlc.core.database import SCHEMA_VERSION
 
         mock_db = MagicMock()
@@ -58,6 +59,7 @@ class TestDoctorSchemaVersion:
     def test_doctor_schema_version_warn(self, runner: CliRunner) -> None:
         """Test doctor reports WARN when schema version is outdated."""
         from unittest.mock import MagicMock
+
         from a_sdlc.core.database import SCHEMA_VERSION
 
         mock_db = MagicMock()
@@ -327,13 +329,13 @@ class TestInstallUpgrade:
         """Test --upgrade calls installer.install(force=True)."""
         with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
              patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}), \
-             patch("a_sdlc.cli._run_upgrade", wraps=None) as mock_run_upgrade:
+             patch("a_sdlc.cli._run_upgrade", wraps=None):
             # We need to let _run_upgrade actually execute, so instead patch internals
             pass
 
         # Use a more direct approach: patch the dependencies inside _run_upgrade
         with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}) as mock_mcp, \
+             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}), \
              patch("a_sdlc.core.database.Database.__init__", return_value=None), \
              patch("a_sdlc.core.database.Database.connection", create=True):
             mock_installer = mock_installer_cls.return_value
@@ -474,9 +476,9 @@ class TestDoctorDatabaseAccessible:
 
     def test_doctor_db_accessible_pass(self, runner: CliRunner) -> None:
         """Test doctor reports PASS when database is accessible."""
-        from unittest.mock import MagicMock
-        import tempfile
         import os
+        import tempfile
+        from unittest.mock import MagicMock
 
         # Create a real temp file to represent the database
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -588,3 +590,96 @@ class TestDoctorFixInstructions:
 
         assert "Template Version" in result.output
         assert "Fix:" in result.output
+
+
+class TestInstallPlaywright:
+    """Tests for --with-playwright flag in install command."""
+
+    def test_install_with_playwright_flag(self, runner: CliRunner) -> None:
+        """Test install command with --with-playwright flag."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install", "--with-playwright"])
+
+        assert result.exit_code == 0
+        mock_setup.assert_called_once_with(force=False)
+
+    def test_install_with_playwright_and_force(self, runner: CliRunner) -> None:
+        """Test install --with-playwright --force passes force flag."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install", "--with-playwright", "--force"])
+
+        assert result.exit_code == 0
+        mock_setup.assert_called_once_with(force=True)
+
+    def test_install_without_playwright_does_not_call_setup(self, runner: CliRunner) -> None:
+        """Test install without --with-playwright does not invoke Playwright setup."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install"])
+
+        assert result.exit_code == 0
+        mock_setup.assert_not_called()
+
+
+class TestDoctorPlaywright:
+    """Tests for Playwright MCP check in doctor command."""
+
+    def test_doctor_shows_playwright(self, runner: CliRunner) -> None:
+        """Test doctor command includes Playwright MCP check."""
+        result = runner.invoke(main, ["doctor"])
+        assert result.exit_code in (0, 1)
+        assert "Playwright MCP" in result.output
+
+    def test_doctor_playwright_pass(self, runner: CliRunner) -> None:
+        """Test doctor reports PASS when Playwright is ready."""
+        with patch("a_sdlc.playwright_setup.verify_setup", return_value={
+            "ready": True,
+            "configured_in_settings": True,
+            "installer_available": True,
+            "installer_method": "npx",
+        }):
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Playwright MCP" in result.output
+        assert "npx available" in result.output
+
+    def test_doctor_playwright_warn_no_npx(self, runner: CliRunner) -> None:
+        """Test doctor reports WARN when configured but npx missing."""
+        with patch("a_sdlc.playwright_setup.verify_setup", return_value={
+            "ready": False,
+            "configured_in_settings": True,
+            "installer_available": False,
+            "installer_method": "none",
+        }):
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Playwright MCP" in result.output
+        assert "npx not found" in result.output
+
+    def test_doctor_playwright_warn_not_configured(self, runner: CliRunner) -> None:
+        """Test doctor reports WARN when Playwright is not configured."""
+        with patch("a_sdlc.playwright_setup.verify_setup", return_value={
+            "ready": False,
+            "configured_in_settings": False,
+            "installer_available": True,
+            "installer_method": "npx",
+        }):
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Playwright MCP" in result.output
+        assert "Not configured" in result.output
+        assert "--with-playwright" in result.output

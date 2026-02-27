@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from a_sdlc.core.database import SCHEMA_VERSION, Database
-from a_sdlc.storage import FileStorage, ensure_templates, get_template_path
+from a_sdlc.storage import FileStorage, get_template_path
 
 
 @pytest.fixture
@@ -421,8 +421,9 @@ class TestMigrationV3ToV4:
 
     def test_migration_backfills_prd_timestamps(self, tmp_path):
         """Migrating a v3 database backfills ready_at, split_at, completed_at."""
-        from a_sdlc.core.database import Database
         import sqlite3
+
+        from a_sdlc.core.database import Database
 
         db_path = tmp_path / "test_migrate.db"
         project_path = str(tmp_path / "proj")
@@ -909,14 +910,13 @@ class TestMigrationBackupAndRollback:
         self._create_v5_database(db_path)
 
         # Record original file size for comparison
-        original_size = db_path.stat().st_size
+        _original_size = db_path.stat().st_size
 
         # Make _migrate_v5_to_v6 fail to simulate a migration error
         with patch.object(
             Database, "_migrate_v5_to_v6", side_effect=Exception("Simulated migration failure")
-        ):
-            with pytest.raises(RuntimeError, match="Migration from v5 failed"):
-                Database(db_path=db_path)
+        ), pytest.raises(RuntimeError, match="Migration from v5 failed"):
+            Database(db_path=db_path)
 
         # Verify database was restored from backup (should still be v5)
         conn = sqlite3.connect(db_path)
@@ -934,9 +934,8 @@ class TestMigrationBackupAndRollback:
 
         with patch.object(
             Database, "_migrate_v5_to_v6", side_effect=Exception("column already exists")
-        ):
-            with pytest.raises(RuntimeError, match=str(backup_path)):
-                Database(db_path=db_path)
+        ), pytest.raises(RuntimeError, match=str(backup_path)):
+            Database(db_path=db_path)
 
     def test_failed_migration_error_includes_original_error(self, tmp_path):
         """Test that RuntimeError includes the original exception message."""
@@ -945,9 +944,8 @@ class TestMigrationBackupAndRollback:
 
         with patch.object(
             Database, "_migrate_v5_to_v6", side_effect=Exception("duplicate column name")
-        ):
-            with pytest.raises(RuntimeError, match="duplicate column name"):
-                Database(db_path=db_path)
+        ), pytest.raises(RuntimeError, match="duplicate column name"):
+            Database(db_path=db_path)
 
     def test_no_backup_when_version_matches(self, tmp_path):
         """Test that no backup is created when schema version already matches."""

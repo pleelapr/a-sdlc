@@ -1,14 +1,15 @@
 """Tests for PRD update functionality."""
 
+
 import pytest
-from datetime import datetime
+
 from a_sdlc.artifacts.prd import (
     PRD,
-    parse_version,
     bump_version,
-    extract_sections,
-    update_section,
     detect_change_type,
+    extract_sections,
+    parse_version,
+    update_section,
 )
 
 

@@ -14,6 +14,7 @@ Usage:
 """
 
 import atexit
+import contextlib
 import os
 import re
 import shutil
@@ -28,17 +29,17 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-# Module-level variable to track UI server process
-_ui_process: subprocess.Popen | None = None
-
-from a_sdlc.core.database import Database, get_db
-from a_sdlc.core.content import ContentManager, get_content_manager
+from a_sdlc.core.content import get_content_manager
+from a_sdlc.core.database import get_db
 from a_sdlc.core.git_config import (
     get_effective_config_summary,
     load_git_safety_config,
     save_git_safety_config,
 )
 from a_sdlc.storage import get_storage
+
+# Module-level variable to track UI server process
+_ui_process: subprocess.Popen | None = None
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -327,7 +328,7 @@ def relocate_project(shortname: str) -> dict[str, Any]:
     if not updated:
         return {
             "status": "error",
-            "message": f"Failed to update project path.",
+            "message": "Failed to update project path.",
         }
 
     return {
@@ -2690,11 +2691,9 @@ def get_pr_feedback(
     # Get resolved thread IDs if filtering
     resolved_ids: set[str] = set()
     if unresolved_only:
-        try:
+        # GraphQL may fail with limited token scopes; continue without filtering
+        with contextlib.suppress(Exception):
             resolved_ids = client.get_resolved_thread_ids(owner, repo, pr_number)
-        except Exception:
-            # GraphQL may fail with limited token scopes; continue without filtering
-            pass
 
     # Process review comments (line-level)
     processed_review_comments = []
@@ -3089,7 +3088,7 @@ def link_sprint(
 
     try:
         sync = _get_sync_service()
-        mapping = sync.link_sprint(project_id, sprint_id, system, external_id)
+        sync.link_sprint(project_id, sprint_id, system, external_id)
 
         return {
             "status": "linked",
@@ -3208,7 +3207,7 @@ def sync_sprint_from(sprint_id: str) -> dict[str, Any]:
 
         return {
             "status": "synced",
-            "message": f"Pulled changes from external system",
+            "message": "Pulled changes from external system",
             **result,
         }
     except Exception as e:
@@ -3251,7 +3250,7 @@ def sync_sprint_to(sprint_id: str) -> dict[str, Any]:
 
         return {
             "status": "synced",
-            "message": f"Pushed changes to external system",
+            "message": "Pushed changes to external system",
             **result,
         }
     except Exception as e:
@@ -3314,7 +3313,7 @@ def link_prd(
 
     try:
         sync = _get_sync_service()
-        mapping = sync.link_prd(project_id, prd_id, system, external_id)
+        sync.link_prd(project_id, prd_id, system, external_id)
 
         return {
             "status": "linked",

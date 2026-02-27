@@ -805,6 +805,56 @@ If `testing.coverage.min_threshold` is greater than 0:
 
 If `min_threshold` is 0, skip coverage enforcement.
 
+## Runtime Test Validation
+
+**Config-gated**: Only runs if `testing.runtime` is configured in `.sdlc/config.yaml`.
+
+> This section validates the running application after code changes. It catches issues that static tests miss — broken UI flows, API regressions, and runtime errors.
+
+### Step RT-1: Check Runtime Test Configuration
+
+Read `.sdlc/config.yaml` and check for `testing.runtime` section:
+- If `testing.runtime` is **NOT** present or empty → **SKIP** this entire section, proceed to the next section
+- If `testing.runtime` **IS** present → continue to Step RT-2
+
+### Step RT-2: Determine Test Scope
+
+Using the current task ID:
+1. The task ID is already known from the task-complete context
+2. The parent PRD ID is already loaded from task metadata
+
+### Step RT-3: Execute Runtime Tests
+
+Run the same test logic as `/sdlc:test --task {task_id}`:
+1. Load `testing.runtime` config (app_url, mode, api_base, etc.)
+2. Check app readiness — verify the app is running at the configured URL
+3. If app is not running and `start_command` is configured, offer to start it
+4. Generate test scenarios from the task's acceptance criteria and parent PRD
+5. Execute browser tests via Playwright MCP (if available and mode includes frontend)
+6. Execute API tests via Bash/curl (if mode includes backend)
+7. Collect results
+
+### Step RT-4: Evaluate Results
+
+**If all runtime tests pass:**
+- Log: "Runtime tests passed ({passed}/{total})"
+- Add to evidence: include test result summary
+- Proceed to the next section
+
+**If any runtime tests fail:**
+- Display the failure report with screenshots (browser) and response bodies (API)
+- **BLOCK**: Do NOT proceed to task completion
+- Display message: "Runtime tests failed. Fix the issues and re-run /sdlc:task-complete"
+- Log correction: `mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='testing', description='Runtime test failure: {summary of failures}')`
+- Use `AskUserQuestion` to offer options:
+  - "Fix and retry" — Stop here, let user fix issues, then re-run task-complete
+  - "Skip runtime tests" — Proceed without runtime validation (logs a warning)
+  - "View details" — Show full test output before deciding
+
+**If app is not reachable and no start_command configured:**
+- Display warning: "Runtime testing configured but app is not reachable at {app_url}. Skipping runtime tests."
+- Proceed to the next section (do not block)
+
 ## Log Corrections
 
 After Phase 4 (Evidence-Based Completion) confirms the task, or after the Legacy DoD Checklist, log any additional corrections or fixes made during this task's implementation that were not already logged by Phase 3 (Step 14).

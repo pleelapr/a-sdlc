@@ -1,6 +1,5 @@
 """Tests for task generation from PRD."""
 
-import pytest
 
 from a_sdlc.artifacts.task_generator import (
     extract_affected_components,

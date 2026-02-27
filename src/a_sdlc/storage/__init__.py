@@ -71,8 +71,8 @@ class HybridStorage:
         """
         if base_path is not None:
             # Create custom instances for test isolation
-            Database = _get_database_class()
-            ContentManager = _get_content_manager_class()
+            Database = _get_database_class()  # noqa: N806
+            ContentManager = _get_content_manager_class()  # noqa: N806
             self._base_path = Path(base_path)
             self._base_path.mkdir(parents=True, exist_ok=True)
             self._db = Database(db_path=self._base_path / "data.db")
@@ -83,6 +83,16 @@ class HybridStorage:
             self._base_path = get_data_dir()
             self._db = db or _get_db_instance()
             self._content_mgr = content_mgr or _get_content_manager_instance()
+
+    @property
+    def db(self):
+        """Get the underlying Database instance."""
+        return self._db
+
+    @property
+    def content_mgr(self):
+        """Get the underlying ContentManager instance."""
+        return self._content_mgr
 
     @property
     def base_path(self) -> Path:

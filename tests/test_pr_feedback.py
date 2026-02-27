@@ -1,14 +1,12 @@
 """Tests for GitHub PR feedback MCP tools (configure_github, get_pr_feedback)."""
 
-import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -865,6 +863,7 @@ class TestConnectGitHubCLI:
     def test_connect_github_global(self, mock_gh_client, tmp_config_dir):
         """--global flag stores token in YAML config."""
         from click.testing import CliRunner
+
         from a_sdlc.cli import main
 
         mock_instance = MagicMock()
@@ -886,6 +885,7 @@ class TestConnectGitHubCLI:
     def test_connect_github_project_level(self, mock_gh_client, mock_project_dir):
         """Without --global, stores in project DB."""
         from click.testing import CliRunner
+
         from a_sdlc.cli import main
 
         mock_instance = MagicMock()
@@ -910,6 +910,7 @@ class TestConnectGitHubCLI:
     def test_connect_github_invalid_token(self, mock_gh_client):
         """Invalid token shows error and exits 1."""
         from click.testing import CliRunner
+
         from a_sdlc.cli import main
 
         mock_instance = MagicMock()
@@ -925,6 +926,7 @@ class TestConnectGitHubCLI:
     def test_connect_github_no_project(self, mock_project_dir):
         """Without --global and no project, shows hint to use --global."""
         from click.testing import CliRunner
+
         from a_sdlc.cli import main
 
         mock_gh_client_cls = MagicMock()
@@ -951,6 +953,7 @@ class TestDisconnectGitHubCLI:
     def test_disconnect_github_project(self, mock_project_dir):
         """disconnect github removes from project DB."""
         from click.testing import CliRunner
+
         from a_sdlc.cli import main
 
         mock_storage = MagicMock()
@@ -969,6 +972,7 @@ class TestDisconnectGitHubCLI:
     def test_disconnect_github_global(self, tmp_config_dir):
         """disconnect github --global removes from YAML."""
         from click.testing import CliRunner
+
         from a_sdlc.cli import main
 
         config_path = tmp_config_dir / "config.yaml"

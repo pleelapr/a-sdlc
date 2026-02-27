@@ -449,8 +449,8 @@ def check_services_health() -> dict[str, bool | str]:
     Returns:
         Dict with health status for Langfuse and SigNoz.
     """
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     results: dict[str, bool | str] = {}
 

@@ -14,10 +14,11 @@ import platform
 import re
 import shutil
 import sqlite3
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 # Schema version for fresh start (hybrid storage with file_path design)
 # Version 2: Added shortname column to projects table
@@ -873,7 +874,7 @@ class Database:
                 # Preserve all prior, set completed_at
                 kwargs.setdefault("completed_at", now)
 
-        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [prd_id]
 
         with self.connection() as conn:
@@ -1046,7 +1047,7 @@ class Database:
                 # Keep started_at but clear completed_at
                 kwargs.setdefault("completed_at", None)
 
-        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [task_id]
 
         with self.connection() as conn:
@@ -1163,7 +1164,7 @@ class Database:
                 kwargs.setdefault("started_at", None)
                 kwargs.setdefault("completed_at", None)
 
-        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [sprint_id]
 
         with self.connection() as conn:
@@ -1327,7 +1328,7 @@ class Database:
 
         kwargs["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [design_id]
 
         with self.connection() as conn:
@@ -1602,7 +1603,7 @@ class Database:
             return self.get_sync_mapping(entity_type, local_id, external_system)
 
         kwargs["last_synced"] = datetime.now(timezone.utc).isoformat()
-        fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+        fields = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [entity_type, local_id, external_system]
 
         with self.connection() as conn:

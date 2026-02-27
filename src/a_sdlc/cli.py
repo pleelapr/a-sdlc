@@ -34,13 +34,14 @@ from a_sdlc.mcp_setup import (
     verify_setup,
 )
 from a_sdlc.monitoring_setup import (
+    MONITORING_DIR,
     check_docker_available,
+    check_services_health,
     configure_langfuse_keys,
     setup_monitoring,
     verify_monitoring_setup,
-    check_services_health,
-    MONITORING_DIR,
 )
+from a_sdlc.plugins import get_plugin_manager
 from a_sdlc.sonarqube_setup import (
     check_scanner_available,
     generate_code_quality_artifact,
@@ -48,7 +49,6 @@ from a_sdlc.sonarqube_setup import (
     setup_sonarqube,
     verify_sonarqube_setup,
 )
-from a_sdlc.plugins import get_plugin_manager
 
 console = Console()
 
@@ -136,11 +136,16 @@ def serve(transport: str, host: str, port: int) -> None:
     help="Set up SonarQube code analysis integration"
 )
 @click.option(
+    "--with-playwright",
+    is_flag=True,
+    help="Set up Playwright MCP for runtime testing",
+)
+@click.option(
     "--upgrade",
     is_flag=True,
     help="Force-refresh templates, migrate DB, update MCP config"
 )
-def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool, with_sonarqube: bool, upgrade: bool) -> None:
+def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool, with_sonarqube: bool, with_playwright: bool, upgrade: bool) -> None:
     """Deploy skill templates to Claude Code.
 
     Installs the /sdlc:* commands into your Claude Code configuration,
@@ -210,6 +215,11 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
             console.print()
             _setup_sonarqube_interactive(force=force)
 
+        # Set up Playwright if requested
+        if with_playwright:
+            console.print()
+            _setup_playwright_mcp(force=force)
+
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")
         sys.exit(1)
@@ -240,7 +250,7 @@ def _run_upgrade(installer: Installer) -> None:
 
     # 3. Trigger DB migration check (Database.__init__ runs auto-migration with backup)
     try:
-        db = Database()
+        Database()
         db_status = f"schema v{SCHEMA_VERSION} (current)"
     except RuntimeError as e:
         console.print(f"[red]Database migration failed: {e}[/red]")
@@ -263,6 +273,32 @@ def _run_upgrade(installer: Installer) -> None:
         title="[bold]Upgrade Summary[/bold]",
         border_style="green"
     ))
+
+
+def _setup_playwright_mcp(force: bool = False) -> None:
+    """Set up Playwright MCP server for runtime testing."""
+    from a_sdlc.playwright_setup import setup_playwright
+
+    console.print("[bold cyan]Setting up Playwright MCP...[/bold cyan]")
+    console.print()
+
+    success, message, verification = setup_playwright(force=force)
+
+    if success:
+        console.print(Panel(
+            f"[green]{message}[/green]\n\n"
+            "[bold]Playwright MCP is ready![/bold]\n\n"
+            "Restart Claude Code to activate runtime testing.",
+            title="[bold green]Playwright Setup Complete[/bold green]",
+            border_style="green",
+        ))
+    else:
+        console.print(Panel(
+            f"[red]{message}[/red]\n\n"
+            "[dim]Fix: Ensure Node.js and npx are installed[/dim]",
+            title="[bold red]Playwright Setup Failed[/bold red]",
+            border_style="red",
+        ))
 
 
 @main.command()
@@ -558,12 +594,12 @@ def _setup_monitoring(force: bool = False) -> bool:
 
         console.print()
         console.print("[bold]Next steps:[/bold]")
-        console.print(f"  1. Start services:   [cyan]a-sdlc monitoring start[/cyan]")
-        console.print(f"  2. Open Langfuse:    [cyan]http://localhost:13000[/cyan]")
-        console.print(f"     Login:            admin@langfuse.local / changeme123")
-        console.print(f"     Go to Settings > API Keys > Create")
-        console.print(f"  3. Configure keys:   [cyan]a-sdlc monitoring configure[/cyan]")
-        console.print(f"  4. Restart Claude Code")
+        console.print("  1. Start services:   [cyan]a-sdlc monitoring start[/cyan]")
+        console.print("  2. Open Langfuse:    [cyan]http://localhost:13000[/cyan]")
+        console.print("     Login:            admin@langfuse.local / changeme123")
+        console.print("     Go to Settings > API Keys > Create")
+        console.print("  3. Configure keys:   [cyan]a-sdlc monitoring configure[/cyan]")
+        console.print("  4. Restart Claude Code")
 
         return True
     else:
@@ -1233,7 +1269,7 @@ def doctor() -> None:
     checks.append({
         "name": "uv/uvx",
         "status": "pass" if uv_ok else "fail",
-        "detail": uv_msg if uv_ok else f"Not found. Fix: install from https://docs.astral.sh/uv/"
+        "detail": uv_msg if uv_ok else "Not found. Fix: install from https://docs.astral.sh/uv/"
     })
 
     # Claude Code config directory
@@ -1382,9 +1418,33 @@ def doctor() -> None:
         "detail": sq_detail
     })
 
+    # Playwright MCP check
+    from a_sdlc.playwright_setup import verify_setup as verify_playwright_setup
+
+    pw_verification = verify_playwright_setup()
+    pw_ready = pw_verification.get("ready", False)
+    pw_configured = pw_verification.get("configured_in_settings", False)
+
+    if pw_ready:
+        pw_detail = "Configured (npx available)"
+        pw_status = "pass"
+    elif pw_configured:
+        pw_detail = "Configured but npx not found. Fix: install Node.js"
+        pw_status = "warn"
+    else:
+        pw_detail = "Not configured. Fix: run a-sdlc install --with-playwright"
+        pw_status = "warn"
+
+    checks.append({
+        "name": "Playwright MCP",
+        "status": pw_status,
+        "detail": pw_detail,
+    })
+
     # Database accessibility check
-    from a_sdlc.core.database import Database, SCHEMA_VERSION
     import sqlite3
+
+    from a_sdlc.core.database import SCHEMA_VERSION, Database
     db = None  # type: ignore[assignment]
     try:
         db = Database()
@@ -1766,8 +1826,8 @@ def artifacts_status() -> None:
 
     Compares local artifacts with Confluence to show what needs syncing.
     """
-    from a_sdlc.artifacts.local import LocalArtifactPlugin
     from a_sdlc.artifacts.base import Artifact
+    from a_sdlc.artifacts.local import LocalArtifactPlugin
 
     artifacts_dir = Path.cwd() / ".sdlc" / "artifacts"
 
@@ -2508,7 +2568,7 @@ def prd_update(
         if section not in sections:
             console.print(f"[red]Section not found: {section}[/red]")
             console.print("\n[dim]Available sections:[/dim]")
-            for s in sections.keys():
+            for s in sections:
                 console.print(f"  - {s}")
             sys.exit(1)
         sections_to_update = {section: sections[section]}
@@ -2535,7 +2595,7 @@ def prd_update(
 
         for section_name, content in sections_to_update.items():
             console.print(f"[bold cyan]━━━ Section: {section_name} ━━━[/bold cyan]")
-            console.print(f"\n[dim]Current content:[/dim]")
+            console.print("\n[dim]Current content:[/dim]")
             # Show first 200 chars
             preview = content[:200] + ("..." if len(content) > 200 else "")
             console.print(preview)
@@ -2589,7 +2649,7 @@ def prd_update(
         else:
             suggested = "patch"
 
-        console.print(f"\n[bold]🔢 Version Bump[/bold]")
+        console.print("\n[bold]🔢 Version Bump[/bold]")
         console.print(f"Current: {old_version}")
         console.print(f"Suggested: {suggested.upper()} → {bump_version(old_version, suggested)}")
 
@@ -2627,13 +2687,13 @@ def prd_update(
 
     # Display summary
     console.print(f"\n[green]✅ PRD updated: .sdlc/prds/{prd_id}.md[/green]")
-    console.print(f"\n[bold]📊 Changes:[/bold]")
+    console.print("\n[bold]📊 Changes:[/bold]")
     console.print(f"  - Version: {old_version} → {prd_obj.version}")
     if not fix:
         console.print(f"  - Sections modified: {len(sections_modified)}")
     console.print(f"  - Change type: {bump_type.title()}")
 
-    console.print(f"\n[bold]🔗 Next steps:[/bold]")
+    console.print("\n[bold]🔗 Next steps:[/bold]")
     console.print(f"  - View: [cyan]a-sdlc prd show {prd_id}[/cyan]")
 
     # Optional Confluence push
@@ -2642,7 +2702,7 @@ def prd_update(
             apm = get_artifact_plugin_manager()
             confluence = apm.get_plugin("confluence")
 
-            console.print(f"\n[cyan]Pushing to Confluence...[/cyan]")
+            console.print("\n[cyan]Pushing to Confluence...[/cyan]")
             page_id = confluence.push_prd(prd_obj)
 
             local.update_external_link(
@@ -2808,14 +2868,14 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
         _sync_tasks_to_external(pm, tasks, saved_ids)
 
     # Display summary
-    console.print(f"\n[bold green]✅ Task splitting complete[/bold green]")
-    console.print(f"\n[bold]📊 Summary:[/bold]")
+    console.print("\n[bold green]✅ Task splitting complete[/bold green]")
+    console.print("\n[bold]📊 Summary:[/bold]")
     console.print(f"  - PRD: {prd_id}")
     console.print(f"  - Tasks created: {len(tasks)}")
-    components = set(t.component for t in tasks if t.component)
+    components = {t.component for t in tasks if t.component}
     console.print(f"  - Components: {len(components)}")
-    console.print(f"\n[bold]🔗 Next steps:[/bold]")
-    console.print(f"  - View tasks: [cyan]a-sdlc task list[/cyan]")
+    console.print("\n[bold]🔗 Next steps:[/bold]")
+    console.print("  - View tasks: [cyan]a-sdlc task list[/cyan]")
     if saved_ids:
         console.print(f"  - Start work: [cyan]a-sdlc task start {saved_ids[0]}[/cyan]")
 
@@ -2926,7 +2986,6 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
 
     try:
         if provider == "jira":
-            from a_sdlc.plugins.jira import JiraPlugin
 
             plugin = pm.get_plugin("jira")
 
@@ -2936,7 +2995,7 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
                 external_id = plugin.create_task(task)
                 console.print(f"  ✓ {task.id} → {external_id}")
 
-            console.print(f"[green]✓ All tasks synced to Jira[/green]")
+            console.print("[green]✓ All tasks synced to Jira[/green]")
 
         elif provider == "linear":
             console.print("[yellow]Linear sync not yet implemented[/yellow]")
@@ -2945,7 +3004,7 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
     except Exception as e:
         console.print(f"[red]Sync failed: {e}[/red]")
         console.print("Tasks saved locally. Sync manually with:")
-        console.print(f"  [cyan]a-sdlc task sync[/cyan]")
+        console.print("  [cyan]a-sdlc task sync[/cyan]")
 
 
 # =============================================================================
@@ -3140,7 +3199,7 @@ def ui_stop() -> None:
         a-sdlc ui stop
     """
     try:
-        from a_sdlc.ui import stop_server, PID_FILE
+        from a_sdlc.ui import PID_FILE, stop_server
     except ImportError:
         console.print("[red]Web UI dependencies not installed.[/red]")
         console.print("Install with: [cyan]pip install 'a-sdlc[ui]'[/cyan]")
@@ -3402,15 +3461,14 @@ def disconnect(system: str, yes: bool, remove_global: bool) -> None:
     """
     if remove_global:
         if system != "github":
-            console.print(f"[yellow]--global flag is only supported for github.[/yellow]")
+            console.print("[yellow]--global flag is only supported for github.[/yellow]")
             sys.exit(1)
 
         from a_sdlc.server.github import delete_global_github_config
 
-        if not yes:
-            if not click.confirm("Remove global GitHub configuration?"):
-                console.print("Aborted.")
-                return
+        if not yes and not click.confirm("Remove global GitHub configuration?"):
+            console.print("Aborted.")
+            return
 
         if delete_global_github_config():
             console.print("[green]✓ Global GitHub integration removed[/green]")
@@ -3434,10 +3492,9 @@ def disconnect(system: str, yes: bool, remove_global: bool) -> None:
         console.print(f"[yellow]{system.title()} integration not configured.[/yellow]")
         return
 
-    if not yes:
-        if not click.confirm(f"Remove {system.title()} integration from {project['name']}?"):
-            console.print("Aborted.")
-            return
+    if not yes and not click.confirm(f"Remove {system.title()} integration from {project['name']}?"):
+        console.print("Aborted.")
+        return
 
     storage.delete_external_config(project["id"], system)
     console.print(f"[green]✓ {system.title()} integration removed from {project['name']}[/green]")
@@ -3586,8 +3643,8 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
       a-sdlc sync jira pull --sprint 456               # Pull specific sprint
       a-sdlc sync jira pull --sprint 456 --dry-run     # Preview import
     """
-    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService, JiraClient
+    from a_sdlc.storage import get_storage
 
     storage = get_storage()
     cwd = str(Path.cwd())
@@ -3606,7 +3663,7 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
 
     cfg = config["config"]
     client = JiraClient(cfg["base_url"], cfg["email"], cfg["api_token"], cfg["project_key"])
-    sync_service = ExternalSyncService(db)
+    sync_service = ExternalSyncService(storage.db, storage.content_mgr)
 
     # If sprint_id is provided, import specific sprint
     if sprint_id:
@@ -3692,7 +3749,7 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
         console.print()
         console.print("To import:")
         console.print(f"  [cyan]a-sdlc sync jira pull --board {board_id} --active[/cyan]  # Active sprint")
-        console.print(f"  [cyan]a-sdlc sync jira pull --sprint <ID>[/cyan]               # Specific sprint")
+        console.print("  [cyan]a-sdlc sync jira pull --sprint <ID>[/cyan]               # Specific sprint")
 
     except Exception as e:
         console.print(f"[red]Failed to list sprints: {e}[/red]")
@@ -3713,8 +3770,8 @@ def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
       a-sdlc sync jira push SPRINT-01
       a-sdlc sync jira push SPRINT-01 --dry-run
     """
-    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService
+    from a_sdlc.storage import get_storage
 
     storage = get_storage()
     cwd = str(Path.cwd())
@@ -3747,7 +3804,7 @@ def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
         return
 
     try:
-        sync_service = ExternalSyncService(db)
+        sync_service = ExternalSyncService(storage.db, storage.content_mgr)
         result = sync_service.sync_sprint_to_jira(project["id"], sprint_id)
 
         console.print(f"[green]✓ Pushed to Jira sprint {result['jira_sprint_id']}[/green]")
@@ -3884,8 +3941,8 @@ def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run
       a-sdlc sync linear pull --cycle <id>             # Pull specific cycle
       a-sdlc sync linear pull --cycle <id> --dry-run   # Preview import
     """
-    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService, LinearClient
+    from a_sdlc.storage import get_storage
 
     storage = get_storage()
     cwd = str(Path.cwd())
@@ -3905,7 +3962,7 @@ def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run
     cfg = config["config"]
     effective_team_id = team_id or cfg["team_id"]
     client = LinearClient(cfg["api_key"], effective_team_id)
-    sync_service = ExternalSyncService(db)
+    sync_service = ExternalSyncService(storage.db, storage.content_mgr)
 
     # If cycle_id is provided, import specific cycle
     if cycle_id:
@@ -4002,8 +4059,8 @@ def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
       a-sdlc sync linear push SPRINT-01
       a-sdlc sync linear push SPRINT-01 --dry-run
     """
-    from a_sdlc.storage import get_storage
     from a_sdlc.server.sync import ExternalSyncService
+    from a_sdlc.storage import get_storage
 
     storage = get_storage()
     cwd = str(Path.cwd())
@@ -4036,7 +4093,7 @@ def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
         return
 
     try:
-        sync_service = ExternalSyncService(db)
+        sync_service = ExternalSyncService(storage.db, storage.content_mgr)
         result = sync_service.sync_sprint_to_linear(project["id"], sprint_id)
 
         console.print(f"[green]✓ Pushed to Linear cycle {result['cycle_id'][:12]}...[/green]")

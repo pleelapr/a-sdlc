@@ -1,24 +1,21 @@
 """Tests for uninstall module."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from a_sdlc.uninstall import (
-    ALL_MANAGED_ENV_KEYS,
     UninstallPlan,
     UninstallResult,
-    build_uninstall_plan,
-    execute_uninstall,
     _remove_asdlc_mcp,
     _remove_data_dir,
     _remove_monitoring,
     _remove_settings_entries,
     _remove_skill_templates,
+    build_uninstall_plan,
+    execute_uninstall,
 )
-
 
 # ---------------------------------------------------------------------------
 # UninstallPlan / UninstallResult dataclasses
@@ -74,7 +71,7 @@ def test_build_plan_empty_system(tmp_path):
             "a_sdlc.uninstall.CLAUDE_SETTINGS_PATH",
             tmp_path / "nonexistent-settings.json",
         ),
-        patch("a_sdlc.uninstall.Installer") as MockInstaller,
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "monitoring"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
     ):
@@ -132,7 +129,7 @@ def test_build_plan_full_system(tmp_path):
         patch("a_sdlc.uninstall.get_claude_settings_path", return_value=claude_json),
         patch("a_sdlc.uninstall.CLAUDE_SETTINGS_PATH", settings_json),
         patch("a_sdlc.uninstall.load_claude_settings") as mock_load,
-        patch("a_sdlc.uninstall.Installer") as MockInstaller,
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", monitoring_dir),
         patch("a_sdlc.core.database.get_data_dir", return_value=data_dir),
     ):
@@ -161,7 +158,7 @@ def test_build_plan_malformed_claude_json(tmp_path):
     with (
         patch("a_sdlc.uninstall.get_claude_settings_path", return_value=claude_json),
         patch("a_sdlc.uninstall.CLAUDE_SETTINGS_PATH", tmp_path / "none.json"),
-        patch("a_sdlc.uninstall.Installer") as MockInstaller,
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
     ):
@@ -411,7 +408,7 @@ def test_remove_skill_templates(tmp_path):
     )
     result = UninstallResult()
 
-    with patch("a_sdlc.uninstall.Installer") as MockInstaller:
+    with patch("a_sdlc.uninstall.Installer") as MockInstaller:  # noqa: N806
         MockInstaller.return_value.uninstall.return_value = 5
         _remove_skill_templates(plan, result)
 
@@ -435,7 +432,7 @@ def test_remove_skill_templates_error():
     )
     result = UninstallResult()
 
-    with patch("a_sdlc.uninstall.Installer") as MockInstaller:
+    with patch("a_sdlc.uninstall.Installer") as MockInstaller:  # noqa: N806
         MockInstaller.return_value.uninstall.side_effect = OSError("perm denied")
         _remove_skill_templates(plan, result)
 
@@ -566,9 +563,6 @@ def test_remove_data_dir_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-import subprocess
-
-
 def test_execute_uninstall_full(tmp_path):
     """Full uninstall with all components."""
     # Set up claude.json
@@ -621,7 +615,7 @@ def test_execute_uninstall_full(tmp_path):
         patch("a_sdlc.uninstall.get_claude_settings_path", return_value=claude_json),
         patch("a_sdlc.uninstall.load_claude_settings", return_value=settings),
         patch("a_sdlc.uninstall.save_claude_settings", side_effect=mock_save),
-        patch("a_sdlc.uninstall.Installer") as MockInstaller,
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", monitoring_dir),
         patch("a_sdlc.uninstall.shutil.which", return_value=None),
     ):
@@ -649,7 +643,7 @@ def test_execute_uninstall_no_data():
         patch("a_sdlc.uninstall._remove_monitoring"),
         patch("a_sdlc.uninstall._remove_data_dir") as mock_remove_data,
     ):
-        result = execute_uninstall(plan)
+        execute_uninstall(plan)
         mock_remove_data.assert_not_called()
 
 

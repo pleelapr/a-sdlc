@@ -1,5 +1,6 @@
 """Tests for design document system -- database and content layers."""
 
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -206,7 +207,7 @@ class TestDesignDatabase:
             file_path="/tmp/test/designs/TEST-P0001.md",
         )
         # Second design for same PRD should raise due to UNIQUE constraint
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.IntegrityError):
             temp_db.create_design(
                 design_id="design-2",
                 prd_id="TEST-P0001",

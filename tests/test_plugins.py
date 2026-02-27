@@ -1,11 +1,11 @@
 """Tests for plugin system."""
 
-import pytest
-from pathlib import Path
 import tempfile
-import json
+from pathlib import Path
 
-from a_sdlc.plugins.base import Task, TaskStatus, TaskPriority
+import pytest
+
+from a_sdlc.plugins.base import Task, TaskPriority, TaskStatus
 from a_sdlc.plugins.local import LocalPlugin
 
 

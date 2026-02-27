@@ -5,8 +5,6 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from a_sdlc.monitoring_setup import (
     HOOK_COMMAND,
     OTEL_ENV_VARS,
@@ -24,7 +22,6 @@ from a_sdlc.monitoring_setup import (
     update_settings_hooks,
     verify_monitoring_setup,
 )
-
 
 # ---------------------------------------------------------------------------
 # Prerequisites
@@ -267,7 +264,7 @@ def test_hook_already_registered_other_hooks():
 
 def test_update_settings_hooks_empty(tmp_path: Path):
     """Adds hook to empty settings."""
-    settings_file = tmp_path / ".claude" / "settings.json"
+    tmp_path / ".claude" / "settings.json"
 
     with patch("a_sdlc.monitoring_setup.load_claude_settings", return_value={}):
         saved = {}
@@ -328,13 +325,15 @@ def test_update_settings_hooks_skip_duplicate(tmp_path: Path):
         }
     }
 
-    with patch("a_sdlc.monitoring_setup.load_claude_settings", return_value=existing):
-        with patch("a_sdlc.monitoring_setup.save_claude_settings") as mock_save:
-            success, msg = update_settings_hooks(force=False)
+    with (
+        patch("a_sdlc.monitoring_setup.load_claude_settings", return_value=existing),
+        patch("a_sdlc.monitoring_setup.save_claude_settings") as mock_save,
+    ):
+        success, msg = update_settings_hooks(force=False)
 
-            assert success is True
-            assert "already registered" in msg
-            mock_save.assert_not_called()
+        assert success is True
+        assert "already registered" in msg
+        mock_save.assert_not_called()
 
 
 def test_update_settings_hooks_force_replaces(tmp_path: Path):
@@ -441,13 +440,15 @@ def test_update_settings_environment_already_configured():
     """All OTEL vars already set returns 'already configured'."""
     existing = {"environment": dict(OTEL_ENV_VARS)}
 
-    with patch("a_sdlc.monitoring_setup.load_claude_settings", return_value=existing):
-        with patch("a_sdlc.monitoring_setup.save_claude_settings") as mock_save:
-            success, msg = update_settings_environment(force=False)
+    with (
+        patch("a_sdlc.monitoring_setup.load_claude_settings", return_value=existing),
+        patch("a_sdlc.monitoring_setup.save_claude_settings") as mock_save,
+    ):
+        success, msg = update_settings_environment(force=False)
 
-            assert success is True
-            assert "already configured" in msg
-            mock_save.assert_not_called()
+        assert success is True
+        assert "already configured" in msg
+        mock_save.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -951,10 +952,9 @@ def test_hook_turn_grouping_basic(tmp_path: Path):
             "tool_results_count": len(tool_results),
         })
 
-    with patch.object(mod, "create_trace", mock_create_trace):
-        with patch.object(mod, "save_state"):
-            state = {}
-            turns = mod.process_transcript(None, "session-1", str(transcript), state)
+    with patch.object(mod, "create_trace", mock_create_trace), patch.object(mod, "save_state"):
+        state = {}
+        turns = mod.process_transcript(None, "session-1", str(transcript), state)
 
     assert turns == 1
     assert len(traces_created) == 1
@@ -981,10 +981,9 @@ def test_hook_turn_grouping_multiple_turns(tmp_path: Path):
     def mock_create_trace(langfuse, session_id, turn_num, user_msg, assistant_msgs, tool_results):
         traces_created.append({"turn_num": turn_num})
 
-    with patch.object(mod, "create_trace", mock_create_trace):
-        with patch.object(mod, "save_state"):
-            state = {}
-            turns = mod.process_transcript(None, "session-1", str(transcript), state)
+    with patch.object(mod, "create_trace", mock_create_trace), patch.object(mod, "save_state"):
+        state = {}
+        turns = mod.process_transcript(None, "session-1", str(transcript), state)
 
     assert turns == 2
     assert traces_created[0]["turn_num"] == 1
@@ -1020,10 +1019,9 @@ def test_hook_turn_grouping_tool_results_stay_with_turn(tmp_path: Path):
             "assistant_count": len(assistant_msgs),
         })
 
-    with patch.object(mod, "create_trace", mock_create_trace):
-        with patch.object(mod, "save_state"):
-            state = {}
-            turns = mod.process_transcript(None, "session-1", str(transcript), state)
+    with patch.object(mod, "create_trace", mock_create_trace), patch.object(mod, "save_state"):
+        state = {}
+        turns = mod.process_transcript(None, "session-1", str(transcript), state)
 
     assert turns == 2
     # First turn has tool results
@@ -1050,10 +1048,9 @@ def test_hook_turn_grouping_assistant_merging(tmp_path: Path):
     def mock_create_trace(langfuse, session_id, turn_num, user_msg, assistant_msgs, tool_results):
         traces_created.append({"assistant_count": len(assistant_msgs)})
 
-    with patch.object(mod, "create_trace", mock_create_trace):
-        with patch.object(mod, "save_state"):
-            state = {}
-            turns = mod.process_transcript(None, "session-1", str(transcript), state)
+    with patch.object(mod, "create_trace", mock_create_trace), patch.object(mod, "save_state"):
+        state = {}
+        turns = mod.process_transcript(None, "session-1", str(transcript), state)
 
     assert turns == 1
     # Two parts with same ID merged into one assistant message
@@ -1079,10 +1076,9 @@ def test_hook_turn_grouping_incremental(tmp_path: Path):
         traces_created.append({"turn_num": turn_num})
 
     # Simulate already processed first 2 lines
-    with patch.object(mod, "create_trace", mock_create_trace):
-        with patch.object(mod, "save_state"):
-            state = {"session-1": {"last_line": 2, "turn_count": 1}}
-            turns = mod.process_transcript(None, "session-1", str(transcript), state)
+    with patch.object(mod, "create_trace", mock_create_trace), patch.object(mod, "save_state"):
+        state = {"session-1": {"last_line": 2, "turn_count": 1}}
+        turns = mod.process_transcript(None, "session-1", str(transcript), state)
 
     assert turns == 1
     # Turn number continues from previous state

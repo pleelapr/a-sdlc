@@ -5,12 +5,10 @@ These tests have been updated to work with file-based storage instead of SQLite.
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
-
-from a_sdlc.cli import main
 
 
 @pytest.fixture
@@ -290,8 +288,8 @@ class TestExternalSyncService:
 
     def test_sync_service_initialization(self, temp_storage):
         """Test sync service can be initialized."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -302,8 +300,8 @@ class TestExternalSyncService:
 
     def test_link_sprint(self, temp_storage):
         """Test linking a sprint to an external system."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -325,8 +323,8 @@ class TestExternalSyncService:
 
     def test_unlink_sprint(self, temp_storage):
         """Test unlinking a sprint from external system."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -357,8 +355,8 @@ class TestDuplicateSprintDetection:
 
     def test_check_existing_sprint_mapping_finds_duplicate(self, temp_storage):
         """Test that _check_existing_sprint_mapping detects existing mappings."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -382,8 +380,8 @@ class TestDuplicateSprintDetection:
 
     def test_check_existing_sprint_mapping_returns_none_when_no_mapping(self, temp_storage):
         """Test that _check_existing_sprint_mapping returns None when no mapping exists."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -399,8 +397,8 @@ class TestDuplicateSprintDetection:
 
     def test_orphaned_mapping_is_cleaned_up(self, temp_storage):
         """Test that orphaned mappings (sprint deleted but mapping remains) are cleaned up."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -424,8 +422,8 @@ class TestDuplicateSprintDetection:
 
     def test_linear_import_returns_already_exists(self, temp_storage):
         """Test that import_linear_cycle returns already_exists status for duplicates."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -449,8 +447,8 @@ class TestDuplicateSprintDetection:
 
     def test_jira_import_returns_already_exists(self, temp_storage):
         """Test that import_jira_sprint returns already_exists status for duplicates."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -479,8 +477,8 @@ class TestDuplicateSprintDetection:
 
     def test_different_external_id_allows_new_import(self, temp_storage):
         """Test that a different external_id allows a new import."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
         from a_sdlc.server.sync import ExternalSyncService
 
         db = Database(db_path=temp_storage / "data.db")
@@ -506,8 +504,8 @@ class TestDeleteSyncMappingCleanup:
 
     def test_delete_prd_cleans_up_sync_mappings(self, temp_storage):
         """Test that deleting a PRD removes its sync mappings."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
 
         db = Database(db_path=temp_storage / "data.db")
         content_mgr = ContentManager(base_path=temp_storage / "content")
@@ -535,7 +533,6 @@ class TestDeleteSyncMappingCleanup:
 
         # Delete PRD using the server function
         from a_sdlc.server import delete_prd
-        from unittest.mock import patch
 
         with patch("a_sdlc.server.get_db", return_value=db), \
              patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
@@ -549,8 +546,8 @@ class TestDeleteSyncMappingCleanup:
 
     def test_delete_task_cleans_up_sync_mappings(self, temp_storage):
         """Test that deleting a task removes its sync mappings."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
 
         db = Database(db_path=temp_storage / "data.db")
         content_mgr = ContentManager(base_path=temp_storage / "content")
@@ -578,7 +575,6 @@ class TestDeleteSyncMappingCleanup:
 
         # Delete task using the server function
         from a_sdlc.server import delete_task
-        from unittest.mock import patch
 
         with patch("a_sdlc.server.get_db", return_value=db), \
              patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
@@ -592,8 +588,8 @@ class TestDeleteSyncMappingCleanup:
 
     def test_delete_sprint_cleans_up_sync_mappings(self, temp_storage):
         """Test that deleting a sprint removes its sync mappings (existing behavior)."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
 
         db = Database(db_path=temp_storage / "data.db")
         content_mgr = ContentManager(base_path=temp_storage / "content")
@@ -615,7 +611,6 @@ class TestDeleteSyncMappingCleanup:
 
         # Delete sprint using the server function
         from a_sdlc.server import delete_sprint
-        from unittest.mock import patch
 
         with patch("a_sdlc.server.get_db", return_value=db), \
              patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
@@ -629,8 +624,8 @@ class TestDeleteSyncMappingCleanup:
 
     def test_delete_prd_without_sync_mappings_succeeds(self, temp_storage):
         """Test that deleting a PRD without sync mappings still works."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
 
         db = Database(db_path=temp_storage / "data.db")
         content_mgr = ContentManager(base_path=temp_storage / "content")
@@ -650,7 +645,6 @@ class TestDeleteSyncMappingCleanup:
 
         # Delete PRD (should not error even without mappings)
         from a_sdlc.server import delete_prd
-        from unittest.mock import patch
 
         with patch("a_sdlc.server.get_db", return_value=db), \
              patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
@@ -660,8 +654,8 @@ class TestDeleteSyncMappingCleanup:
 
     def test_delete_task_without_sync_mappings_succeeds(self, temp_storage):
         """Test that deleting a task without sync mappings still works."""
-        from a_sdlc.core.database import Database
         from a_sdlc.core.content import ContentManager
+        from a_sdlc.core.database import Database
 
         db = Database(db_path=temp_storage / "data.db")
         content_mgr = ContentManager(base_path=temp_storage / "content")
@@ -681,7 +675,6 @@ class TestDeleteSyncMappingCleanup:
 
         # Delete task (should not error even without mappings)
         from a_sdlc.server import delete_task
-        from unittest.mock import patch
 
         with patch("a_sdlc.server.get_db", return_value=db), \
              patch("a_sdlc.server.get_content_manager", return_value=content_mgr):

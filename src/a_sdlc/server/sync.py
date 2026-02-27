@@ -5,12 +5,13 @@ Handles synchronization between local hybrid storage (SQLite + markdown files)
 and external systems like Linear and Jira.
 """
 
+import contextlib
 from typing import Any
 
 import httpx
 
-from a_sdlc.core.database import Database
 from a_sdlc.core.content import ContentManager
+from a_sdlc.core.database import Database
 
 
 class LinearClient:
@@ -470,15 +471,13 @@ class JiraClient:
 
         issue = self._post("/issue", {"fields": fields})
 
-        # Add to sprint if specified (requires separate call)
+        # Add to sprint if specified (requires separate call; assignment is optional)
         if sprint_id and issue.get("key"):
-            try:
+            with contextlib.suppress(Exception):
                 self._client.post(
                     f"{self.base_url}/rest/agile/1.0/sprint/{sprint_id}/issue",
                     json={"issues": [issue["key"]]},
                 )
-            except Exception:
-                pass  # Sprint assignment is optional
 
         return issue
 

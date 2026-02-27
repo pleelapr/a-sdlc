@@ -141,9 +141,8 @@ class LocalArtifactPlugin(ArtifactPlugin):
             artifact_id = md_file.stem
             artifact = self.get_artifact(artifact_id)
 
-            if artifact is not None:
-                if artifact_type is None or artifact.artifact_type == artifact_type:
-                    artifacts.append(artifact)
+            if artifact is not None and (artifact_type is None or artifact.artifact_type == artifact_type):
+                artifacts.append(artifact)
 
         return sorted(artifacts, key=lambda a: a.id)
 

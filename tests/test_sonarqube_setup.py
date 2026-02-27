@@ -1,11 +1,7 @@
 """Tests for SonarQube setup module."""
 
 import json
-import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from a_sdlc.sonarqube_setup import (
     DEFAULT_FIX_SEVERITIES,
@@ -25,7 +21,6 @@ from a_sdlc.sonarqube_setup import (
     setup_sonarqube,
     verify_sonarqube_setup,
 )
-
 
 # ---------------------------------------------------------------------------
 # Prerequisites
@@ -84,7 +79,8 @@ def test_check_sonarqube_unreachable():
 
 def test_load_config_empty(tmp_path):
     """Load config returns empty dict when no files exist."""
-    config = load_sonarqube_config(project_dir=tmp_path)
+    with patch("a_sdlc.sonarqube_setup.GLOBAL_CONFIG_PATH", tmp_path / "nonexistent.yaml"):
+        config = load_sonarqube_config(project_dir=tmp_path)
     assert config == {}
 
 

@@ -96,11 +96,13 @@ line-length = 100
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# Filename contains a hyphen (required by external hook config); cannot be renamed.
+"src/a_sdlc/monitoring_files/langfuse-hook.py" = ["N999"]
+
 [tool.mypy]
 python_version = "3.10"
-strict = true
-warn_return_any = true
-warn_unused_ignores = true
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

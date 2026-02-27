@@ -23,7 +23,6 @@ from a_sdlc.mcp_setup import (
 )
 from a_sdlc.monitoring_setup import MONITORING_DIR, OTEL_ENV_VARS
 
-
 # Environment variable keys installed by monitoring setup
 LANGFUSE_ENV_KEYS = {"LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_HOST"}
 ALL_MANAGED_ENV_KEYS = set(OTEL_ENV_VARS.keys()) | LANGFUSE_ENV_KEYS

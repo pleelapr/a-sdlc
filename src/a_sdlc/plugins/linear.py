@@ -9,8 +9,11 @@ Supports cycle (sprint) synchronization via Linear's GraphQL API.
 from datetime import datetime
 
 from a_sdlc.plugins.base import (
-    Task, TaskPlugin, TaskPriority, TaskStatus,
-    Sprint, SprintStatus, ExternalSprintMapping, SyncStatus
+    Sprint,
+    Task,
+    TaskPlugin,
+    TaskPriority,
+    TaskStatus,
 )
 
 

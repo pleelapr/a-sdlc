@@ -20,16 +20,15 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import uvicorn
     from fastapi import FastAPI, Form, Request
     from fastapi.responses import HTMLResponse, RedirectResponse
-    from fastapi.staticfiles import StaticFiles
     from fastapi.templating import Jinja2Templates
-    import uvicorn
-except ImportError:
+except ImportError as err:
     raise ImportError(
         "Web UI dependencies not installed. "
         "Install with: pip install 'a-sdlc[ui]'"
-    )
+    ) from err
 
 from a_sdlc.storage import get_storage
 
@@ -656,7 +655,7 @@ def _compute_analytics(project_id: str, days: int = 30) -> dict[str, Any]:
     storage = get_storage()
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(days=days)
-    window_start_iso = window_start.isoformat()
+    window_start.isoformat()
 
     # Get all tasks for the project
     all_tasks = storage.list_tasks(project_id)
@@ -825,7 +824,7 @@ def _compute_analytics(project_id: str, days: int = 30) -> dict[str, Any]:
 @app.get("/analytics", response_class=HTMLResponse)
 async def analytics_page(request: Request, project: str | None = None, days: int = 30):
     """Developer analytics page with Chart.js visualizations."""
-    storage = get_storage()
+    get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -868,7 +867,7 @@ def _get_integrations_dict(project_id: str) -> dict[str, Any]:
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, project: str | None = None, message: str | None = None, message_type: str | None = None):
     """Settings page with integrations management."""
-    storage = get_storage()
+    get_storage()
     all_projects = _get_all_projects()
     current_project = _get_current_project(project)
 
@@ -1106,7 +1105,7 @@ def run_server(host: str = "127.0.0.1", port: int = 3847) -> None:
     """Run the web UI server."""
     # Clean up any stale server
     if _cleanup_stale_pid():
-        print(f"Cleaned up stale UI server process")
+        print("Cleaned up stale UI server process")
 
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGTERM, _signal_handler)
