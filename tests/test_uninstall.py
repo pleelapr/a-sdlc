@@ -27,6 +27,9 @@ def test_uninstall_plan_defaults():
     plan = UninstallPlan()
     assert plan.has_asdlc_mcp is False
     assert plan.has_serena_mcp is False
+    assert plan.has_playwright_mcp is False
+    assert plan.remove_serena is False
+    assert plan.remove_playwright is False
     assert plan.skill_template_count == 0
     assert plan.has_monitoring_hook is False
     assert plan.monitoring_hook_indices == []
@@ -96,10 +99,10 @@ def test_build_plan_full_system(tmp_path):
         "mcpServers": {"asdlc": {"command": "uvx", "args": ["a-sdlc", "serve"]}}
     }))
 
-    # Create settings.json with serena, hook, env
+    # Create settings.json with serena, playwright, hook, env
     settings_json = tmp_path / "settings.json"
     settings_json.write_text(json.dumps({
-        "mcpServers": {"serena": {"command": "uvx"}},
+        "mcpServers": {"serena": {"command": "uvx"}, "playwright": {"command": "npx"}},
         "hooks": {
             "Stop": [
                 {"matcher": "", "hooks": [{"type": "command", "command": "uv run langfuse-hook.py"}]}
@@ -141,6 +144,9 @@ def test_build_plan_full_system(tmp_path):
 
         assert plan.has_asdlc_mcp is True
         assert plan.has_serena_mcp is True
+        assert plan.has_playwright_mcp is True
+        assert plan.remove_serena is False
+        assert plan.remove_playwright is False
         assert plan.skill_template_count == 2
         assert plan.has_monitoring_hook is True
         assert plan.monitoring_hook_indices == [0]
@@ -232,7 +238,7 @@ def test_remove_settings_serena_only(tmp_path):
         "mcpServers": {"serena": {"command": "uvx"}, "context7": {"command": "npx"}},
     }
 
-    plan = UninstallPlan(has_serena_mcp=True)
+    plan = UninstallPlan(has_serena_mcp=True, remove_serena=True)
     result = UninstallResult()
 
     saved_settings = {}
@@ -249,6 +255,50 @@ def test_remove_settings_serena_only(tmp_path):
     assert "serena" not in saved_settings["mcpServers"]
     assert "context7" in saved_settings["mcpServers"]
     assert any("serena" in a for a in result.actions)
+
+
+def test_remove_settings_serena_kept_when_not_opted_in():
+    """Serena is preserved when user declines removal."""
+    settings = {
+        "mcpServers": {"serena": {"command": "uvx"}, "context7": {"command": "npx"}},
+    }
+
+    plan = UninstallPlan(has_serena_mcp=True, remove_serena=False)
+    result = UninstallResult()
+
+    with (
+        patch("a_sdlc.uninstall.load_claude_settings", return_value=settings),
+        patch("a_sdlc.uninstall.save_claude_settings") as mock_save,
+    ):
+        _remove_settings_entries(plan, result)
+
+    mock_save.assert_not_called()
+    assert not any("serena" in a for a in result.actions)
+
+
+def test_remove_settings_playwright(tmp_path):
+    """Removes playwright MCP when user opts in."""
+    settings = {
+        "mcpServers": {"playwright": {"command": "npx"}, "context7": {"command": "npx"}},
+    }
+
+    plan = UninstallPlan(has_playwright_mcp=True, remove_playwright=True)
+    result = UninstallResult()
+
+    saved_settings = {}
+
+    def mock_save(s):
+        saved_settings.update(s)
+
+    with (
+        patch("a_sdlc.uninstall.load_claude_settings", return_value=settings),
+        patch("a_sdlc.uninstall.save_claude_settings", side_effect=mock_save),
+    ):
+        _remove_settings_entries(plan, result)
+
+    assert "playwright" not in saved_settings["mcpServers"]
+    assert "context7" in saved_settings["mcpServers"]
+    assert any("playwright" in a for a in result.actions)
 
 
 def test_remove_settings_hooks(tmp_path):
@@ -379,7 +429,7 @@ def test_remove_settings_save_failure():
         "mcpServers": {"serena": {"command": "uvx"}},
     }
 
-    plan = UninstallPlan(has_serena_mcp=True)
+    plan = UninstallPlan(has_serena_mcp=True, remove_serena=True)
     result = UninstallResult()
 
     with (
@@ -599,6 +649,7 @@ def test_execute_uninstall_full(tmp_path):
     plan = UninstallPlan(
         has_asdlc_mcp=True,
         has_serena_mcp=True,
+        remove_serena=True,
         skill_template_dir=tmp_path / "sdlc",
         skill_template_count=3,
         has_monitoring_hook=True,

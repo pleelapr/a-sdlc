@@ -615,6 +615,23 @@ def uninstall(include_data: bool, dry_run: bool, yes: bool) -> None:
 
     plan = build_uninstall_plan(include_data=include_data)
 
+    # Ask about optional MCP servers (they may have been installed independently)
+    if not dry_run and not yes:
+        if plan.has_serena_mcp:
+            plan.remove_serena = click.confirm(
+                "  Also remove Serena MCP? (you may use it independently)", default=False
+            )
+        if plan.has_playwright_mcp:
+            plan.remove_playwright = click.confirm(
+                "  Also remove Playwright MCP? (you may use it independently)", default=False
+            )
+        if plan.has_serena_mcp or plan.has_playwright_mcp:
+            console.print()
+    elif yes:
+        # -y flag: remove everything
+        plan.remove_serena = plan.has_serena_mcp
+        plan.remove_playwright = plan.has_playwright_mcp
+
     # Display plan
     _display_uninstall_plan(plan)
 
@@ -686,7 +703,16 @@ def _display_uninstall_plan(plan) -> None:
     table.add_row(
         "serena MCP server",
         "[green]Found[/green]" if plan.has_serena_mcp else "[dim]Not found[/dim]",
-        "Remove from settings.json" if plan.has_serena_mcp else "Skip",
+        "Remove from settings.json" if plan.remove_serena
+        else "[dim]Keep (user choice)[/dim]" if plan.has_serena_mcp
+        else "Skip",
+    )
+    table.add_row(
+        "playwright MCP server",
+        "[green]Found[/green]" if plan.has_playwright_mcp else "[dim]Not found[/dim]",
+        "Remove from settings.json" if plan.remove_playwright
+        else "[dim]Keep (user choice)[/dim]" if plan.has_playwright_mcp
+        else "Skip",
     )
     table.add_row(
         "Skill templates",

@@ -93,18 +93,28 @@ a-sdlc setup
 
 This walks you through prerequisites, deploying skills, MCP config, and optional integrations (Serena, monitoring, SonarQube, Playwright).
 
-To upgrade after updating the package:
+To upgrade to a newer version:
 
 ```bash
+uv tool install --force git+https://github.com/pleelapr/a-sdlc.git
 a-sdlc setup --upgrade
 ```
 
-This force-refreshes templates, runs DB migration, updates MCP config, and offers any new integrations you don't have yet.
+The first command pulls the latest code. The second force-refreshes templates, runs DB migration, updates MCP config, and offers any new integrations you don't have yet.
 
 Verify everything is working:
 
 ```bash
 a-sdlc doctor
+```
+
+### Uninstall
+
+```bash
+a-sdlc uninstall                  # Remove skills, MCP config; keep project data
+a-sdlc uninstall --include-data   # Remove everything including ~/.a-sdlc data
+a-sdlc uninstall --dry-run        # Preview what would be removed
+uv tool uninstall a-sdlc          # Remove the Python package itself
 ```
 
 ### Optional Extras

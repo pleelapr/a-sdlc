@@ -35,6 +35,9 @@ class UninstallPlan:
     # MCP servers
     has_asdlc_mcp: bool = False
     has_serena_mcp: bool = False
+    has_playwright_mcp: bool = False
+    remove_serena: bool = False
+    remove_playwright: bool = False
 
     # Skill templates
     skill_template_dir: Path | None = None
@@ -98,6 +101,7 @@ def build_uninstall_plan(include_data: bool = False) -> UninstallPlan:
         settings = load_claude_settings()
 
         plan.has_serena_mcp = "serena" in settings.get("mcpServers", {})
+        plan.has_playwright_mcp = "playwright" in settings.get("mcpServers", {})
 
         # Find monitoring hook indices
         stop_hooks = settings.get("hooks", {}).get("Stop", [])
@@ -198,11 +202,17 @@ def _remove_settings_entries(plan: UninstallPlan, result: UninstallResult) -> No
         if not settings:
             return
 
-        # Remove serena MCP server
-        if plan.has_serena_mcp and "serena" in settings.get("mcpServers", {}):
+        # Remove serena MCP server (only if user opted in)
+        if plan.remove_serena and "serena" in settings.get("mcpServers", {}):
             del settings["mcpServers"]["serena"]
             needs_save = True
             result.actions.append("Removed serena MCP server from settings.json")
+
+        # Remove playwright MCP server (only if user opted in)
+        if plan.remove_playwright and "playwright" in settings.get("mcpServers", {}):
+            del settings["mcpServers"]["playwright"]
+            needs_save = True
+            result.actions.append("Removed playwright MCP server from settings.json")
 
         # Remove monitoring hook entries (reverse order to preserve indices)
         if plan.monitoring_hook_indices:
