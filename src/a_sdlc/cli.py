@@ -120,54 +120,21 @@ def serve(transport: str, host: str, port: int) -> None:
     default=None,
     help="Custom target directory (default: ~/.claude/commands/sdlc/)"
 )
-@click.option(
-    "--with-serena",
-    is_flag=True,
-    help="Also install and configure Serena MCP server"
-)
-@click.option(
-    "--with-monitoring",
-    is_flag=True,
-    help="Set up monitoring stack (Langfuse + SigNoz)"
-)
-@click.option(
-    "--with-sonarqube",
-    is_flag=True,
-    help="Set up SonarQube code analysis integration"
-)
-@click.option(
-    "--with-playwright",
-    is_flag=True,
-    help="Set up Playwright MCP for runtime testing",
-)
-@click.option(
-    "--upgrade",
-    is_flag=True,
-    help="Force-refresh templates, migrate DB, update MCP config"
-)
-def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool, with_sonarqube: bool, with_playwright: bool, upgrade: bool) -> None:
-    """Deploy skill templates to Claude Code.
+def install(list_skills: bool, force: bool, target: Path | None) -> None:
+    """Deploy skill templates to Claude Code (non-interactive).
 
-    Installs the /sdlc:* commands into your Claude Code configuration,
-    making them available for use in any project.
+    For interactive setup with optional integrations, use: a-sdlc setup
 
     Examples:
 
         a-sdlc install                    # Install all templates
         a-sdlc install --list             # List installed templates
         a-sdlc install --force            # Reinstall all templates
-        a-sdlc install --upgrade          # Force-refresh templates + migrate DB + update MCP
-        a-sdlc install --with-serena      # Also set up Serena MCP
-        a-sdlc install --with-monitoring  # Also set up monitoring
     """
     installer = Installer(target_dir=target)
 
     if list_skills:
         _list_installed_skills(installer)
-        return
-
-    if upgrade:
-        _run_upgrade(installer)
         return
 
     try:
@@ -178,101 +145,15 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
             f"[green]Successfully installed {len(installed)} skill templates![/green]\n\n"
             f"Skills location: [cyan]{installer.target_dir}[/cyan]\n"
             f"MCP server: [cyan]Configured in ~/.claude.json[/cyan]\n\n"
-            "[bold]Getting Started[/bold]\n"
-            "  /sdlc:init                  Initialize project\n"
-            "  /sdlc:scan                  Full repo scan → generate artifacts\n"
-            "  /sdlc:help                  List all commands\n\n"
-            "[bold]PRD Workflow[/bold]\n"
-            "  /sdlc:ideate \"<idea>\"       Explore idea → PRDs\n"
-            "  /sdlc:prd-generate \"<desc>\" Create PRD via interactive Q&A\n"
-            "  /sdlc:prd-architect \"<id>\"  Generate design document\n"
-            "  /sdlc:prd-split \"<id>\"      Decompose PRD into tasks\n\n"
-            "[bold]Execution[/bold]\n"
-            "  /sdlc:sprint-create         Create a sprint\n"
-            "  /sdlc:sprint-run            Execute tasks in dependency order\n"
-            "  /sdlc:task-start <id>       Start a task\n\n"
-            "[bold]Analysis[/bold]\n"
-            "  /sdlc:investigate \"<issue>\" Root cause analysis\n"
-            "  /sdlc:pr-feedback           Process PR review comments\n"
-            "  /sdlc:sonar-scan            SonarQube scan & auto-fix\n\n"
+            "[dim]For full interactive setup with optional integrations: a-sdlc setup[/dim]\n"
             "[dim]Run /sdlc:help in Claude Code for the full command reference.[/dim]",
             title="[bold]Installation Complete[/bold]",
             border_style="green"
         ))
 
-        # Set up Serena MCP if requested
-        if with_serena:
-            console.print()
-            _setup_serena_mcp(force=force)
-
-        # Set up monitoring if requested
-        if with_monitoring:
-            console.print()
-            _setup_monitoring(force=force)
-
-        # Set up SonarQube if requested
-        if with_sonarqube:
-            console.print()
-            _setup_sonarqube_interactive(force=force)
-
-        # Set up Playwright if requested
-        if with_playwright:
-            console.print()
-            _setup_playwright_mcp(force=force)
-
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")
         sys.exit(1)
-
-
-def _run_upgrade(installer: Installer) -> None:
-    """Execute the full upgrade workflow: templates, DB migration, MCP config.
-
-    Args:
-        installer: Installer instance to use for template operations.
-    """
-    from a_sdlc.core.database import SCHEMA_VERSION, Database
-
-    console.print()
-    console.print("[bold cyan]Running upgrade...[/bold cyan]")
-    console.print()
-
-    # 1. Record pre-upgrade template version
-    _, old_template_ver, current_template_ver = installer.check_template_version()
-
-    # 2. Force-refresh templates (also refreshes MCP config via install)
-    try:
-        installed = installer.install(force=True)
-        templates_status = f"refreshed ({old_template_ver} -> {current_template_ver}), {len(installed)} templates"
-    except Exception as e:
-        console.print(f"[red]Error refreshing templates: {e}[/red]")
-        sys.exit(1)
-
-    # 3. Trigger DB migration check (Database.__init__ runs auto-migration with backup)
-    try:
-        Database()
-        db_status = f"schema v{SCHEMA_VERSION} (current)"
-    except RuntimeError as e:
-        console.print(f"[red]Database migration failed: {e}[/red]")
-        sys.exit(1)
-
-    # 4. Force-refresh MCP config
-    try:
-        mcp_result = configure_mcp_server(force=True)
-        mcp_status = mcp_result.get("status", "updated")
-    except Exception as e:
-        console.print(f"[red]Error updating MCP config: {e}[/red]")
-        sys.exit(1)
-
-    # 5. Display upgrade summary
-    console.print(Panel(
-        "[green]Upgrade completed successfully![/green]\n\n"
-        f"[bold]Templates:[/bold]  {templates_status}\n"
-        f"[bold]Database:[/bold]   {db_status}\n"
-        f"[bold]MCP config:[/bold] {mcp_status}",
-        title="[bold]Upgrade Summary[/bold]",
-        border_style="green"
-    ))
 
 
 def _setup_playwright_mcp(force: bool = False) -> None:
@@ -302,54 +183,72 @@ def _setup_playwright_mcp(force: bool = False) -> None:
 
 
 @main.command()
-def setup():
-    """Interactive setup wizard for new users.
+@click.option(
+    "--upgrade",
+    is_flag=True,
+    help="Force-refresh templates, migrate DB, update MCP config, then offer new integrations"
+)
+def setup(upgrade: bool):
+    """Interactive setup wizard.
 
-    Guides you through prerequisite checks, template installation,
-    and MCP server configuration in one step.
+    First time: guides through prerequisites, installation, and optional integrations.
+    Upgrade: force-refreshes everything and offers new integrations.
 
     Examples:
 
-        a-sdlc setup    # Run the interactive setup wizard
+        a-sdlc setup             # First-time setup wizard
+        a-sdlc setup --upgrade   # Update everything + discover new integrations
     """
+    import json
+
     # Step 1: Welcome banner
     console.print()
-    console.print(Panel(
-        "[bold]Welcome to a-sdlc Setup Wizard[/bold]\n\n"
-        "This wizard will:\n"
-        "  1. Check prerequisites (Python, uv, Claude Code)\n"
-        "  2. Install skill templates to ~/.claude/commands/sdlc/\n"
-        "  3. Configure the asdlc MCP server in ~/.claude.json\n"
-        "  4. Validate the installation",
-        title="[bold cyan]a-sdlc[/bold cyan]",
-        border_style="cyan"
-    ))
+    if upgrade:
+        console.print(Panel(
+            "[bold]Upgrading a-sdlc[/bold]\n\n"
+            "This will:\n"
+            "  1. Check prerequisites\n"
+            "  2. Force-refresh all skill templates\n"
+            "  3. Run database migration (with backup)\n"
+            "  4. Update MCP server configuration\n"
+            "  5. Offer new optional integrations",
+            title="[bold cyan]a-sdlc Upgrade[/bold cyan]",
+            border_style="cyan"
+        ))
+    else:
+        console.print(Panel(
+            "[bold]Welcome to a-sdlc Setup Wizard[/bold]\n\n"
+            "This wizard will:\n"
+            "  1. Check prerequisites (Python, uv, Claude Code)\n"
+            "  2. Install skill templates\n"
+            "  3. Configure the asdlc MCP server\n"
+            "  4. Offer optional integrations (Serena, monitoring, etc.)\n"
+            "  5. Validate the installation",
+            title="[bold cyan]a-sdlc[/bold cyan]",
+            border_style="cyan"
+        ))
     console.print()
 
-    # Step 2: Run prerequisite checks
+    # Step 2: Prerequisite checks
     console.print("[bold]Step 1: Checking prerequisites...[/bold]")
     console.print()
 
     checks = []
     has_critical_failure = False
 
-    # Python version
     py_ok, py_msg = check_python_version()
     checks.append(("Python >= 3.10", py_ok, py_msg, True))
     if not py_ok:
         has_critical_failure = True
 
-    # uv/uvx availability
     uv_ok, uv_msg = check_uv_available()
     checks.append(("uv / uvx", uv_ok, uv_msg, False))
 
-    # Claude Code
     claude_ok, claude_msg = check_claude_code_installed()
     checks.append(("Claude Code", claude_ok, claude_msg, True))
     if not claude_ok:
         has_critical_failure = True
 
-    # Display prerequisite table
     table = Table(show_header=True, header_style="bold")
     table.add_column("Prerequisite", style="cyan")
     table.add_column("Status")
@@ -367,7 +266,6 @@ def setup():
     console.print(table)
     console.print()
 
-    # Step 3: If any critical check fails, show fix instructions and exit
     if has_critical_failure:
         console.print("[red]Critical prerequisites not met. Please fix the following:[/red]")
         console.print()
@@ -386,20 +284,26 @@ def setup():
         console.print("[dim]Fix: curl -LsSf https://astral.sh/uv/install.sh | sh[/dim]")
         console.print()
 
-    # Step 4: Install templates + MCP config
+    # Step 3: Install templates
     console.print("[bold]Step 2: Installing skill templates...[/bold]")
     console.print()
 
     installer = Installer()
 
-    # Step 5: Check if templates already exist; ask to force-refresh
-    force = False
-    installed_skills = installer.list_installed()
-    if installed_skills:
-        console.print(f"[yellow]Found {len(installed_skills)} existing skill templates.[/yellow]")
-        if click.confirm("  Overwrite with latest templates?", default=False):
-            force = True
-        console.print()
+    if upgrade:
+        # Upgrade mode: force-refresh
+        force = True
+        _, old_ver, new_ver = installer.check_template_version()
+        console.print(f"  Upgrading templates: {old_ver} -> {new_ver}")
+    else:
+        # Fresh install: ask if existing templates should be overwritten
+        force = False
+        installed_skills = installer.list_installed()
+        if installed_skills:
+            console.print(f"[yellow]Found {len(installed_skills)} existing skill templates.[/yellow]")
+            if click.confirm("  Overwrite with latest templates?", default=False):
+                force = True
+            console.print()
 
     try:
         installed = installer.install(force=force)
@@ -410,30 +314,50 @@ def setup():
 
     console.print()
 
-    # Step 6: Validate installation
+    # Step 3b: DB migration + MCP refresh (upgrade only)
+    if upgrade:
+        from a_sdlc.core.database import SCHEMA_VERSION, Database
+
+        console.print("[bold]Step 2b: Upgrading database and MCP config...[/bold]")
+        console.print()
+
+        try:
+            Database()
+            console.print(f"  [green]PASS[/green] Database schema v{SCHEMA_VERSION} (current)")
+        except RuntimeError as e:
+            console.print(f"  [red]FAIL[/red] Database migration failed: {e}")
+            sys.exit(1)
+
+        try:
+            configure_mcp_server(force=True)
+            console.print("  [green]PASS[/green] MCP config refreshed")
+        except Exception as e:
+            console.print(f"  [red]FAIL[/red] MCP config update failed: {e}")
+            sys.exit(1)
+
+        console.print()
+
+    # Step 4: Validate installation
     console.print("[bold]Step 3: Validating installation...[/bold]")
     console.print()
 
     validation_ok = True
 
-    # Check MCP config
     settings_path = get_claude_settings_path()
-    mcp_configured = False
+    mcp_servers = {}
     if settings_path.exists():
         try:
-            import json
             settings = json.loads(settings_path.read_text())
-            mcp_configured = "asdlc" in settings.get("mcpServers", {})
+            mcp_servers = settings.get("mcpServers", {})
         except (json.JSONDecodeError, KeyError):
             pass
 
-    if mcp_configured:
+    if "asdlc" in mcp_servers:
         console.print("  [green]PASS[/green] asdlc MCP server configured in ~/.claude.json")
     else:
         console.print("  [red]FAIL[/red] asdlc MCP server not found in ~/.claude.json")
         validation_ok = False
 
-    # Check data directory
     data_dir = Path.home() / ".a-sdlc"
     if data_dir.exists():
         console.print(f"  [green]PASS[/green] Data directory exists: {data_dir}")
@@ -441,7 +365,6 @@ def setup():
         console.print(f"  [yellow]WARN[/yellow] Data directory not yet created: {data_dir}")
         console.print("  [dim]This is normal — it will be created on first use.[/dim]")
 
-    # Check templates directory
     if installer.target_dir.exists():
         template_count = len(list(installer.target_dir.glob("*.md")))
         console.print(f"  [green]PASS[/green] {template_count} skill templates in {installer.target_dir}")
@@ -455,23 +378,67 @@ def setup():
         console.print("[red]Validation failed. Please check the errors above.[/red]")
         sys.exit(1)
 
-    # Step 7: Success summary with next steps
-    console.print(Panel(
-        "[green]Setup complete![/green]\n\n"
-        "[bold]Next Steps[/bold]\n"
-        "  1. Open a project in Claude Code\n"
-        "  2. Run [cyan]/sdlc:init[/cyan] to initialize SDLC tracking\n"
-        "  3. Run [cyan]/sdlc:help[/cyan] for all available commands\n\n"
-        "[bold]Quick Start[/bold]\n"
-        "  /sdlc:init                  Initialize project\n"
-        "  /sdlc:scan                  Analyze codebase\n"
-        "  /sdlc:prd-generate          Create a PRD\n"
-        "  /sdlc:prd-split             Decompose PRD into tasks\n"
-        "  /sdlc:sprint-run            Execute sprint tasks\n\n"
-        "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
-        title="[bold green]Setup Complete[/bold green]",
-        border_style="green"
-    ))
+    # Step 5: Optional components — detect what's already installed, only ask about missing ones
+    console.print("[bold]Step 4: Optional integrations[/bold]")
+    console.print()
+
+    serena_installed = "serena" in mcp_servers
+    if serena_installed:
+        console.print("  [green]Serena MCP[/green] (already configured)")
+    elif click.confirm("  Set up Serena MCP? (semantic code analysis)", default=True):
+        console.print()
+        _setup_serena_mcp(force=force)
+    console.print()
+
+    monitoring_installed = "langfuse" in mcp_servers or (Path.home() / ".a-sdlc" / "docker-compose.monitoring.yml").exists()
+    if monitoring_installed:
+        console.print("  [green]Monitoring[/green] (already configured)")
+    elif click.confirm("  Set up monitoring? (Langfuse + SigNoz)", default=False):
+        console.print()
+        _setup_monitoring(force=force)
+    console.print()
+
+    sonarqube_installed = (Path.home() / ".config" / "a-sdlc" / "config.yaml").exists()
+    if sonarqube_installed:
+        console.print("  [green]SonarQube[/green] (already configured)")
+    elif click.confirm("  Set up SonarQube? (code quality analysis)", default=False):
+        console.print()
+        _setup_sonarqube_interactive(force=force)
+    console.print()
+
+    playwright_installed = "playwright" in mcp_servers
+    if playwright_installed:
+        console.print("  [green]Playwright MCP[/green] (already configured)")
+    elif click.confirm("  Set up Playwright MCP? (browser testing)", default=False):
+        console.print()
+        _setup_playwright_mcp(force=force)
+    console.print()
+
+    # Step 6: Success summary
+    if upgrade:
+        console.print(Panel(
+            "[green]Upgrade complete![/green]\n\n"
+            "[dim]Run 'a-sdlc doctor' to verify system health.[/dim]",
+            title="[bold green]Upgrade Complete[/bold green]",
+            border_style="green"
+        ))
+    else:
+        console.print(Panel(
+            "[green]Setup complete![/green]\n\n"
+            "[bold]Next Steps[/bold]\n"
+            "  1. Open a project in Claude Code\n"
+            "  2. Run [cyan]/sdlc:init[/cyan] to initialize SDLC tracking\n"
+            "  3. Run [cyan]/sdlc:help[/cyan] for all available commands\n\n"
+            "[bold]Quick Start[/bold]\n"
+            "  /sdlc:init                  Initialize project\n"
+            "  /sdlc:scan                  Analyze codebase\n"
+            "  /sdlc:prd-generate          Create a PRD\n"
+            "  /sdlc:prd-split             Decompose PRD into tasks\n"
+            "  /sdlc:sprint-run            Execute sprint tasks\n\n"
+            "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
+            title="[bold green]Setup Complete[/bold green]",
+            border_style="green"
+        ))
 
 
 def _list_installed_skills(installer: Installer) -> None:

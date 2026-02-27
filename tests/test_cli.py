@@ -160,6 +160,9 @@ class TestTemplateVersionMarker:
 class TestSetupCommand:
     """Tests for the setup wizard command."""
 
+    # Input to decline all 4 optional components (Serena, monitoring, SonarQube, Playwright)
+    DECLINE_ALL_OPTIONAL = "n\nn\nn\nn\n"
+
     def test_setup_all_prerequisites_met(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test setup succeeds when all prerequisites are met."""
         # Create fake claude.json with asdlc configured
@@ -182,7 +185,7 @@ class TestSetupCommand:
             mock_installer.install.return_value = ["init", "scan", "help"]
             mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["setup"])
+            result = runner.invoke(main, ["setup"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         assert "Welcome to a-sdlc Setup Wizard" in result.output
@@ -210,7 +213,7 @@ class TestSetupCommand:
             mock_installer.install.return_value = ["init", "scan", "help"]
             mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["setup"])
+            result = runner.invoke(main, ["setup"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         assert "WARN" in result.output
@@ -251,7 +254,7 @@ class TestSetupCommand:
             mock_installer.install.return_value = ["init", "scan", "help", "prd-generate", "prd-split"]
             mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["setup"])
+            result = runner.invoke(main, ["setup"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         # Verify Installer was instantiated and install() was called
@@ -283,8 +286,8 @@ class TestSetupCommand:
             mock_installer.install.return_value = ["init", "scan"]
             mock_installer.target_dir = templates_dir
 
-            # Answer "n" to overwrite prompt
-            result = runner.invoke(main, ["setup"], input="n\n")
+            # Answer "n" to overwrite prompt, then decline all optional components
+            result = runner.invoke(main, ["setup"], input="n\n" + self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         assert "existing skill templates" in result.output
@@ -314,102 +317,163 @@ class TestSetupCommand:
             mock_installer.install.return_value = ["init", "scan"]
             mock_installer.target_dir = templates_dir
 
-            # Answer "y" to overwrite prompt
-            result = runner.invoke(main, ["setup"], input="y\n")
+            # Answer "y" to overwrite prompt, then decline all optional components
+            result = runner.invoke(main, ["setup"], input="y\n" + self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         # force=True since user accepted
         mock_installer.install.assert_called_once_with(force=True)
 
+    def test_setup_offers_optional_components(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Test setup asks about optional components and calls setup when accepted."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text('{"mcpServers": {"asdlc": {}}}')
 
-class TestInstallUpgrade:
-    """Tests for the --upgrade flag on the install command."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        templates_dir = claude_dir / "commands" / "sdlc"
+        templates_dir.mkdir(parents=True)
 
-    def test_upgrade_triggers_force_install(self, runner: CliRunner) -> None:
-        """Test --upgrade calls installer.install(force=True)."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}), \
-             patch("a_sdlc.cli._run_upgrade", wraps=None):
-            # We need to let _run_upgrade actually execute, so instead patch internals
-            pass
-
-        # Use a more direct approach: patch the dependencies inside _run_upgrade
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}), \
-             patch("a_sdlc.core.database.Database.__init__", return_value=None), \
-             patch("a_sdlc.core.database.Database.connection", create=True):
+        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
+             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
+             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
+             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
+             patch("a_sdlc.cli._setup_serena_mcp") as mock_serena:
             mock_installer = mock_installer_cls.return_value
-            mock_installer.check_template_version.return_value = (False, "0.0.9", "0.1.0")
+            mock_installer.list_installed.return_value = []
             mock_installer.install.return_value = ["init", "scan", "help"]
-            mock_installer.target_dir = Path("/tmp/sdlc")
+            mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["install", "--upgrade"])
+            # Accept Serena, decline the rest
+            result = runner.invoke(main, ["setup"], input="y\nn\nn\nn\n")
+
+        assert result.exit_code == 0
+        assert "Optional integrations" in result.output
+        assert "Serena MCP" in result.output
+        mock_serena.assert_called_once_with(force=False)
+
+
+class TestSetupUpgrade:
+    """Tests for the --upgrade flag on the setup command."""
+
+    # Input to decline all 4 optional components
+    DECLINE_ALL_OPTIONAL = "n\nn\nn\nn\n"
+
+    def _make_setup_context(self, tmp_path):
+        """Create common mocks for setup --upgrade tests."""
+        claude_json = tmp_path / ".claude.json"
+        claude_json.write_text('{"mcpServers": {"asdlc": {}}}')
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        templates_dir = claude_dir / "commands" / "sdlc"
+        templates_dir.mkdir(parents=True)
+        return claude_json, templates_dir
+
+    def test_upgrade_force_installs_templates(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Test --upgrade calls installer.install(force=True)."""
+        claude_json, templates_dir = self._make_setup_context(tmp_path)
+
+        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
+             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
+             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
+             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
+             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}), \
+             patch("a_sdlc.core.database.Database.__init__", return_value=None):
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.target_dir = templates_dir
+
+            result = runner.invoke(main, ["setup", "--upgrade"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         mock_installer.install.assert_called_once_with(force=True)
 
-    def test_upgrade_triggers_database_init(self, runner: CliRunner) -> None:
-        """Test --upgrade instantiates Database to trigger migration."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}), \
-             patch("a_sdlc.cli._run_upgrade") as mock_run_upgrade:
-            mock_installer = mock_installer_cls.return_value
-            mock_installer.target_dir = Path("/tmp/sdlc")
+    def test_upgrade_runs_db_migration(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Test --upgrade triggers Database init for migration."""
+        claude_json, templates_dir = self._make_setup_context(tmp_path)
 
-            result = runner.invoke(main, ["install", "--upgrade"])
+        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
+             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
+             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
+             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
+             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}), \
+             patch("a_sdlc.core.database.Database.__init__", return_value=None) as mock_db_init:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
+            mock_installer.install.return_value = ["init", "scan"]
+            mock_installer.target_dir = templates_dir
+
+            result = runner.invoke(main, ["setup", "--upgrade"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
-        # _run_upgrade was called with the installer instance
-        mock_run_upgrade.assert_called_once_with(mock_installer)
+        mock_db_init.assert_called_once()
 
-    def test_upgrade_refreshes_mcp_config(self, runner: CliRunner) -> None:
+    def test_upgrade_refreshes_mcp_config(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test --upgrade calls configure_mcp_server(force=True)."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}) as mock_mcp, \
+        claude_json, templates_dir = self._make_setup_context(tmp_path)
+
+        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
+             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
+             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
+             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
+             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}) as mock_mcp, \
              patch("a_sdlc.core.database.Database.__init__", return_value=None):
             mock_installer = mock_installer_cls.return_value
-            mock_installer.check_template_version.return_value = (False, "0.0.9", "0.1.0")
-            mock_installer.install.return_value = ["init", "scan", "help"]
-            mock_installer.target_dir = Path("/tmp/sdlc")
+            mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
+            mock_installer.install.return_value = ["init", "scan"]
+            mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["install", "--upgrade"])
+            result = runner.invoke(main, ["setup", "--upgrade"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
         mock_mcp.assert_called_once_with(force=True)
 
-    def test_upgrade_displays_summary(self, runner: CliRunner) -> None:
-        """Test --upgrade displays an upgrade summary panel."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "configured"}), \
+    def test_upgrade_shows_upgrade_banner(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Test --upgrade shows upgrade-specific banner and completion message."""
+        claude_json, templates_dir = self._make_setup_context(tmp_path)
+
+        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
+             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
+             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
+             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
+             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}), \
              patch("a_sdlc.core.database.Database.__init__", return_value=None):
             mock_installer = mock_installer_cls.return_value
-            mock_installer.check_template_version.return_value = (False, "0.0.9", "0.1.0")
-            mock_installer.install.return_value = ["init", "scan", "help"]
-            mock_installer.target_dir = Path("/tmp/sdlc")
+            mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
+            mock_installer.install.return_value = ["init", "scan"]
+            mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["install", "--upgrade"])
+            result = runner.invoke(main, ["setup", "--upgrade"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
-        assert "Upgrade Summary" in result.output
-        assert "Templates:" in result.output
-        assert "Database:" in result.output
-        assert "MCP config:" in result.output
-        assert "0.0.9" in result.output
-        assert "0.1.0" in result.output
+        assert "Upgrading a-sdlc" in result.output
+        assert "Upgrade Complete" in result.output
 
-    def test_install_without_upgrade_unchanged(self, runner: CliRunner, tmp_path: Path) -> None:
-        """Test install without --upgrade does NOT call _run_upgrade."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli._run_upgrade") as mock_run_upgrade:
+    def test_setup_without_upgrade_is_normal_wizard(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Test setup without --upgrade runs the normal wizard flow."""
+        claude_json, templates_dir = self._make_setup_context(tmp_path)
+
+        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
+             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
+             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
+             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
+             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
             mock_installer = mock_installer_cls.return_value
-            mock_installer.install.return_value = ["init", "scan", "help"]
-            mock_installer.target_dir = tmp_path / "sdlc"
+            mock_installer.list_installed.return_value = []
+            mock_installer.install.return_value = ["init", "scan"]
+            mock_installer.target_dir = templates_dir
 
-            result = runner.invoke(main, ["install"])
+            result = runner.invoke(main, ["setup"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
-        mock_run_upgrade.assert_not_called()
-        # Normal install should still be called
+        assert "Welcome to a-sdlc Setup Wizard" in result.output
+        assert "Setup Complete" in result.output
         mock_installer.install.assert_called_once_with(force=False)
 
 
@@ -593,33 +657,7 @@ class TestDoctorFixInstructions:
 
 
 class TestInstallPlaywright:
-    """Tests for --with-playwright flag in install command."""
-
-    def test_install_with_playwright_flag(self, runner: CliRunner) -> None:
-        """Test install command with --with-playwright flag."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
-            mock_installer = mock_installer_cls.return_value
-            mock_installer.install.return_value = ["init", "scan", "help"]
-            mock_installer.target_dir = Path("/tmp/sdlc")
-
-            result = runner.invoke(main, ["install", "--with-playwright"])
-
-        assert result.exit_code == 0
-        mock_setup.assert_called_once_with(force=False)
-
-    def test_install_with_playwright_and_force(self, runner: CliRunner) -> None:
-        """Test install --with-playwright --force passes force flag."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
-            mock_installer = mock_installer_cls.return_value
-            mock_installer.install.return_value = ["init", "scan", "help"]
-            mock_installer.target_dir = Path("/tmp/sdlc")
-
-            result = runner.invoke(main, ["install", "--with-playwright", "--force"])
-
-        assert result.exit_code == 0
-        mock_setup.assert_called_once_with(force=True)
+    """Tests for Playwright setup via install command."""
 
     def test_install_without_playwright_does_not_call_setup(self, runner: CliRunner) -> None:
         """Test install without --with-playwright does not invoke Playwright setup."""

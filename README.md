@@ -91,18 +91,19 @@ After installing the package, run the guided setup wizard:
 a-sdlc setup
 ```
 
-This walks you through deploying skills, configuring the MCP server, and optional Serena integration.
+This walks you through prerequisites, deploying skills, MCP config, and optional integrations (Serena, monitoring, SonarQube, Playwright).
 
-Alternatively, configure manually:
+To upgrade after updating the package:
 
 ```bash
-# Deploy skills + configure a-sdlc MCP server
-a-sdlc install
+a-sdlc setup --upgrade
+```
 
-# Optional: also configure Serena MCP for code analysis
-a-sdlc install --with-serena
+This force-refreshes templates, runs DB migration, updates MCP config, and offers any new integrations you don't have yet.
 
-# Verify everything is working
+Verify everything is working:
+
+```bash
 a-sdlc doctor
 ```
 
