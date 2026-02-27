@@ -29,7 +29,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ### Method 1: uv tool install from GitHub (recommended)
 
 ```bash
-uv tool install git+https://github.com/pleelaprachakul/a-sdlc.git
+uv tool install git+https://github.com/pleelapr/a-sdlc.git
 uv tool update-shell   # Add to PATH (first time only)
 # Restart terminal or: source ~/.zshenv
 ```
@@ -37,32 +37,32 @@ uv tool update-shell   # Add to PATH (first time only)
 With optional extras (Linear, Jira/Confluence, or all integrations):
 
 ```bash
-uv tool install "a-sdlc[linear] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
-uv tool install "a-sdlc[atlassian] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
-uv tool install "a-sdlc[all] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+uv tool install "a-sdlc[linear] @ git+https://github.com/pleelapr/a-sdlc.git"
+uv tool install "a-sdlc[atlassian] @ git+https://github.com/pleelapr/a-sdlc.git"
+uv tool install "a-sdlc[all] @ git+https://github.com/pleelapr/a-sdlc.git"
 ```
 
 ### Method 2: pip install from GitHub
 
 ```bash
-pip install git+https://github.com/pleelaprachakul/a-sdlc.git
+pip install git+https://github.com/pleelapr/a-sdlc.git
 
 # With extras
-pip install "a-sdlc[all] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+pip install "a-sdlc[all] @ git+https://github.com/pleelapr/a-sdlc.git"
 ```
 
 ### Method 3: pipx install from GitHub
 
 ```bash
-pipx install git+https://github.com/pleelaprachakul/a-sdlc.git
+pipx install git+https://github.com/pleelapr/a-sdlc.git
 
 # With extras
-pipx install "a-sdlc[all] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+pipx install "a-sdlc[all] @ git+https://github.com/pleelapr/a-sdlc.git"
 ```
 
 ### Method 4: From GitHub Release (stable)
 
-Download the `.whl` file from the [latest release](https://github.com/pleelaprachakul/a-sdlc/releases/latest), then:
+Download the `.whl` file from the [latest release](https://github.com/pleelapr/a-sdlc/releases/latest), then:
 
 ```bash
 uv tool install ./a_sdlc-*.whl
@@ -77,7 +77,7 @@ pipx install ./a_sdlc-*.whl
 ### Method 5: Development install (for contributors)
 
 ```bash
-git clone https://github.com/pleelaprachakul/a-sdlc.git
+git clone https://github.com/pleelapr/a-sdlc.git
 cd a-sdlc
 uv sync --all-extras
 uv tool install --force --editable ".[all]"
@@ -426,7 +426,7 @@ tasks:
 
 ```bash
 # Clone and set up development environment
-git clone https://github.com/pleelaprachakul/a-sdlc.git
+git clone https://github.com/pleelapr/a-sdlc.git
 cd a-sdlc
 uv sync --all-extras
 
