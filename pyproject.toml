@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "a-sdlc"
-version = "0.1.0"
-description = "SDLC Automation System for Claude Code - BrainGrid-style documentation and workflow management"
+version = "0.2.0"
+description = "SDLC Automation System for Claude Code - PRD, task, sprint, and sync management via MCP"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

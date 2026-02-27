@@ -1,10 +1,9 @@
 """
 a-sdlc: SDLC Automation System for Claude Code
 
-Generates and maintains BrainGrid-style documentation artifacts,
-enabling Claude Code to understand codebases better and streamline
-the PRD -> Requirements -> Tasks -> Code workflow.
+PRD, task, sprint, and sync management via MCP,
+with skill templates and external system integration.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["__version__"]
