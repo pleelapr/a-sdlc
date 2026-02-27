@@ -33,7 +33,7 @@ class TestTemplateContent:
             / "templates"
             / "sprint-run.md"
         )
-        self.content = template_path.read_text()
+        self.content = template_path.read_text(encoding="utf-8")
 
     def test_template_references_list_worktrees_for_resume(self):
         """Resume state should use list_worktrees, not .state.json."""

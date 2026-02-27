@@ -34,10 +34,11 @@ class TestGetConfigDir:
 
     @patch("a_sdlc.core.git_config.platform.system", return_value="Windows")
     @patch.dict("os.environ", {}, clear=True)
-    def test_windows_path_without_localappdata(self, mock_system):
+    @patch("a_sdlc.core.git_config.Path.home", return_value=Path("C:\\Users\\TestUser"))
+    def test_windows_path_without_localappdata(self, mock_home, mock_system):
         """On Windows without LOCALAPPDATA, falls back to ~/AppData/Local/a-sdlc."""
         result = get_config_dir()
-        expected = Path.home() / "AppData" / "Local" / "a-sdlc"
+        expected = Path("C:\\Users\\TestUser") / "AppData" / "Local" / "a-sdlc"
         assert result == expected
 
     @patch("a_sdlc.core.git_config.platform.system", return_value="Darwin")

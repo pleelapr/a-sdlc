@@ -1,5 +1,6 @@
 """Tests for file-based storage."""
 
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -934,7 +935,7 @@ class TestMigrationBackupAndRollback:
 
         with patch.object(
             Database, "_migrate_v5_to_v6", side_effect=Exception("column already exists")
-        ), pytest.raises(RuntimeError, match=str(backup_path)):
+        ), pytest.raises(RuntimeError, match=re.escape(str(backup_path))):
             Database(db_path=db_path)
 
     def test_failed_migration_error_includes_original_error(self, tmp_path):
