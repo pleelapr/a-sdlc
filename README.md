@@ -13,42 +13,107 @@ a-sdlc streamlines the software development lifecycle by:
 
 ## Prerequisites
 
-**Required:** [uv](https://docs.astral.sh/uv/) (recommended) or [pipx](https://pypa.github.io/pipx/)
+- **Python 3.10+** — Check with `python3 --version`
+- **[uv](https://docs.astral.sh/uv/)** (recommended), pip, or [pipx](https://pypa.github.io/pipx/) — for package installation
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — for MCP integration and `/sdlc:*` skills
 
 ```bash
-# Install uv (recommended)
+# Install uv if you don't have it (recommended)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Or install pipx (alternative)
-pip install pipx
-pipx ensurepath
 ```
 
-> **Why uv?** uv provides `uvx` which runs Python tools on-demand without permanent installation. This is how a-sdlc runs Serena MCP - it's downloaded and cached automatically on first use.
+> **Why uv?** uv provides `uvx` which runs Python tools on-demand without permanent installation. This is how a-sdlc runs its MCP server and Serena — they are downloaded and cached automatically on first use.
 
 ## Installation
 
+### Method 1: uv tool install from GitHub (recommended)
+
 ```bash
-# Install via uv (recommended)
-uv tool install a-sdlc
+uv tool install git+https://github.com/pleelaprachakul/a-sdlc.git
 uv tool update-shell   # Add to PATH (first time only)
 # Restart terminal or: source ~/.zshenv
+```
 
-# Or via pipx (alternative)
-pipx install a-sdlc
+With optional extras (Linear, Jira/Confluence, or all integrations):
 
-# Deploy skills + configure MCP servers
+```bash
+uv tool install "a-sdlc[linear] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+uv tool install "a-sdlc[atlassian] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+uv tool install "a-sdlc[all] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+```
+
+### Method 2: pip install from GitHub
+
+```bash
+pip install git+https://github.com/pleelaprachakul/a-sdlc.git
+
+# With extras
+pip install "a-sdlc[all] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+```
+
+### Method 3: pipx install from GitHub
+
+```bash
+pipx install git+https://github.com/pleelaprachakul/a-sdlc.git
+
+# With extras
+pipx install "a-sdlc[all] @ git+https://github.com/pleelaprachakul/a-sdlc.git"
+```
+
+### Method 4: From GitHub Release (stable)
+
+Download the `.whl` file from the [latest release](https://github.com/pleelaprachakul/a-sdlc/releases/latest), then:
+
+```bash
+uv tool install ./a_sdlc-*.whl
+
+# Or with pip
+pip install ./a_sdlc-*.whl
+
+# Or with pipx
+pipx install ./a_sdlc-*.whl
+```
+
+### Method 5: Development install (for contributors)
+
+```bash
+git clone https://github.com/pleelaprachakul/a-sdlc.git
+cd a-sdlc
+uv sync --all-extras
+uv tool install --force --editable ".[all]"
+```
+
+### Post-Install Setup
+
+After installing the package, run the guided setup wizard:
+
+```bash
+a-sdlc setup
+```
+
+This walks you through deploying skills, configuring the MCP server, and optional Serena integration.
+
+Alternatively, configure manually:
+
+```bash
+# Deploy skills + configure a-sdlc MCP server
+a-sdlc install
+
+# Optional: also configure Serena MCP for code analysis
 a-sdlc install --with-serena
 
-# Verify installation
+# Verify everything is working
 a-sdlc doctor
 ```
 
-### One-liner Setup
+### Optional Extras
 
-```bash
-uv tool install a-sdlc && uv tool update-shell && source ~/.zshenv && a-sdlc install --with-serena
-```
+| Extra | What it adds | Install flag |
+|-------|-------------|--------------|
+| `[linear]` | Linear integration (httpx) | `a-sdlc[linear]` |
+| `[atlassian]` | Jira and Confluence integration (httpx) | `a-sdlc[atlassian]` |
+| `[sonarqube]` | SonarQube integration (pysonar) | `a-sdlc[sonarqube]` |
+| `[all]` | All of the above plus dev tools | `a-sdlc[all]` |
 
 ### How Serena MCP Works
 
@@ -361,7 +426,7 @@ tasks:
 
 ```bash
 # Clone and set up development environment
-git clone https://github.com/a-sdlc/a-sdlc.git
+git clone https://github.com/pleelaprachakul/a-sdlc.git
 cd a-sdlc
 uv sync --all-extras
 

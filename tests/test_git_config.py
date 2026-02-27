@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -10,10 +11,47 @@ from a_sdlc.core.git_config import (
     ALWAYS_CONFIRM_OPERATIONS,
     GitSafetyConfig,
     _deep_merge,
+    get_config_dir,
     get_effective_config_summary,
     load_git_safety_config,
     save_git_safety_config,
 )
+
+# =============================================================================
+# get_config_dir (platform-aware path resolution)
+# =============================================================================
+
+
+class TestGetConfigDir:
+    """Test platform-aware configuration directory resolution."""
+
+    @patch("a_sdlc.core.git_config.platform.system", return_value="Windows")
+    @patch.dict("os.environ", {"LOCALAPPDATA": "C:\\Users\\TestUser\\AppData\\Local"})
+    def test_windows_path_with_localappdata(self, mock_system):
+        """On Windows, returns %LOCALAPPDATA%/a-sdlc."""
+        result = get_config_dir()
+        assert result == Path("C:\\Users\\TestUser\\AppData\\Local") / "a-sdlc"
+
+    @patch("a_sdlc.core.git_config.platform.system", return_value="Windows")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_windows_path_without_localappdata(self, mock_system):
+        """On Windows without LOCALAPPDATA, falls back to ~/AppData/Local/a-sdlc."""
+        result = get_config_dir()
+        expected = Path.home() / "AppData" / "Local" / "a-sdlc"
+        assert result == expected
+
+    @patch("a_sdlc.core.git_config.platform.system", return_value="Darwin")
+    def test_macos_path(self, mock_system):
+        """On macOS, returns ~/.config/a-sdlc."""
+        result = get_config_dir()
+        assert result == Path.home() / ".config" / "a-sdlc"
+
+    @patch("a_sdlc.core.git_config.platform.system", return_value="Linux")
+    def test_linux_path(self, mock_system):
+        """On Linux, returns ~/.config/a-sdlc."""
+        result = get_config_dir()
+        assert result == Path.home() / ".config" / "a-sdlc"
+
 
 # =============================================================================
 # GitSafetyConfig dataclass

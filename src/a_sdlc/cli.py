@@ -9,6 +9,7 @@ Provides commands for:
 - plugins: Plugin management
 """
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,14 @@ from rich.table import Table
 
 from a_sdlc import __version__
 from a_sdlc.artifacts import get_artifact_plugin_manager
-from a_sdlc.installer import Installer
+from a_sdlc.installer import (
+    Installer,
+    check_claude_code_installed,
+    check_python_version,
+    check_uv_available,
+    configure_mcp_server,
+    get_claude_settings_path,
+)
 from a_sdlc.mcp_setup import (
     setup_serena,
     verify_setup,
@@ -127,7 +135,12 @@ def serve(transport: str, host: str, port: int) -> None:
     is_flag=True,
     help="Set up SonarQube code analysis integration"
 )
-def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool, with_sonarqube: bool) -> None:
+@click.option(
+    "--upgrade",
+    is_flag=True,
+    help="Force-refresh templates, migrate DB, update MCP config"
+)
+def install(list_skills: bool, force: bool, target: Path | None, with_serena: bool, with_monitoring: bool, with_sonarqube: bool, upgrade: bool) -> None:
     """Deploy skill templates to Claude Code.
 
     Installs the /sdlc:* commands into your Claude Code configuration,
@@ -138,6 +151,7 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
         a-sdlc install                    # Install all templates
         a-sdlc install --list             # List installed templates
         a-sdlc install --force            # Reinstall all templates
+        a-sdlc install --upgrade          # Force-refresh templates + migrate DB + update MCP
         a-sdlc install --with-serena      # Also set up Serena MCP
         a-sdlc install --with-monitoring  # Also set up monitoring
     """
@@ -145,6 +159,10 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
 
     if list_skills:
         _list_installed_skills(installer)
+        return
+
+    if upgrade:
+        _run_upgrade(installer)
         return
 
     try:
@@ -195,6 +213,229 @@ def install(list_skills: bool, force: bool, target: Path | None, with_serena: bo
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")
         sys.exit(1)
+
+
+def _run_upgrade(installer: Installer) -> None:
+    """Execute the full upgrade workflow: templates, DB migration, MCP config.
+
+    Args:
+        installer: Installer instance to use for template operations.
+    """
+    from a_sdlc.core.database import SCHEMA_VERSION, Database
+
+    console.print()
+    console.print("[bold cyan]Running upgrade...[/bold cyan]")
+    console.print()
+
+    # 1. Record pre-upgrade template version
+    _, old_template_ver, current_template_ver = installer.check_template_version()
+
+    # 2. Force-refresh templates (also refreshes MCP config via install)
+    try:
+        installed = installer.install(force=True)
+        templates_status = f"refreshed ({old_template_ver} -> {current_template_ver}), {len(installed)} templates"
+    except Exception as e:
+        console.print(f"[red]Error refreshing templates: {e}[/red]")
+        sys.exit(1)
+
+    # 3. Trigger DB migration check (Database.__init__ runs auto-migration with backup)
+    try:
+        db = Database()
+        db_status = f"schema v{SCHEMA_VERSION} (current)"
+    except RuntimeError as e:
+        console.print(f"[red]Database migration failed: {e}[/red]")
+        sys.exit(1)
+
+    # 4. Force-refresh MCP config
+    try:
+        mcp_result = configure_mcp_server(force=True)
+        mcp_status = mcp_result.get("status", "updated")
+    except Exception as e:
+        console.print(f"[red]Error updating MCP config: {e}[/red]")
+        sys.exit(1)
+
+    # 5. Display upgrade summary
+    console.print(Panel(
+        "[green]Upgrade completed successfully![/green]\n\n"
+        f"[bold]Templates:[/bold]  {templates_status}\n"
+        f"[bold]Database:[/bold]   {db_status}\n"
+        f"[bold]MCP config:[/bold] {mcp_status}",
+        title="[bold]Upgrade Summary[/bold]",
+        border_style="green"
+    ))
+
+
+@main.command()
+def setup():
+    """Interactive setup wizard for new users.
+
+    Guides you through prerequisite checks, template installation,
+    and MCP server configuration in one step.
+
+    Examples:
+
+        a-sdlc setup    # Run the interactive setup wizard
+    """
+    # Step 1: Welcome banner
+    console.print()
+    console.print(Panel(
+        "[bold]Welcome to a-sdlc Setup Wizard[/bold]\n\n"
+        "This wizard will:\n"
+        "  1. Check prerequisites (Python, uv, Claude Code)\n"
+        "  2. Install skill templates to ~/.claude/commands/sdlc/\n"
+        "  3. Configure the asdlc MCP server in ~/.claude.json\n"
+        "  4. Validate the installation",
+        title="[bold cyan]a-sdlc[/bold cyan]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    # Step 2: Run prerequisite checks
+    console.print("[bold]Step 1: Checking prerequisites...[/bold]")
+    console.print()
+
+    checks = []
+    has_critical_failure = False
+
+    # Python version
+    py_ok, py_msg = check_python_version()
+    checks.append(("Python >= 3.10", py_ok, py_msg, True))
+    if not py_ok:
+        has_critical_failure = True
+
+    # uv/uvx availability
+    uv_ok, uv_msg = check_uv_available()
+    checks.append(("uv / uvx", uv_ok, uv_msg, False))
+
+    # Claude Code
+    claude_ok, claude_msg = check_claude_code_installed()
+    checks.append(("Claude Code", claude_ok, claude_msg, True))
+    if not claude_ok:
+        has_critical_failure = True
+
+    # Display prerequisite table
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Prerequisite", style="cyan")
+    table.add_column("Status")
+    table.add_column("Details", style="dim")
+
+    for name, passed, detail, _critical in checks:
+        if passed:
+            status_str = "[green]PASS[/green]"
+        elif _critical:
+            status_str = "[red]FAIL[/red]"
+        else:
+            status_str = "[yellow]WARN[/yellow]"
+        table.add_row(name, status_str, detail)
+
+    console.print(table)
+    console.print()
+
+    # Step 3: If any critical check fails, show fix instructions and exit
+    if has_critical_failure:
+        console.print("[red]Critical prerequisites not met. Please fix the following:[/red]")
+        console.print()
+        for name, passed, detail, critical in checks:
+            if not passed and critical:
+                console.print(f"  [red]{name}[/red]: {detail}")
+                if "Python" in name:
+                    console.print("  [dim]Fix: Install Python 3.10+ from https://www.python.org/downloads/[/dim]")
+                elif "Claude" in name:
+                    console.print("  [dim]Fix: Install Claude Code from https://docs.anthropic.com/en/docs/claude-code[/dim]")
+        console.print()
+        sys.exit(1)
+
+    if not uv_ok:
+        console.print("[yellow]Warning: uv/uvx not found. MCP server may not work without it.[/yellow]")
+        console.print("[dim]Fix: curl -LsSf https://astral.sh/uv/install.sh | sh[/dim]")
+        console.print()
+
+    # Step 4: Install templates + MCP config
+    console.print("[bold]Step 2: Installing skill templates...[/bold]")
+    console.print()
+
+    installer = Installer()
+
+    # Step 5: Check if templates already exist; ask to force-refresh
+    force = False
+    installed_skills = installer.list_installed()
+    if installed_skills:
+        console.print(f"[yellow]Found {len(installed_skills)} existing skill templates.[/yellow]")
+        if click.confirm("  Overwrite with latest templates?", default=False):
+            force = True
+        console.print()
+
+    try:
+        installed = installer.install(force=force)
+        console.print(f"  Installed [green]{len(installed)}[/green] skill templates to [cyan]{installer.target_dir}[/cyan]")
+    except Exception as e:
+        console.print(f"[red]Error during installation: {e}[/red]")
+        sys.exit(1)
+
+    console.print()
+
+    # Step 6: Validate installation
+    console.print("[bold]Step 3: Validating installation...[/bold]")
+    console.print()
+
+    validation_ok = True
+
+    # Check MCP config
+    settings_path = get_claude_settings_path()
+    mcp_configured = False
+    if settings_path.exists():
+        try:
+            import json
+            settings = json.loads(settings_path.read_text())
+            mcp_configured = "asdlc" in settings.get("mcpServers", {})
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    if mcp_configured:
+        console.print("  [green]PASS[/green] asdlc MCP server configured in ~/.claude.json")
+    else:
+        console.print("  [red]FAIL[/red] asdlc MCP server not found in ~/.claude.json")
+        validation_ok = False
+
+    # Check data directory
+    data_dir = Path.home() / ".a-sdlc"
+    if data_dir.exists():
+        console.print(f"  [green]PASS[/green] Data directory exists: {data_dir}")
+    else:
+        console.print(f"  [yellow]WARN[/yellow] Data directory not yet created: {data_dir}")
+        console.print("  [dim]This is normal — it will be created on first use.[/dim]")
+
+    # Check templates directory
+    if installer.target_dir.exists():
+        template_count = len(list(installer.target_dir.glob("*.md")))
+        console.print(f"  [green]PASS[/green] {template_count} skill templates in {installer.target_dir}")
+    else:
+        console.print(f"  [red]FAIL[/red] Templates directory missing: {installer.target_dir}")
+        validation_ok = False
+
+    console.print()
+
+    if not validation_ok:
+        console.print("[red]Validation failed. Please check the errors above.[/red]")
+        sys.exit(1)
+
+    # Step 7: Success summary with next steps
+    console.print(Panel(
+        "[green]Setup complete![/green]\n\n"
+        "[bold]Next Steps[/bold]\n"
+        "  1. Open a project in Claude Code\n"
+        "  2. Run [cyan]/sdlc:init[/cyan] to initialize SDLC tracking\n"
+        "  3. Run [cyan]/sdlc:help[/cyan] for all available commands\n\n"
+        "[bold]Quick Start[/bold]\n"
+        "  /sdlc:init                  Initialize project\n"
+        "  /sdlc:scan                  Analyze codebase\n"
+        "  /sdlc:prd-generate          Create a PRD\n"
+        "  /sdlc:prd-split             Decompose PRD into tasks\n"
+        "  /sdlc:sprint-run            Execute sprint tasks\n\n"
+        "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
+        title="[bold green]Setup Complete[/bold green]",
+        border_style="green"
+    ))
 
 
 def _list_installed_skills(installer: Installer) -> None:
@@ -960,10 +1201,15 @@ def doctor() -> None:
 
     Checks for:
     - Python version compatibility
+    - uv/uvx availability
     - Claude Code configuration
+    - asdlc MCP server configuration
+    - Skill templates and version
     - Serena MCP server
     - Installed plugins
-    - Template integrity
+    - Docker and monitoring services
+    - SonarQube configuration
+    - Database accessibility and schema version
     """
     console.print(Panel(
         "[bold]a-sdlc System Diagnostics[/bold]",
@@ -979,6 +1225,15 @@ def doctor() -> None:
         "name": "Python Version",
         "status": "pass" if py_ok else "fail",
         "detail": f"{py_version.major}.{py_version.minor}.{py_version.micro}"
+                 if py_ok else f"{py_version.major}.{py_version.minor}.{py_version.micro} (requires >= 3.10). Fix: install Python 3.10+"
+    })
+
+    # uv/uvx availability check
+    uv_ok, uv_msg = check_uv_available()
+    checks.append({
+        "name": "uv/uvx",
+        "status": "pass" if uv_ok else "fail",
+        "detail": uv_msg if uv_ok else f"Not found. Fix: install from https://docs.astral.sh/uv/"
     })
 
     # Claude Code config directory
@@ -987,7 +1242,24 @@ def doctor() -> None:
     checks.append({
         "name": "Claude Code Config",
         "status": "pass" if claude_ok else "warn",
-        "detail": str(claude_dir) if claude_ok else "Not found (will be created)"
+        "detail": str(claude_dir) if claude_ok else "Not found. Fix: install Claude Code from https://claude.ai/code"
+    })
+
+    # asdlc MCP server in ~/.claude.json
+    settings_path = get_claude_settings_path()
+    try:
+        if settings_path.exists():
+            with open(settings_path) as f:
+                claude_settings = json.load(f)
+            mcp_ok = "asdlc" in claude_settings.get("mcpServers", {})
+        else:
+            mcp_ok = False
+    except (json.JSONDecodeError, OSError):
+        mcp_ok = False
+    checks.append({
+        "name": "asdlc MCP Server",
+        "status": "pass" if mcp_ok else "warn",
+        "detail": "Configured in ~/.claude.json" if mcp_ok else "Not found. Fix: run a-sdlc install"
     })
 
     # Commands directory
@@ -996,7 +1268,23 @@ def doctor() -> None:
     checks.append({
         "name": "Skill Templates",
         "status": "pass" if commands_ok else "warn",
-        "detail": f"{len(list(commands_dir.glob('*.md')))} installed" if commands_ok else "Not installed"
+        "detail": f"{len(list(commands_dir.glob('*.md')))} installed" if commands_ok else "Not installed. Fix: run a-sdlc install"
+    })
+
+    # Template version check
+    try:
+        installer = Installer()
+        tpl_up_to_date, tpl_installed, tpl_current = installer.check_template_version()
+        if tpl_up_to_date:
+            tpl_status, tpl_detail = "pass", f"v{tpl_installed} (current)"
+        else:
+            tpl_status, tpl_detail = "warn", f"v{tpl_installed} installed, v{tpl_current} available. Fix: run a-sdlc install --force"
+    except Exception:
+        tpl_status, tpl_detail = "warn", "Cannot check. Fix: run a-sdlc install"
+    checks.append({
+        "name": "Template Version",
+        "status": tpl_status,
+        "detail": tpl_detail
     })
 
     # Serena MCP check
@@ -1009,10 +1297,10 @@ def doctor() -> None:
         serena_detail = f"Configured ({serena_installer})"
         serena_status = "pass"
     elif serena_configured:
-        serena_detail = "Configured but installer not found"
+        serena_detail = "Configured but installer not found. Fix: run a-sdlc setup-mcp"
         serena_status = "warn"
     else:
-        serena_detail = "Not configured. Run: a-sdlc setup-mcp"
+        serena_detail = "Not configured. Fix: run a-sdlc setup-mcp"
         serena_status = "warn"
 
     checks.append({
@@ -1035,7 +1323,7 @@ def doctor() -> None:
     checks.append({
         "name": "Docker",
         "status": "pass" if docker_ok else "warn",
-        "detail": "Available" if docker_ok else "Not found (needed for monitoring)"
+        "detail": "Available" if docker_ok else "Not found. Fix: install Docker from https://docs.docker.com/get-docker/"
     })
 
     mon_verification = verify_monitoring_setup()
@@ -1043,19 +1331,19 @@ def doctor() -> None:
     checks.append({
         "name": "Monitoring Files",
         "status": "pass" if mon_verification.get("files_ready") else "warn",
-        "detail": "Installed" if mon_verification.get("files_ready") else "Not installed. Run: a-sdlc install --with-monitoring"
+        "detail": "Installed" if mon_verification.get("files_ready") else "Not installed. Fix: run a-sdlc install --with-monitoring"
     })
 
     checks.append({
         "name": "Langfuse Hook",
         "status": "pass" if mon_verification.get("hook_registered") else "warn",
-        "detail": "Registered" if mon_verification.get("hook_registered") else "Not registered"
+        "detail": "Registered" if mon_verification.get("hook_registered") else "Not registered. Fix: run a-sdlc install --with-monitoring"
     })
 
     checks.append({
         "name": "OTEL Environment",
         "status": "pass" if mon_verification.get("otel_configured") else "warn",
-        "detail": "Configured" if mon_verification.get("otel_configured") else "Not configured"
+        "detail": "Configured" if mon_verification.get("otel_configured") else "Not configured. Fix: run a-sdlc install --with-monitoring"
     })
 
     if mon_verification.get("files_ready"):
@@ -1066,12 +1354,12 @@ def doctor() -> None:
         checks.append({
             "name": "Langfuse Service",
             "status": "pass" if langfuse_ok else "warn",
-            "detail": "http://localhost:13000" if langfuse_ok else "Not reachable. Run: a-sdlc monitoring start"
+            "detail": "http://localhost:13000" if langfuse_ok else "Not reachable. Fix: run a-sdlc monitoring start"
         })
         checks.append({
             "name": "SigNoz Service",
             "status": "pass" if signoz_ok else "warn",
-            "detail": "http://localhost:8080" if signoz_ok else "Not reachable. Run: a-sdlc monitoring start"
+            "detail": "http://localhost:8080" if signoz_ok else "Not reachable. Fix: run a-sdlc monitoring start"
         })
 
     # SonarQube checks
@@ -1082,16 +1370,56 @@ def doctor() -> None:
         sq_detail = "Configured (pysonar available)"
         sq_status = "pass"
     elif sq_verification.get("host_url_configured"):
-        sq_detail = "Partially configured. Run: a-sdlc sonarqube configure"
+        sq_detail = "Partially configured. Fix: run a-sdlc sonarqube configure"
         sq_status = "warn"
     else:
-        sq_detail = "Not configured. Run: a-sdlc sonarqube configure"
+        sq_detail = "Not configured. Fix: run a-sdlc sonarqube configure"
         sq_status = "warn"
 
     checks.append({
         "name": "SonarQube",
         "status": sq_status,
         "detail": sq_detail
+    })
+
+    # Database accessibility check
+    from a_sdlc.core.database import Database, SCHEMA_VERSION
+    import sqlite3
+    db = None  # type: ignore[assignment]
+    try:
+        db = Database()
+        db_path = db.db_path
+        db_accessible = Path(db_path).exists() if str(db_path) != ":memory:" else True
+        checks.append({
+            "name": "Database Accessible",
+            "status": "pass" if db_accessible else "fail",
+            "detail": str(db_path) if db_accessible else f"Database file not found at {db_path}. Fix: run a-sdlc install"
+        })
+    except Exception as e:
+        checks.append({
+            "name": "Database Accessible",
+            "status": "fail",
+            "detail": f"Cannot open database: {e}. Fix: check ~/.a-sdlc/ permissions or run a-sdlc install"
+        })
+
+    # Database schema version check
+    try:
+        if db is not None:
+            with sqlite3.connect(db.db_path) as conn:
+                actual = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+            if actual == SCHEMA_VERSION:
+                schema_status, schema_detail = "pass", f"v{actual} (current)"
+            else:
+                schema_status, schema_detail = "warn", f"v{actual} (expected v{SCHEMA_VERSION}). Fix: run a-sdlc install --upgrade"
+        else:
+            schema_status, schema_detail = "fail", "Skipped (database not accessible). Fix: resolve database issue above"
+    except Exception as e:
+        schema_status, schema_detail = "fail", f"Cannot check: {e}. Fix: run a-sdlc install --upgrade"
+
+    checks.append({
+        "name": "Database schema version",
+        "status": schema_status,
+        "detail": schema_detail
     })
 
     # Display results

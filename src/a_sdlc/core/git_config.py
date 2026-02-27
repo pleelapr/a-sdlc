@@ -15,14 +15,30 @@ Destructive operations (force push, branch deletion) always require
 runtime user confirmation, regardless of configuration.
 """
 
+import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 
+
+def get_config_dir() -> Path:
+    """Get platform-specific configuration directory.
+
+    Returns:
+        Path: %LOCALAPPDATA%/a-sdlc on Windows, ~/.config/a-sdlc on macOS/Linux
+    """
+    if platform.system() == "Windows":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        return base / "a-sdlc"
+    else:
+        return Path.home() / ".config" / "a-sdlc"
+
+
 # Shared config paths (same as PluginManager and github.py)
-GLOBAL_CONFIG_DIR = Path.home() / ".config" / "a-sdlc"
+GLOBAL_CONFIG_DIR = get_config_dir()
 GLOBAL_CONFIG_FILE = GLOBAL_CONFIG_DIR / "config.yaml"
 PROJECT_CONFIG_DIR = ".sdlc"
 PROJECT_CONFIG_FILE = "config.yaml"

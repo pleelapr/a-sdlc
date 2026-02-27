@@ -31,9 +31,9 @@ def app_client(temp_storage, monkeypatch):
 
 
 @pytest.fixture
-def storage_with_project(temp_storage):
+def storage_with_project(temp_storage, tmp_path):
     """Create storage with a test project."""
-    temp_storage.create_project("test-proj", "Test Project", "/tmp/test")
+    temp_storage.create_project("test-proj", "Test Project", str(tmp_path / "test"))
     return temp_storage
 
 
@@ -419,9 +419,9 @@ class TestGetAllProjectsWithStats:
         result = temp_storage.get_all_projects_with_stats()
         assert result == []
 
-    def test_project_with_no_entities(self, temp_storage):
+    def test_project_with_no_entities(self, temp_storage, tmp_path):
         """Returns project with zero counts when no tasks/PRDs/sprints."""
-        temp_storage.create_project("proj1", "Project 1", "/tmp/proj1")
+        temp_storage.create_project("proj1", "Project 1", str(tmp_path / "proj1"))
         result = temp_storage.get_all_projects_with_stats()
         assert len(result) == 1
         p = result[0]
@@ -432,9 +432,9 @@ class TestGetAllProjectsWithStats:
         assert p["total_sprints"] == 0
         assert p["active_sprint_title"] is None
 
-    def test_project_with_stats(self, temp_storage):
+    def test_project_with_stats(self, temp_storage, tmp_path):
         """Returns correct aggregated stats."""
-        temp_storage.create_project("proj1", "Project 1", "/tmp/proj1")
+        temp_storage.create_project("proj1", "Project 1", str(tmp_path / "proj1"))
         temp_storage.create_prd(
             prd_id="PROJ-P0001",
             project_id="proj1",
@@ -471,10 +471,10 @@ class TestGetAllProjectsWithStats:
         assert p["active_sprint_title"] == "Sprint 1"
         assert p["active_sprint_id"] == "PROJ-S0001"
 
-    def test_multiple_projects_ordered_by_access(self, temp_storage):
+    def test_multiple_projects_ordered_by_access(self, temp_storage, tmp_path):
         """Projects are ordered by last accessed."""
-        temp_storage.create_project("proj1", "First", "/tmp/p1")
-        temp_storage.create_project("proj2", "Second", "/tmp/p2")
+        temp_storage.create_project("proj1", "First", str(tmp_path / "p1"))
+        temp_storage.create_project("proj2", "Second", str(tmp_path / "p2"))
         # Access proj1 to make it most recent
         temp_storage.update_project_accessed("proj1")
 
@@ -986,9 +986,9 @@ class TestFormatDuration:
 class TestPRDTimestamps:
     """Test PRD phase timestamp handling (ready_at, split_at, completed_at)."""
 
-    def test_ready_at_set_on_ready(self, temp_storage):
+    def test_ready_at_set_on_ready(self, temp_storage, tmp_path):
         """ready_at is set when PRD moves to ready, others NULL."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1000,9 +1000,9 @@ class TestPRDTimestamps:
         assert updated.get("split_at") is None
         assert updated.get("completed_at") is None
 
-    def test_split_at_set_on_split(self, temp_storage):
+    def test_split_at_set_on_split(self, temp_storage, tmp_path):
         """split_at is set when PRD moves to split, ready_at preserved."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1015,9 +1015,9 @@ class TestPRDTimestamps:
         assert updated.get("split_at") is not None
         assert updated.get("completed_at") is None
 
-    def test_completed_at_set_on_completed(self, temp_storage):
+    def test_completed_at_set_on_completed(self, temp_storage, tmp_path):
         """completed_at is set when PRD completes, all others preserved."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1031,9 +1031,9 @@ class TestPRDTimestamps:
         assert updated.get("split_at") is not None
         assert updated.get("completed_at") is not None
 
-    def test_timestamps_cleared_on_draft(self, temp_storage):
+    def test_timestamps_cleared_on_draft(self, temp_storage, tmp_path):
         """All 3 timestamps cleared when PRD returns to draft."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1048,9 +1048,9 @@ class TestPRDTimestamps:
         assert updated.get("split_at") is None
         assert updated.get("completed_at") is None
 
-    def test_split_at_cleared_on_backtrack_to_ready(self, temp_storage):
+    def test_split_at_cleared_on_backtrack_to_ready(self, temp_storage, tmp_path):
         """split_at cleared when backtracking from split to ready, ready_at preserved."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1064,9 +1064,9 @@ class TestPRDTimestamps:
         assert updated.get("split_at") is None
         assert updated.get("completed_at") is None
 
-    def test_completed_at_cleared_on_backtrack_to_split(self, temp_storage):
+    def test_completed_at_cleared_on_backtrack_to_split(self, temp_storage, tmp_path):
         """completed_at cleared when backtracking from completed to split."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1081,9 +1081,9 @@ class TestPRDTimestamps:
         assert updated.get("split_at") is not None
         assert updated.get("completed_at") is None
 
-    def test_ready_at_fresh_after_draft_roundtrip(self, temp_storage):
+    def test_ready_at_fresh_after_draft_roundtrip(self, temp_storage, tmp_path):
         """ready→draft→ready gets a fresh ready_at value."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
             project_id="proj",
@@ -1107,9 +1107,9 @@ class TestPRDTimestamps:
 class TestTaskTimestamps:
     """Test started_at and completed_at timestamp handling."""
 
-    def test_started_at_set_on_in_progress(self, temp_storage):
+    def test_started_at_set_on_in_progress(self, temp_storage, tmp_path):
         """started_at is set when task moves to in_progress."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_task(
             task_id="T-00001",
             project_id="proj",
@@ -1119,9 +1119,9 @@ class TestTaskTimestamps:
         assert updated is not None
         assert updated.get("started_at") is not None
 
-    def test_started_at_preserved_on_reenter(self, temp_storage):
+    def test_started_at_preserved_on_reenter(self, temp_storage, tmp_path):
         """started_at stays as first value when re-entering in_progress."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_task(
             task_id="T-00001",
             project_id="proj",
@@ -1136,9 +1136,9 @@ class TestTaskTimestamps:
         updated2 = temp_storage.update_task("T-00001", status="in_progress")
         assert updated2["started_at"] == first_started
 
-    def test_completed_at_cleared_on_reopen(self, temp_storage):
+    def test_completed_at_cleared_on_reopen(self, temp_storage, tmp_path):
         """completed_at is cleared when task moves from completed to in_progress."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_task(
             task_id="T-00001",
             project_id="proj",
@@ -1154,9 +1154,9 @@ class TestTaskTimestamps:
         task2 = temp_storage._db.get_task("T-00001")
         assert task2["completed_at"] is None
 
-    def test_timestamps_cleared_on_pending(self, temp_storage):
+    def test_timestamps_cleared_on_pending(self, temp_storage, tmp_path):
         """Both started_at and completed_at are cleared on reset to pending."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_task(
             task_id="T-00001",
             project_id="proj",
@@ -1168,9 +1168,9 @@ class TestTaskTimestamps:
         assert task["started_at"] is None
         assert task["completed_at"] is None
 
-    def test_sprint_timestamps_on_reversal(self, temp_storage):
+    def test_sprint_timestamps_on_reversal(self, temp_storage, tmp_path):
         """Sprint timestamps are properly managed on status reversals."""
-        temp_storage.create_project("proj", "Proj", "/tmp/proj")
+        temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_sprint(
             sprint_id="S-0001",
             project_id="proj",

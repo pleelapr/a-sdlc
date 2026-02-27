@@ -9,6 +9,7 @@ work correctly for the worktree-based workflow:
 """
 
 import re
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -189,14 +190,15 @@ class TestModeDetectionWithConfig:
 class TestResumeViaListWorktrees:
     """Test resume state detection using list_worktrees MCP tool."""
 
-    def _make_worktree(self, prd_id, status="active", sprint_id="TEST-S0001"):
+    def _make_worktree(self, prd_id, status="active", sprint_id="TEST-S0001", base_path=None):
+        path = str(base_path / ".worktrees" / prd_id) if base_path else str(Path(tempfile.gettempdir()) / ".worktrees" / prd_id)
         return {
             "id": f"TEST-W{prd_id[-4:]}",
             "project_id": "test-project",
             "prd_id": prd_id,
             "sprint_id": sprint_id,
             "branch_name": f"sprint/{sprint_id}/{prd_id}",
-            "path": f"/tmp/.worktrees/{prd_id}",
+            "path": path,
             "status": status,
             "created_at": "2026-01-01T00:00:00+00:00",
             "cleaned_at": None,

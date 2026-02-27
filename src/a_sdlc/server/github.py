@@ -12,8 +12,10 @@ from typing import Any
 import httpx
 import yaml
 
+from a_sdlc.core.git_config import get_config_dir
+
 # Global config paths (shared with sonarqube_setup.py)
-GLOBAL_CONFIG_DIR = Path.home() / ".config" / "a-sdlc"
+GLOBAL_CONFIG_DIR = get_config_dir()
 GLOBAL_CONFIG_PATH = GLOBAL_CONFIG_DIR / "config.yaml"
 
 

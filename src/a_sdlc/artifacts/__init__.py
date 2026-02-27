@@ -22,6 +22,7 @@ import yaml
 
 from a_sdlc.artifacts.base import Artifact, ArtifactPlugin, ArtifactType
 from a_sdlc.artifacts.prd import PRD, PRDPlugin
+from a_sdlc.core.git_config import get_config_dir
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -43,7 +44,7 @@ class ArtifactPluginManager:
     - Global config: ~/.config/a-sdlc/config.yaml (fallback)
     """
 
-    GLOBAL_CONFIG_FILE = Path.home() / ".config" / "a-sdlc" / "config.yaml"
+    GLOBAL_CONFIG_FILE = get_config_dir() / "config.yaml"
     PROJECT_CONFIG_DIR = ".sdlc"
     PROJECT_CONFIG_FILE = "config.yaml"
 

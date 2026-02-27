@@ -1,0 +1,31 @@
+name: Smoke Test
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cli-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+      - name: CLI version check
+        run: uv run a-sdlc --version
+      - name: CLI help check
+        run: uv run a-sdlc --help
+      - name: MCP server ping
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | \
+            timeout 10 uv run a-sdlc serve || true
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run smoke test container
+        run: docker build -f Dockerfile.test -t a-sdlc-smoke .

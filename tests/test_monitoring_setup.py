@@ -232,13 +232,14 @@ def test_hook_already_registered_empty():
 
 def test_hook_already_registered_present():
     """Detects existing langfuse hook."""
+    hook_path = str(Path.home() / ".a-sdlc" / "monitoring" / "langfuse-hook.py")
     settings = {
         "hooks": {
             "Stop": [
                 {
                     "matcher": "",
                     "hooks": [
-                        {"type": "command", "command": "uv run ~/.a-sdlc/monitoring/langfuse-hook.py"}
+                        {"type": "command", "command": f"uv run {hook_path}"}
                     ],
                 }
             ]

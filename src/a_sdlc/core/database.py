@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -48,6 +49,16 @@ def ensure_data_dir() -> Path:
     return data_dir
 
 
+class _MigrationError(Exception):
+    """Internal exception for migration failures that need backup restore."""
+
+    def __init__(self, original_version: int, backup_path: Path, original_error: Exception):
+        self.original_version = original_version
+        self.backup_path = backup_path
+        self.original_error = original_error
+        super().__init__(str(original_error))
+
+
 class Database:
     """SQLite database manager for a-sdlc.
 
@@ -68,16 +79,31 @@ class Database:
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize database with schema if needed."""
-        with self.connection() as conn:
-            # Check if schema exists
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-            )
-            if cursor.fetchone() is None:
-                self._create_schema(conn)
-            else:
-                self._check_schema_version(conn)
+        """Initialize database with schema if needed.
+
+        Wraps migration in a backup/restore cycle: if migration fails,
+        the database file is restored from the pre-migration backup.
+        """
+        try:
+            with self.connection() as conn:
+                # Check if schema exists
+                cursor = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
+                )
+                if cursor.fetchone() is None:
+                    self._create_schema(conn)
+                else:
+                    self._check_schema_version(conn)
+        except _MigrationError as e:
+            # Connection is now closed by context manager.
+            # Restore from backup and re-raise as RuntimeError.
+            if e.backup_path and e.backup_path.exists():
+                shutil.copy2(e.backup_path, self.db_path)
+            raise RuntimeError(
+                f"Migration from v{e.original_version} failed. "
+                f"Database restored from backup at {e.backup_path}. "
+                f"Error: {e.original_error}"
+            ) from e.original_error
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         """Create initial database schema (version 2 - with shortname)."""
@@ -224,47 +250,72 @@ class Database:
         """)
 
     def _check_schema_version(self, conn: sqlite3.Connection) -> None:
-        """Check schema version matches expected and run migrations if needed."""
+        """Check schema version matches expected and run migrations if needed.
+
+        Creates a backup of the database before running migrations.
+        If any migration fails, the database is restored from the backup
+        and a RuntimeError is raised with details.
+        """
         cursor = conn.execute("SELECT version FROM schema_version")
         current_version = cursor.fetchone()[0]
 
         if current_version == SCHEMA_VERSION:
             return
 
-        # Chained migrations
-        if current_version == 1:
-            self._migrate_v1_to_v2(conn)
-            current_version = 2
+        if current_version > SCHEMA_VERSION:
+            # Unknown/future version - can't migrate
+            raise RuntimeError(
+                f"Database schema version {current_version} is newer than expected "
+                f"version {SCHEMA_VERSION}. Please upgrade a-sdlc or restore from "
+                f"a backup at {self.db_path.with_suffix('.db.bak.v' + str(current_version))} "
+                "if available."
+            )
 
-        if current_version == 2:
-            self._migrate_v2_to_v3(conn)
-            current_version = 3
+        # Create backup before migrating
+        original_version = current_version
+        backup_path = self.db_path.with_suffix(f".db.bak.v{original_version}")
+        if self.db_path.exists():
+            shutil.copy2(self.db_path, backup_path)
 
-        if current_version == 3:
-            self._migrate_v3_to_v4(conn)
-            current_version = 4
+        # Run chained migrations with rollback on failure
+        try:
+            if current_version == 1:
+                self._migrate_v1_to_v2(conn)
+                current_version = 2
 
-        if current_version == 4:
-            self._migrate_v4_to_v5(conn)
-            current_version = 5
+            if current_version == 2:
+                self._migrate_v2_to_v3(conn)
+                current_version = 3
 
-        if current_version == 5:
-            self._migrate_v5_to_v6(conn)
-            current_version = 6
+            if current_version == 3:
+                self._migrate_v3_to_v4(conn)
+                current_version = 4
 
-        if current_version == 6:
-            self._migrate_v6_to_v7(conn)
-            current_version = 7
+            if current_version == 4:
+                self._migrate_v4_to_v5(conn)
+                current_version = 5
 
-        if current_version == SCHEMA_VERSION:
-            return
+            if current_version == 5:
+                self._migrate_v5_to_v6(conn)
+                current_version = 6
 
-        # Unknown version - can't migrate
-        raise RuntimeError(
-            f"Database schema version {current_version} is incompatible. "
-            f"Expected version {SCHEMA_VERSION}. "
-            "Please backup your data and delete ~/.a-sdlc/data.db to recreate."
-        )
+            if current_version == 6:
+                self._migrate_v6_to_v7(conn)
+                current_version = 7
+        except _MigrationError:
+            raise
+        except Exception as e:
+            # Raise _MigrationError to signal _init_db to restore from backup
+            # after the connection context manager has closed the connection.
+            raise _MigrationError(original_version, backup_path, e) from e
+
+        if current_version != SCHEMA_VERSION:
+            # Reached end of migration chain but version still doesn't match
+            raise RuntimeError(
+                f"Database schema version {current_version} is incompatible. "
+                f"Expected version {SCHEMA_VERSION}. "
+                f"A backup is available at {backup_path}."
+            )
 
     def _migrate_v1_to_v2(self, conn: sqlite3.Connection) -> None:
         """Migrate database from version 1 to version 2 (add shortname column)."""

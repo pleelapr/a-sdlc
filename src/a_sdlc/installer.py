@@ -6,13 +6,53 @@ Handles:
 - Template versioning and updates
 - Integrity verification
 - MCP server configuration
+- Prerequisite checking for setup wizard
 """
 
 import json
 import shutil
+import sys
 from importlib import resources
 from pathlib import Path
 from typing import Any
+
+from a_sdlc import __version__
+
+
+def check_python_version() -> tuple[bool, str]:
+    """Check if Python version meets minimum requirement (>= 3.10).
+
+    Returns:
+        Tuple of (passed, message) where passed is True if Python >= 3.10.
+    """
+    version = sys.version_info
+    if version >= (3, 10):
+        return True, f"Python {version.major}.{version.minor}.{version.micro}"
+    return False, f"Python {version.major}.{version.minor} (requires >= 3.10)"
+
+
+def check_uv_available() -> tuple[bool, str]:
+    """Check if uv/uvx is available on PATH.
+
+    Returns:
+        Tuple of (passed, message) where passed is True if uvx is found.
+    """
+    uvx_path = shutil.which("uvx")
+    if uvx_path:
+        return True, uvx_path
+    return False, "Not found. Install from https://docs.astral.sh/uv/"
+
+
+def check_claude_code_installed() -> tuple[bool, str]:
+    """Check if Claude Code is installed by verifying ~/.claude directory.
+
+    Returns:
+        Tuple of (passed, message) where passed is True if ~/.claude exists.
+    """
+    claude_dir = Path.home() / ".claude"
+    if claude_dir.exists():
+        return True, str(claude_dir)
+    return False, "~/.claude not found. Install Claude Code first."
 
 
 def get_claude_settings_path() -> Path:
@@ -122,6 +162,10 @@ class Installer:
             shutil.copy2(template_file, target_file)
             installed.append(template_file.stem)
 
+        # Write version marker
+        version_file = self.target_dir / ".version"
+        version_file.write_text(__version__)
+
         # Configure MCP server
         if configure_mcp:
             configure_mcp_server(force=force)
@@ -203,3 +247,15 @@ class Installer:
             results[name] = source_content == target_content
 
         return results
+
+    def check_template_version(self) -> tuple[bool, str, str]:
+        """Check if installed templates match current package version.
+
+        Returns:
+            Tuple of (up_to_date, installed_version, current_version).
+        """
+        version_file = self.target_dir / ".version"
+        if not version_file.exists():
+            return False, "unknown", __version__
+        installed = version_file.read_text().strip()
+        return installed == __version__, installed, __version__

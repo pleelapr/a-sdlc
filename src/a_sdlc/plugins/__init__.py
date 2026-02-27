@@ -16,6 +16,7 @@ from typing import Literal
 
 import yaml
 
+from a_sdlc.core.git_config import get_config_dir
 from a_sdlc.plugins.base import TaskPlugin
 
 
@@ -48,7 +49,7 @@ class PluginManager:
     When saving, you can choose the target location.
     """
 
-    GLOBAL_CONFIG_FILE = Path.home() / ".config" / "a-sdlc" / "config.yaml"
+    GLOBAL_CONFIG_FILE = get_config_dir() / "config.yaml"
     PROJECT_CONFIG_DIR = ".sdlc"
     PROJECT_CONFIG_FILE = "config.yaml"
 
