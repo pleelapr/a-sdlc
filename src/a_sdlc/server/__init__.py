@@ -36,6 +36,7 @@ from a_sdlc.core.git_config import (
     load_git_safety_config,
     save_git_safety_config,
 )
+from a_sdlc.core.review_config import load_review_config
 from a_sdlc.storage import get_storage
 
 # Module-level variable to track UI server process
@@ -892,6 +893,19 @@ def update_task(
     if not task:
         return {"status": "not_found", "message": f"Task not found: {task_id}"}
 
+    # Hard gate: review enforcement
+    if status == "completed":
+        review_config = load_review_config()
+        if review_config.enabled:
+            latest = db.get_latest_approved_review(task_id)
+            if not latest:
+                return {
+                    "status": "error",
+                    "message": f"Cannot complete {task_id}: no approved review evidence. "
+                    "Submit review via submit_self_review() / submit_review_verdict() first, "
+                    "or disable review in .sdlc/config.yaml.",
+                }
+
     # Build update kwargs for database
     db_kwargs = {}
     if title is not None:
@@ -956,6 +970,167 @@ def block_task(task_id: str, reason: str | None = None) -> dict[str, Any]:
         Updated task details.
     """
     return update_task(task_id, status="blocked")
+
+
+# =========================================================================
+# Review Tools
+# =========================================================================
+
+
+@mcp.tool()
+def submit_self_review(
+    task_id: str,
+    verdict: str,
+    findings: str = "",
+    test_output: str = "",
+) -> dict[str, Any]:
+    """Submit a self-review for a task (developer verifies own work).
+
+    Args:
+        task_id: Task identifier.
+        verdict: Self-review verdict ('pass' or 'fail').
+        findings: Optional JSON array of finding objects.
+        test_output: Optional raw test command output.
+
+    Returns:
+        Review record with round number and verdict.
+    """
+    db = get_db()
+
+    task = db.get_task(task_id)
+    if not task:
+        return {"status": "not_found", "message": f"Task not found: {task_id}"}
+
+    valid_verdicts = ("pass", "fail")
+    if verdict not in valid_verdicts:
+        return {
+            "status": "error",
+            "message": f"Invalid verdict: {verdict!r}. Must be one of {valid_verdicts}",
+        }
+
+    project_id = task["project_id"]
+
+    # Compute round number: count existing self-reviews for this task + 1
+    existing_reviews = db.get_reviews_for_task(task_id)
+    self_reviews = [r for r in existing_reviews if r["reviewer_type"] == "self"]
+    round_num = len(self_reviews) + 1
+
+    review = db.create_review(
+        task_id=task_id,
+        project_id=project_id,
+        round_num=round_num,
+        reviewer_type="self",
+        verdict=verdict,
+        findings=findings or None,
+        test_output=test_output or None,
+    )
+
+    return {
+        "status": "ok",
+        "review_id": review["id"],
+        "round": round_num,
+        "verdict": verdict,
+    }
+
+
+@mcp.tool()
+def submit_review_verdict(
+    task_id: str,
+    verdict: str,
+    findings: str = "",
+) -> dict[str, Any]:
+    """Submit a subagent review verdict for a task.
+
+    Args:
+        task_id: Task identifier.
+        verdict: Review verdict ('approve', 'request_changes', or 'escalate').
+        findings: Optional JSON array of finding objects.
+
+    Returns:
+        Review record with round number and verdict.
+    """
+    db = get_db()
+
+    task = db.get_task(task_id)
+    if not task:
+        return {"status": "not_found", "message": f"Task not found: {task_id}"}
+
+    valid_verdicts = ("approve", "request_changes", "escalate")
+    if verdict not in valid_verdicts:
+        return {
+            "status": "error",
+            "message": f"Invalid verdict: {verdict!r}. Must be one of {valid_verdicts}",
+        }
+
+    project_id = task["project_id"]
+
+    # Compute round number: count existing subagent-reviews for this task + 1
+    existing_reviews = db.get_reviews_for_task(task_id)
+    subagent_reviews = [r for r in existing_reviews if r["reviewer_type"] == "subagent"]
+    round_num = len(subagent_reviews) + 1
+
+    review = db.create_review(
+        task_id=task_id,
+        project_id=project_id,
+        round_num=round_num,
+        reviewer_type="subagent",
+        verdict=verdict,
+        findings=findings or None,
+    )
+
+    return {
+        "status": "ok",
+        "review_id": review["id"],
+        "round": round_num,
+        "verdict": verdict,
+    }
+
+
+@mcp.tool()
+def get_review_evidence(task_id: str) -> dict[str, Any]:
+    """Get all review evidence for a task with summary.
+
+    Args:
+        task_id: Task identifier.
+
+    Returns:
+        All reviews for the task with computed summary.
+    """
+    db = get_db()
+
+    task = db.get_task(task_id)
+    if not task:
+        return {"status": "not_found", "message": f"Task not found: {task_id}"}
+
+    reviews = db.get_reviews_for_task(task_id)
+
+    # Compute summary
+    self_reviews = [r for r in reviews if r["reviewer_type"] == "self"]
+    subagent_reviews = [r for r in reviews if r["reviewer_type"] == "subagent"]
+
+    latest_self_verdict = self_reviews[-1]["verdict"] if self_reviews else None
+    latest_subagent_verdict = subagent_reviews[-1]["verdict"] if subagent_reviews else None
+
+    # Determine total rounds as max round across all reviews
+    total_rounds = max((r["round"] for r in reviews), default=0)
+
+    has_approved = any(
+        r["verdict"] in ("pass", "approve") for r in reviews
+    )
+
+    summary = {
+        "total_rounds": total_rounds,
+        "latest_self_verdict": latest_self_verdict,
+        "latest_subagent_verdict": latest_subagent_verdict,
+        "has_approved": has_approved,
+    }
+
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "reviews": [dict(r) for r in reviews],
+        "summary": summary,
+    }
 
 
 @mcp.tool()

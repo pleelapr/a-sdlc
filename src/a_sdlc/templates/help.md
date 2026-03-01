@@ -64,6 +64,10 @@ Quick reference for all `/sdlc:*` commands without leaving Claude Code.
   /sdlc:sprint-complete <id>   Close sprint + retrospective
   /sdlc:sprint-delete <id>     Delete a sprint
 
+🔬 Quality & Retrospective
+
+  /sdlc:retrospective           Analyze corrections → distill lessons
+
 🔄 External Sync (Jira/Linear)
 
   /sdlc:sprint-import          Import sprints from Jira/Linear
@@ -199,7 +203,7 @@ Lessons are categorized (Testing, Code Quality, Task Completeness, Integration, 
 a-sdlc includes a built-in quality feedback loop:
 
 1. **Corrections Log** — Fixes are logged via `mcp__asdlc__log_correction()` from any workflow step
-2. **Retrospective** — `/sdlc:sprint-complete` distills corrections into lessons
+2. **Retrospective** — `/sdlc:retrospective` analyzes corrections and distills them into lessons (also triggered by `/sdlc:sprint-complete`)
 3. **Lessons Learned** — Stored in `.sdlc/lesson-learn.md` (project) and `~/.a-sdlc/lesson-learn.md` (global)
 4. **Preflight Checks** — Lessons are presented before key workflow steps
 5. **Quality Gates** — Completeness verified at PRD split and task completion

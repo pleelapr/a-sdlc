@@ -95,125 +95,32 @@ This will:
 2. Set `completed_at` timestamp
 3. Return summary with task counts
 
-### Step 5.5: Auto-Retrospective & Lesson Distillation
+### Step 5.5: Archive Corrections & Suggest Retrospective
 
 After sprint completion, before generating the final report:
 
-**5.5.1: Load Correction Log**
-
-Corrections are logged throughout the sprint via `mcp__asdlc__log_correction()` from any workflow — task implementation, PRD splits, sprint execution, PR feedback, and ad-hoc fixes. Read the accumulated log:
+**5.5.1: Archive Correction Log**
 
 ```
 Read: .sdlc/corrections.log
 ```
 
-If the file does not exist or is empty:
-> No corrections logged during this sprint. Skipping retrospective.
-
-Proceed to the report step.
-
-**5.5.2: Filter & Analyze**
-
-Parse correction log entries. Filter to entries relevant to this sprint:
-- Entries with `sprint:{sprint_id}` context
-- Entries with `task:{task_id}` where task belongs to this sprint
-- Entries timestamped during the sprint period
-
-Group by category and count:
-```
-Category Analysis:
-- testing: 4 corrections (most frequent)
-- code-quality: 2 corrections
-- task-completeness: 2 corrections
-- architecture: 1 correction
-```
-
-**5.5.3: Propose Lessons**
-
-**CRITICAL: Anti-Fluff Rules for Retrospective**
-
-- **MUST NOT** generalize beyond what the correction log shows — no "best practices" or generic advice
-- **MUST NOT** invent patterns that aren't evidenced by 2+ actual corrections
-- **MUST NOT** add recommendations for processes, tools, or practices not directly related to observed corrections
-- **MUST** cite specific correction log entries as evidence for each proposed lesson
-- **MUST** keep lesson descriptions factual and grounded in sprint data
-
-**If the log shows 3 testing corrections about missing edge cases, the lesson is about missing edge cases — not about "improving overall test strategy".**
-
-For each category with 2+ corrections, draft a lesson-learn entry:
-
-```
-Proposed Lesson 1 of N:
-
-Category: Testing
-Priority: SHOULD (suggested based on frequency)
-Description: "Ensure unit tests cover edge cases for {pattern observed}.
-             This sprint had 4 corrections related to missing test coverage."
-Example: "{specific correction from the log}"
-```
-
-Present each proposed lesson via AskUserQuestion:
-
-```
-AskUserQuestion({
-  questions: [
-    {
-      question: "Proposed lesson from 4 testing corrections. Accept this lesson?",
-      header: "Lesson 1",
-      options: [
-        { label: "Approve", description: "Add this lesson as-is to lesson-learn.md" },
-        { label: "Edit", description: "Modify the description or priority before saving" },
-        { label: "Promote to MUST", description: "This is critical enough to be a MUST-level lesson" },
-        { label: "Skip", description: "Don't save this lesson" }
-      ],
-      multiSelect: false
-    },
-    {
-      question: "Where should this lesson be saved?",
-      header: "Scope",
-      options: [
-        { label: "Project only", description: "Save to .sdlc/lesson-learn.md (this project only)" },
-        { label: "Global", description: "Save to ~/.a-sdlc/lesson-learn.md (all projects)" },
-        { label: "Both", description: "Save to both project and global lesson-learn files" }
-      ],
-      multiSelect: false
-    }
-  ]
-})
-```
-
-**5.5.4: Write Approved Lessons**
-
-For each approved lesson, append to the appropriate lesson-learn.md file(s):
-
-```markdown
-### {Category}
-
-- **[{PRIORITY}]** {Description}
-  - *Source:* Sprint {sprint_id} retrospective ({N} corrections)
-  - *Example:* {example from correction log}
-  - *Added:* {timestamp}
-```
-
-**5.5.5: Archive Corrections**
-
-After all lessons are processed:
+If the file exists and is not empty:
 1. Rename `.sdlc/corrections.log` to `.sdlc/corrections.log.{sprint_id}`
-2. Create a fresh empty `.sdlc/corrections.log` (or let it be created on next append)
+2. Display: `Corrections archived to .sdlc/corrections.log.{sprint_id}`
 
-Display:
-> Retrospective complete. {N} lessons saved, {M} corrections archived to corrections.log.{sprint_id}
+If the file does not exist or is empty:
+> No corrections logged during this sprint.
 
-**5.5.6: Include in Sprint Report**
+**5.5.2: Suggest Retrospective**
 
-Add a "Lessons Learned" section to the final sprint report:
+If corrections were archived, suggest running the dedicated retrospective command:
+
 ```
-## Lessons Learned This Sprint
+Corrections from this sprint have been archived.
 
-- [{PRIORITY}] {Category}: {Description} (from {N} corrections)
-- ...
-
-Corrections archived: .sdlc/corrections.log.{sprint_id}
+To analyze patterns and distill lessons, run:
+  /sdlc:retrospective --sprint {sprint_id}
 ```
 
 ### 6. Generate Report

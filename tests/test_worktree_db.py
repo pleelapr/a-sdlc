@@ -296,18 +296,18 @@ def v6_db():
 
 
 class TestSchemaVersion:
-    """Test that the schema version is correctly set to 7."""
+    """Test that the schema version is correctly set to 8."""
 
     def test_schema_version_constant(self):
-        """SCHEMA_VERSION constant should be 7."""
-        assert SCHEMA_VERSION == 7
+        """SCHEMA_VERSION constant should be 8."""
+        assert SCHEMA_VERSION == 8
 
-    def test_fresh_db_has_version_7(self, temp_db):
-        """A fresh database should have schema version 7."""
+    def test_fresh_db_has_version_8(self, temp_db):
+        """A fresh database should have schema version 8."""
         with temp_db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 7
+        assert version == 8
 
     def test_fresh_db_has_worktrees_table(self, temp_db):
         """A fresh database should have the worktrees table."""
@@ -336,13 +336,13 @@ class TestMigrationV5ToV6:
             )
             assert cursor.fetchone() is not None
 
-    def test_migration_updates_version_to_7(self, v5_db):
-        """Migration from v5 should update schema version to 7 (via chained migration)."""
+    def test_migration_updates_version_to_8(self, v5_db):
+        """Migration from v5 should update schema version to 8 (via chained migration)."""
         db = Database(db_path=v5_db)
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 7
+        assert version == 8
 
     def test_migration_creates_indexes(self, v5_db):
         """Migration should create all expected indexes on worktrees table."""
@@ -399,7 +399,7 @@ class TestMigrationV5ToV6:
         with db2.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 7
+        assert version == 8
 
 
 # =============================================================================
@@ -418,13 +418,13 @@ class TestMigrationV6ToV7:
             columns = {row[1] for row in cursor.fetchall()}
         assert "pr_url" in columns
 
-    def test_migration_updates_version_to_7(self, v6_db):
-        """Migration from v6 should update schema version to 7."""
+    def test_migration_updates_version_to_8(self, v6_db):
+        """Migration from v6 should update schema version to 8 (via chained migration)."""
         db = Database(db_path=v6_db)
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 7
+        assert version == 8
 
     def test_migration_preserves_existing_worktrees(self, v6_db):
         """Migration should preserve existing worktree data."""
@@ -462,7 +462,7 @@ class TestMigrationV6ToV7:
         with db2.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 7
+        assert version == 8
 
 
 # =============================================================================
@@ -906,8 +906,8 @@ class TestWorktreeTimestamps:
 class TestChainedMigration:
     """Test that migration chains work correctly through multiple versions."""
 
-    def test_v4_to_v7_migration(self):
-        """Test migration from v4 (no designs, no worktrees) to v7."""
+    def test_v4_to_v8_migration(self):
+        """Test migration from v4 (no designs, no worktrees, no reviews) to v8."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test_v4.db"
             conn = sqlite3.connect(db_path)
@@ -1001,12 +1001,12 @@ class TestChainedMigration:
             conn.commit()
             conn.close()
 
-            # Open with Database class (triggers chained migration v4→v5→v6→v7)
+            # Open with Database class (triggers chained migration v4→v5→v6→v7→v8)
             db = Database(db_path=db_path)
 
             with db.connection() as conn:
                 cursor = conn.execute("SELECT version FROM schema_version")
-                assert cursor.fetchone()[0] == 7
+                assert cursor.fetchone()[0] == 8
 
                 # Both designs and worktrees tables should exist
                 cursor = conn.execute(

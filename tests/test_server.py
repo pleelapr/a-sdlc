@@ -1833,3 +1833,688 @@ class TestDesignMCPTools:
         assert result["status"] == "ok"
         assert result["count"] == 0
         assert result["designs"] == []
+
+
+# =============================================================================
+# Review Tools
+# =============================================================================
+
+
+class TestSubmitSelfReview:
+    """Test submit_self_review MCP tool."""
+
+    def _make_task(self):
+        return {
+            "id": "TEST-T00001",
+            "project_id": "test-project",
+            "prd_id": "TEST-P0001",
+            "title": "Test Task",
+            "status": "in_progress",
+            "priority": "medium",
+        }
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_self_review_pass(self, mock_get_db):
+        """Self-review with 'pass' verdict creates review and returns ok."""
+        from a_sdlc.server import submit_self_review
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {
+            "id": 1,
+            "task_id": "TEST-T00001",
+            "project_id": "test-project",
+            "round": 1,
+            "reviewer_type": "self",
+            "verdict": "pass",
+            "findings": None,
+            "test_output": None,
+        }
+
+        result = submit_self_review("TEST-T00001", "pass")
+
+        assert result["status"] == "ok"
+        assert result["review_id"] == 1
+        assert result["round"] == 1
+        assert result["verdict"] == "pass"
+        mock_db.create_review.assert_called_once_with(
+            task_id="TEST-T00001",
+            project_id="test-project",
+            round_num=1,
+            reviewer_type="self",
+            verdict="pass",
+            findings=None,
+            test_output=None,
+        )
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_self_review_fail(self, mock_get_db):
+        """Self-review with 'fail' verdict is accepted."""
+        from a_sdlc.server import submit_self_review
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {
+            "id": 2,
+            "task_id": "TEST-T00001",
+            "project_id": "test-project",
+            "round": 1,
+            "reviewer_type": "self",
+            "verdict": "fail",
+            "findings": '[{"severity": "high", "description": "Test failure"}]',
+            "test_output": "FAILED test_auth.py::test_login",
+        }
+
+        result = submit_self_review(
+            "TEST-T00001",
+            "fail",
+            findings='[{"severity": "high", "description": "Test failure"}]',
+            test_output="FAILED test_auth.py::test_login",
+        )
+
+        assert result["status"] == "ok"
+        assert result["verdict"] == "fail"
+        mock_db.create_review.assert_called_once_with(
+            task_id="TEST-T00001",
+            project_id="test-project",
+            round_num=1,
+            reviewer_type="self",
+            verdict="fail",
+            findings='[{"severity": "high", "description": "Test failure"}]',
+            test_output="FAILED test_auth.py::test_login",
+        )
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_self_review_task_not_found(self, mock_get_db):
+        """Self-review on non-existent task returns not_found."""
+        from a_sdlc.server import submit_self_review
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = None
+
+        result = submit_self_review("NONEXISTENT", "pass")
+
+        assert result["status"] == "not_found"
+        mock_db.create_review.assert_not_called()
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_self_review_invalid_verdict(self, mock_get_db):
+        """Self-review with invalid verdict (e.g. 'approve') returns error."""
+        from a_sdlc.server import submit_self_review
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+
+        result = submit_self_review("TEST-T00001", "approve")
+
+        assert result["status"] == "error"
+        assert "Invalid verdict" in result["message"]
+        mock_db.create_review.assert_not_called()
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_self_review_round_auto_increment(self, mock_get_db):
+        """Submitting two self-reviews results in rounds 1 and 2."""
+        from a_sdlc.server import submit_self_review
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+
+        # First call: no existing reviews
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {
+            "id": 1, "round": 1, "reviewer_type": "self", "verdict": "fail",
+        }
+
+        result1 = submit_self_review("TEST-T00001", "fail")
+        assert result1["round"] == 1
+
+        # Second call: one existing self-review
+        mock_db.get_reviews_for_task.return_value = [
+            {"id": 1, "round": 1, "reviewer_type": "self", "verdict": "fail"},
+        ]
+        mock_db.create_review.return_value = {
+            "id": 2, "round": 2, "reviewer_type": "self", "verdict": "pass",
+        }
+
+        result2 = submit_self_review("TEST-T00001", "pass")
+        assert result2["round"] == 2
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_self_review_empty_strings_become_none(self, mock_get_db):
+        """Empty findings and test_output are stored as None."""
+        from a_sdlc.server import submit_self_review
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {"id": 1, "round": 1}
+
+        submit_self_review("TEST-T00001", "pass", findings="", test_output="")
+
+        mock_db.create_review.assert_called_once_with(
+            task_id="TEST-T00001",
+            project_id="test-project",
+            round_num=1,
+            reviewer_type="self",
+            verdict="pass",
+            findings=None,
+            test_output=None,
+        )
+
+
+class TestSubmitReviewVerdict:
+    """Test submit_review_verdict MCP tool."""
+
+    def _make_task(self):
+        return {
+            "id": "TEST-T00001",
+            "project_id": "test-project",
+            "prd_id": "TEST-P0001",
+            "title": "Test Task",
+            "status": "in_progress",
+            "priority": "medium",
+        }
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_approve(self, mock_get_db):
+        """Subagent review with 'approve' verdict succeeds."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {
+            "id": 1,
+            "task_id": "TEST-T00001",
+            "project_id": "test-project",
+            "round": 1,
+            "reviewer_type": "subagent",
+            "verdict": "approve",
+            "findings": None,
+        }
+
+        result = submit_review_verdict("TEST-T00001", "approve")
+
+        assert result["status"] == "ok"
+        assert result["review_id"] == 1
+        assert result["round"] == 1
+        assert result["verdict"] == "approve"
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_request_changes(self, mock_get_db):
+        """Subagent review with 'request_changes' verdict succeeds."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {
+            "id": 2,
+            "round": 1,
+            "reviewer_type": "subagent",
+            "verdict": "request_changes",
+        }
+
+        result = submit_review_verdict(
+            "TEST-T00001",
+            "request_changes",
+            findings='[{"description": "Missing error handling"}]',
+        )
+
+        assert result["status"] == "ok"
+        assert result["verdict"] == "request_changes"
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_escalate(self, mock_get_db):
+        """Subagent review with 'escalate' verdict succeeds."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {
+            "id": 3,
+            "round": 1,
+            "reviewer_type": "subagent",
+            "verdict": "escalate",
+        }
+
+        result = submit_review_verdict("TEST-T00001", "escalate")
+
+        assert result["status"] == "ok"
+        assert result["verdict"] == "escalate"
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_invalid_verdict(self, mock_get_db):
+        """Subagent review with invalid verdict (e.g. 'pass') returns error."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+
+        result = submit_review_verdict("TEST-T00001", "pass")
+
+        assert result["status"] == "error"
+        assert "Invalid verdict" in result["message"]
+        mock_db.create_review.assert_not_called()
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_task_not_found(self, mock_get_db):
+        """Subagent review on non-existent task returns not_found."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = None
+
+        result = submit_review_verdict("NONEXISTENT", "approve")
+
+        assert result["status"] == "not_found"
+        mock_db.create_review.assert_not_called()
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_round_auto_increment(self, mock_get_db):
+        """Submitting two subagent reviews results in rounds 1 and 2."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+
+        # First call: no existing reviews
+        mock_db.get_reviews_for_task.return_value = []
+        mock_db.create_review.return_value = {"id": 1, "round": 1}
+
+        result1 = submit_review_verdict("TEST-T00001", "request_changes")
+        assert result1["round"] == 1
+
+        # Second call: one existing subagent review
+        mock_db.get_reviews_for_task.return_value = [
+            {"id": 1, "round": 1, "reviewer_type": "subagent", "verdict": "request_changes"},
+        ]
+        mock_db.create_review.return_value = {"id": 2, "round": 2}
+
+        result2 = submit_review_verdict("TEST-T00001", "approve")
+        assert result2["round"] == 2
+
+    @patch("a_sdlc.server.get_db")
+    def test_submit_review_verdict_ignores_self_reviews_in_round_count(self, mock_get_db):
+        """Subagent round count is independent of self-review rounds."""
+        from a_sdlc.server import submit_review_verdict
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+
+        # Existing reviews: 2 self-reviews, 0 subagent reviews
+        mock_db.get_reviews_for_task.return_value = [
+            {"id": 1, "round": 1, "reviewer_type": "self", "verdict": "fail"},
+            {"id": 2, "round": 2, "reviewer_type": "self", "verdict": "pass"},
+        ]
+        mock_db.create_review.return_value = {"id": 3, "round": 1}
+
+        result = submit_review_verdict("TEST-T00001", "approve")
+
+        # First subagent review should be round 1, not 3
+        assert result["round"] == 1
+
+
+class TestGetReviewEvidence:
+    """Test get_review_evidence MCP tool."""
+
+    def _make_task(self):
+        return {
+            "id": "TEST-T00001",
+            "project_id": "test-project",
+            "prd_id": "TEST-P0001",
+            "title": "Test Task",
+            "status": "in_progress",
+        }
+
+    @patch("a_sdlc.server.get_db")
+    def test_get_review_evidence_with_reviews(self, mock_get_db):
+        """Returns ordered list of reviews with summary."""
+        from a_sdlc.server import get_review_evidence
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = [
+            {
+                "id": 1, "task_id": "TEST-T00001", "round": 1,
+                "reviewer_type": "self", "verdict": "fail",
+                "findings": None, "test_output": "FAILED",
+            },
+            {
+                "id": 2, "task_id": "TEST-T00001", "round": 1,
+                "reviewer_type": "subagent", "verdict": "request_changes",
+                "findings": '[{"description": "Missing tests"}]', "test_output": None,
+            },
+            {
+                "id": 3, "task_id": "TEST-T00001", "round": 2,
+                "reviewer_type": "self", "verdict": "pass",
+                "findings": None, "test_output": "ALL PASSED",
+            },
+            {
+                "id": 4, "task_id": "TEST-T00001", "round": 2,
+                "reviewer_type": "subagent", "verdict": "approve",
+                "findings": None, "test_output": None,
+            },
+        ]
+
+        result = get_review_evidence("TEST-T00001")
+
+        assert result["status"] == "ok"
+        assert result["task_id"] == "TEST-T00001"
+        assert len(result["reviews"]) == 4
+        assert result["summary"]["total_rounds"] == 2
+        assert result["summary"]["latest_self_verdict"] == "pass"
+        assert result["summary"]["latest_subagent_verdict"] == "approve"
+        assert result["summary"]["has_approved"] is True
+
+    @patch("a_sdlc.server.get_db")
+    def test_get_review_evidence_no_reviews(self, mock_get_db):
+        """Task with no reviews returns empty list and has_approved=False."""
+        from a_sdlc.server import get_review_evidence
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = []
+
+        result = get_review_evidence("TEST-T00001")
+
+        assert result["status"] == "ok"
+        assert result["task_id"] == "TEST-T00001"
+        assert result["reviews"] == []
+        assert result["summary"]["total_rounds"] == 0
+        assert result["summary"]["latest_self_verdict"] is None
+        assert result["summary"]["latest_subagent_verdict"] is None
+        assert result["summary"]["has_approved"] is False
+
+    @patch("a_sdlc.server.get_db")
+    def test_get_review_evidence_task_not_found(self, mock_get_db):
+        """Non-existent task returns not_found."""
+        from a_sdlc.server import get_review_evidence
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = None
+
+        result = get_review_evidence("NONEXISTENT")
+
+        assert result["status"] == "not_found"
+
+    @patch("a_sdlc.server.get_db")
+    def test_get_review_evidence_only_self_reviews(self, mock_get_db):
+        """Task with only self-reviews has no subagent verdict."""
+        from a_sdlc.server import get_review_evidence
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = [
+            {
+                "id": 1, "task_id": "TEST-T00001", "round": 1,
+                "reviewer_type": "self", "verdict": "pass",
+                "findings": None, "test_output": None,
+            },
+        ]
+
+        result = get_review_evidence("TEST-T00001")
+
+        assert result["status"] == "ok"
+        assert result["summary"]["latest_self_verdict"] == "pass"
+        assert result["summary"]["latest_subagent_verdict"] is None
+        assert result["summary"]["has_approved"] is True  # 'pass' counts as approved
+
+    @patch("a_sdlc.server.get_db")
+    def test_get_review_evidence_has_approved_false_when_all_fail(self, mock_get_db):
+        """has_approved is False when all verdicts are fail/request_changes."""
+        from a_sdlc.server import get_review_evidence
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_reviews_for_task.return_value = [
+            {
+                "id": 1, "task_id": "TEST-T00001", "round": 1,
+                "reviewer_type": "self", "verdict": "fail",
+                "findings": None, "test_output": None,
+            },
+            {
+                "id": 2, "task_id": "TEST-T00001", "round": 1,
+                "reviewer_type": "subagent", "verdict": "request_changes",
+                "findings": None, "test_output": None,
+            },
+        ]
+
+        result = get_review_evidence("TEST-T00001")
+
+        assert result["summary"]["has_approved"] is False
+
+
+class TestUpdateTaskReviewGate:
+    """Test review enforcement hard gate in update_task() and complete_task()."""
+
+    @staticmethod
+    def _make_task():
+        return {
+            "id": "TEST-T00001",
+            "project_id": "test-project",
+            "prd_id": "TEST-P0001",
+            "title": "Test Task",
+            "file_path": "/tmp/tasks/TEST-T00001.md",
+            "status": "in_progress",
+            "priority": "medium",
+            "component": None,
+        }
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_complete_with_review_disabled_succeeds(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """update_task(status='completed') with review DISABLED succeeds normally."""
+        from a_sdlc.core.review_config import ReviewConfig
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.update_task.return_value = {**self._make_task(), "status": "completed"}
+
+        mock_load_review_config.return_value = ReviewConfig(enabled=False)
+
+        result = update_task("TEST-T00001", status="completed")
+
+        assert result["status"] == "updated"
+        assert result["task"]["status"] == "completed"
+        mock_db.update_task.assert_called_once()
+        # Should NOT call get_latest_approved_review when disabled
+        mock_db.get_latest_approved_review.assert_not_called()
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_complete_with_review_enabled_no_evidence_returns_error(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """update_task(status='completed') with review ENABLED and no evidence returns error."""
+        from a_sdlc.core.review_config import ReviewConfig
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_latest_approved_review.return_value = None
+
+        mock_load_review_config.return_value = ReviewConfig(enabled=True)
+
+        result = update_task("TEST-T00001", status="completed")
+
+        assert result["status"] == "error"
+        assert "Cannot complete TEST-T00001" in result["message"]
+        assert "no approved review evidence" in result["message"]
+        assert "submit_self_review()" in result["message"]
+        assert "submit_review_verdict()" in result["message"]
+        # Should NOT call update_task on db when gate blocks
+        mock_db.update_task.assert_not_called()
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_complete_with_review_enabled_approved_review_succeeds(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """update_task(status='completed') with review ENABLED and approved review succeeds."""
+        from a_sdlc.core.review_config import ReviewConfig
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_latest_approved_review.return_value = {
+            "id": 1,
+            "task_id": "TEST-T00001",
+            "round": 1,
+            "reviewer_type": "subagent",
+            "verdict": "approve",
+            "findings": None,
+            "test_output": None,
+        }
+        mock_db.update_task.return_value = {**self._make_task(), "status": "completed"}
+
+        mock_load_review_config.return_value = ReviewConfig(enabled=True)
+
+        result = update_task("TEST-T00001", status="completed")
+
+        assert result["status"] == "updated"
+        assert result["task"]["status"] == "completed"
+        mock_db.update_task.assert_called_once()
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_complete_task_inherits_gate_behavior(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """complete_task() inherits the review gate since it delegates to update_task."""
+        from a_sdlc.core.review_config import ReviewConfig
+        from a_sdlc.server import complete_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_latest_approved_review.return_value = None
+
+        mock_load_review_config.return_value = ReviewConfig(enabled=True)
+
+        result = complete_task("TEST-T00001")
+
+        assert result["status"] == "error"
+        assert "Cannot complete TEST-T00001" in result["message"]
+        mock_db.update_task.assert_not_called()
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_in_progress_not_affected_by_review_gate(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """update_task(status='in_progress') is NOT affected by the review gate."""
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        task = self._make_task()
+        task["status"] = "pending"
+        mock_db.get_task.return_value = task
+        mock_db.update_task.return_value = {**task, "status": "in_progress"}
+
+        result = update_task("TEST-T00001", status="in_progress")
+
+        assert result["status"] == "updated"
+        # load_review_config should NOT be called for non-completed statuses
+        mock_load_review_config.assert_not_called()
+        mock_db.get_latest_approved_review.assert_not_called()
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_blocked_status_not_affected_by_review_gate(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """update_task(status='blocked') is NOT affected by the review gate."""
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.update_task.return_value = {**self._make_task(), "status": "blocked"}
+
+        result = update_task("TEST-T00001", status="blocked")
+
+        assert result["status"] == "updated"
+        mock_load_review_config.assert_not_called()
+        mock_db.get_latest_approved_review.assert_not_called()
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_error_message_mentions_both_review_tools(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """Error message references both submit_self_review() and submit_review_verdict()."""
+        from a_sdlc.core.review_config import ReviewConfig
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_latest_approved_review.return_value = None
+
+        mock_load_review_config.return_value = ReviewConfig(enabled=True)
+
+        result = update_task("TEST-T00001", status="completed")
+
+        msg = result["message"]
+        assert "submit_self_review()" in msg
+        assert "submit_review_verdict()" in msg
+        assert ".sdlc/config.yaml" in msg
+
+    @patch("a_sdlc.server.load_review_config")
+    @patch("a_sdlc.server.get_db")
+    def test_complete_with_review_enabled_pass_verdict_succeeds(
+        self, mock_get_db, mock_load_review_config
+    ):
+        """update_task(status='completed') with a 'pass' verdict also succeeds."""
+        from a_sdlc.core.review_config import ReviewConfig
+        from a_sdlc.server import update_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = self._make_task()
+        mock_db.get_latest_approved_review.return_value = {
+            "id": 2,
+            "task_id": "TEST-T00001",
+            "round": 1,
+            "reviewer_type": "self",
+            "verdict": "pass",
+            "findings": None,
+            "test_output": None,
+        }
+        mock_db.update_task.return_value = {**self._make_task(), "status": "completed"}
+
+        mock_load_review_config.return_value = ReviewConfig(enabled=True)
+
+        result = update_task("TEST-T00001", status="completed")
+
+        assert result["status"] == "updated"
+        mock_db.update_task.assert_called_once()

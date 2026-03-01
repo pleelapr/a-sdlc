@@ -363,55 +363,20 @@ Task(
    - If `true`: git add <files> && git commit -m "[{task.id}] {task.title}"
    - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
 
-## Review Gates (MANDATORY before completion)
+## Review Gates
 
-Do NOT call update_task(status='completed') until the review process completes with APPROVE.
-
-### 1. Self-Review
-- Re-read task spec above — extract Acceptance Criteria
-- Verify EACH acceptance criterion is satisfied by your implementation
-- Read .sdlc/config.yaml (if exists) — run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
-- If no config exists, run the project's default test command
-- Capture and include ACTUAL test output — no self-assertions without evidence
-- If any check fails, fix before proceeding
-- Build a findings list for any issues found
-
-### 2. Subagent Review
-- Dispatch a fresh reviewer agent via the Task tool with this prompt:
-
-  'You are an independent code reviewer. Review the implementation of task {task.id} against its specification.
-
-  ## Review Materials
-  Task spec: {task_spec_summary}
-  Code diff:
-  ```diff
-  {your_git_diff}
-  ```
-  Self-review results: {test_output_and_ac_checklist}
-
-  ## Evaluate
-  - Spec compliance: Are all Acceptance Criteria and Traces To requirements addressed?
-  - Code quality: Does the code follow project patterns? Any duplication, security concerns?
-  - Test coverage: Do tests exist and pass for the new functionality?
-
-  ## Required Output
-  REVIEW VERDICT: [APPROVE | REQUEST_CHANGES | ESCALATE_TO_USER]
-  FINDINGS: [list each finding with severity and detail]
-  SUMMARY: [1-2 sentence assessment]'
-
-- Wait for the reviewer verdict
-
-### 3. Self-Heal Loop
-- If reviewer says REQUEST_CHANGES: fix the cited issues, re-run tests, dispatch a NEW reviewer
-- Max review rounds: read `review.max_rounds` from .sdlc/config.yaml (default: 3)
-- After max rounds with no approval: use AskUserQuestion to escalate to the user
-  Options: "Override & complete", "Continue fixing", "Block task"
-
-### 4. Log & Complete
-- For EVERY finding (yours or reviewer's), call:
-  mcp__asdlc__log_correction(context_type='task', context_id='{task.id}', category='{category}', description='{what_was_found_and_fixed}')
-- Only after reviewer APPROVE (or user override): call mcp__asdlc__update_task(task_id='{task.id}', status='completed')
-- If you encounter questions you cannot resolve from the provided context, surface them via AskUserQuestion — do NOT guess
+After completing implementation and tests:
+1. Self-review: Re-read the task spec, verify each acceptance criterion, run all test commands
+   - Read .sdlc/config.yaml (if exists) — run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
+   - If no config exists, run the project's default test command
+   - Capture and include ACTUAL test output — no self-assertions without evidence
+   - If any check fails, fix the issues before proceeding
+2. Call `mcp__asdlc__submit_self_review(task_id='{task.id}', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
+3. If self-review verdict is 'fail', fix the issues and re-submit until 'pass'
+4. Log corrections for EVERY finding discovered during implementation:
+   mcp__asdlc__log_correction(context_type='task', context_id='{task.id}', category='{category}', description='{what_was_found_and_fixed}')
+5. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
+6. If you encounter questions you cannot resolve from the provided context, surface them via AskUserQuestion — do NOT guess
 """,
   subagent_type="general-purpose"
 )
@@ -419,23 +384,78 @@ Do NOT call update_task(status='completed') until the review process completes w
 
 **Important**: Do NOT use `run_in_background=true` — wait for the subagent to complete so results can be displayed.
 
-#### Step 4: Display Completion Result
+#### Step 4: Orchestrator Review Dispatch
 
-After the subagent returns, display the outcome:
+After the implementing subagent returns, the orchestrator runs the review dispatch sequence before marking the task complete. This follows the same pattern as sprint-run Step 4.4.
+
+**Config check**: Read `.sdlc/config.yaml` — if the `review` section exists AND `review.self_review.enabled` is `true`, review is enabled. If the entire `review` section is absent, review is disabled and the orchestrator skips directly to step 5 (complete task).
+
+##### Review Dispatch Sequence
+
+1. **Check self-review**: Call `mcp__asdlc__get_review_evidence(task_id='{task.id}')` — verify self-review was submitted
+   - If missing → `mcp__asdlc__block_task(task_id='{task.id}', reason='self-review not submitted')` — task cannot complete
+   - If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task.id}', reason='self-review failed')` — task cannot complete
+
+2. **Check subagent review config**: Read `.sdlc/config.yaml` `review.subagent_review.enabled`
+   - If disabled or absent → skip to step 5 (complete task)
+
+3. **Dispatch reviewer subagent**: Launch a fresh Task agent:
+   ```
+   Task(
+     description="Review {task.id}: {task.title}",
+     prompt="You are an independent code reviewer. Review task {task.id}.
+
+            Call mcp__asdlc__get_review_evidence(task_id='{task.id}') to read the self-review.
+            Review the git diff and test output.
+
+            Evaluate: spec compliance, code quality, test coverage.
+
+            Call mcp__asdlc__submit_review_verdict(task_id='{task.id}', verdict='approve'|'request_changes'|'escalate', findings='...') with:
+            - 'approve' if implementation meets all criteria
+            - 'request_changes' if issues found (list specific fixes needed)
+            - 'escalate' if you cannot determine correctness
+            ",
+     subagent_type="general-purpose"
+   )
+   ```
+
+4. **Read verdict**: Call `mcp__asdlc__get_review_evidence(task_id='{task.id}')` — check the subagent review verdict
+   - **APPROVE** → proceed to step 5
+   - **REQUEST_CHANGES** → self-heal loop: dispatch the implementing subagent again with fix instructions from the reviewer's findings. Repeat up to `review.max_rounds` from config (default 3). After max rounds → AskUserQuestion with escalation options:
+     ```
+     AskUserQuestion({
+       questions: [{
+         question: "Task {task.id} failed review after {max_rounds} rounds. How to proceed?",
+         header: "Review Escalation",
+         options: [
+           { label: "Override & complete", description: "Accept current implementation despite review findings" },
+           { label: "Continue fixing", description: "Allow more review rounds" },
+           { label: "Block task", description: "Mark task as blocked for manual handling" }
+         ],
+         multiSelect: false
+       }]
+     })
+     ```
+   - **ESCALATE** → AskUserQuestion immediately with the same options as above
+
+5. **Complete task**: Call `mcp__asdlc__update_task(task_id='{task.id}', status='completed')` — the hard gate in `update_task()` accepts this because approved review evidence now exists in the database
+
+#### Step 5: Display Completion Result
+
+After review dispatch completes, display the outcome:
 
 ```
-Subagent completed for {task.id}: {task.title}
+Task completed: {task.id}: {task.title}
 
 Result: {COMPLETED | BLOCKED | FAILED}
 Review: {APPROVED | OVERRIDDEN | BLOCKED}
 Rounds: {rounds_used} / {max_rounds}
 
 {if completed:}
-  Run /sdlc:task-complete {task.id} to finalize (if not already marked complete by subagent).
-  Or proceed to the next task.
+  Task is complete. Proceed to the next task.
 
 {if blocked or failed:}
-  Task remains in current status. Review the subagent output above for details.
+  Task remains in current status. Review the output above for details.
   To retry: /sdlc:task-start {task.id}
 ```
 
@@ -462,7 +482,7 @@ mcp__asdlc__log_correction(
 
 Log corrections as they happen — don't wait until task completion.
 
-When implementation is complete, run `/sdlc:task-complete {task_id}` which will trigger the full review gate process (self-review, subagent review, self-heal loop, evidence-based completion).
+When implementation is complete, run `/sdlc:task-complete {task_id}` which will trigger the review gate process (self-review via `submit_self_review()`, orchestrator-level subagent review dispatch, self-heal loop, evidence-based completion).
 
 ---
 

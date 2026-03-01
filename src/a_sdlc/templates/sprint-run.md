@@ -16,7 +16,7 @@ This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
 **Each agent MUST:**
 1. Call `mcp__asdlc__get_task(task_id)` to fetch task details
 2. Execute the implementation steps from the task content
-3. Call `mcp__asdlc__update_task(task_id, status="completed")` when done
+3. Submit self-review evidence via `mcp__asdlc__submit_self_review()` — the **orchestrator** handles task completion after review
 
 **Do NOT** create intermediate Claude Code tasks (TodoWrite/TaskCreate). The a-sdlc task IS the work item.
 
@@ -25,7 +25,7 @@ This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
 ## Syntax
 
 ```
-/sdlc:sprint-run <sprint-id> [--parallel <n>] [--dry-run] [--sync] [--base-branch <branch>]
+/sdlc:sprint-run <sprint-id> [--parallel <n>] [--dry-run] [--sync] [--base-branch <branch>] [--resume]
 ```
 
 ## Parameters
@@ -37,6 +37,7 @@ This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
 | `--dry-run` | No | Show execution plan without running |
 | `--sync` | No | Sync status to external system as tasks complete |
 | `--base-branch` | No | Branch to base worktrees on (multi-PRD mode only, default: current HEAD) |
+| `--resume` | No | Resume from last checkpoint (reads state from `~/.a-sdlc/runs/{project_id}/`) |
 
 ---
 
@@ -104,6 +105,46 @@ AskUserQuestion({
 ```
 
 If only 1 PRD is detected, or if `worktree_enabled` is False (even with multiple PRDs), skip ahead to **Step 3** (Simple Mode).
+
+### 1.5. Resume from Checkpoint (if --resume)
+
+If the `--resume` flag is present:
+
+1. Read the state file:
+   ```
+   context = mcp__asdlc__get_context()
+   project_id = context["project_id"]
+   state_file = f"~/.a-sdlc/runs/{project_id}/{sprint_id}-state.json"
+   state = Read(state_file)  # Returns JSON content
+   ```
+
+2. If the state file does not exist, warn and fall through to normal execution:
+   ```
+   "⚠️ No checkpoint found for {sprint_id}. Starting fresh."
+   ```
+
+3. If the state file exists, parse it and display previous progress:
+   ```
+   Previous Sprint Run Progress (resumed from checkpoint):
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Sprint: {state.sprint_id}
+   Mode: {state.mode}
+   Last updated: {state.updated_at}
+   Completed: {len(state.outcomes)} tasks
+
+   Previously completed tasks:
+     ✅ {task_id}: {outcome.summary} ({outcome.verdict})
+     ...
+
+   Skipped: {len(state.skipped)} | Failed: {len(state.failed)}
+
+   Resuming from batch {state.current_batch + 1}...
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   ```
+
+4. Pass the resume state to the execution mode:
+   - Set `resume_state = state` (the parsed JSON)
+   - Pass it to `run_simple_mode()` or `run_isolated_mode()`
 
 ---
 
@@ -377,7 +418,8 @@ Tasks within a batch execute **sequentially** — the orchestrator dispatches on
 **Key principles:**
 - Each task gets a fresh subagent via Claude Code's `Task` tool with `run_in_background=false`
 - The subagent receives a curated context package (from Step 3.5) — it never reads plan files directly
-- Review gates are embedded in the subagent prompt
+- The subagent submits self-review evidence via `submit_self_review()` and returns — it does NOT dispatch reviewer subagents or mark tasks complete
+- **Review dispatch happens at the orchestrator level** (Step 4.4) — the orchestrator checks self-review, optionally dispatches a reviewer subagent, and handles the approve/reject flow
 - If the subagent encounters unresolvable questions, it surfaces them via `AskUserQuestion` — the orchestrator does NOT need to intercept these; they propagate to the user automatically
 
 #### Subagent Prompt Template
@@ -404,75 +446,54 @@ Task(
    - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
 6. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
 
-## Review Gates (MANDATORY before completion)
+## Review Gates
 
-Do NOT call update_task(status='completed') until the review process completes with APPROVE.
+After completing implementation and tests:
+1. Self-review: Re-read the task spec, verify each acceptance criterion
+   - Read .sdlc/config.yaml — check `testing.relevance.enabled`
+   - If relevance detection is enabled:
+     a. Assess change scope based on files you modified:
+        - backend-logic: .py files with business logic → RUN unit tests
+        - api-endpoints: route handlers, middleware → RUN unit + integration
+        - database: models, migrations → RUN unit + integration
+        - documentation: .md files, docstrings, skill templates → SKIP all tests
+        - configuration: .yaml, .env, build configs → SKIP unit tests
+        - test-only: test files only → RUN unit tests
+     b. For SKIP verdicts, output rationale: "Skipping unit tests: documentation-only change (modified {file})"
+     c. For RUN verdicts, execute the command from `testing.commands.{type}` and capture output
+   - If relevance detection is disabled or absent:
+     Run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
+   - If no config exists, run the project's default test command
+   - Capture and include ACTUAL test output for any tests run — no self-assertions without evidence
+   - If any executed test fails, fix the issues before proceeding
+2. Call `mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
+3. If self-review verdict is 'fail', fix the issues and re-submit until 'pass'
+4. Log corrections for EVERY finding discovered during implementation:
+   mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what_was_found_and_fixed}')
+5. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
+6. If you encounter questions you cannot resolve from the provided context, surface them via AskUserQuestion — do NOT guess
 
-### 1. Self-Review
-- Re-read task spec above — extract Acceptance Criteria
-- Verify EACH acceptance criterion is satisfied by your implementation
-- Read .sdlc/config.yaml (if exists) — run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
-- If no config exists, run the project's default test command
-- Capture and include ACTUAL test output — no self-assertions without evidence
-- If any check fails, fix before proceeding
-- Build a findings list for any issues found
+## CRITICAL: Structured Output
 
-### 2. Subagent Review
-- Dispatch a fresh reviewer agent via the Task tool with this prompt:
+Your FINAL output MUST end with this exact block. The orchestrator parses it
+for progress tracking. Do NOT omit it. Do NOT add text after it.
 
-  'You are an independent code reviewer. Review the implementation of task {task_id} against its specification.
+---TASK-OUTCOME---
+verdict: PASS|FAIL|BLOCKED
+files_changed: file1.py, file2.py
+tests: {passed}/{total}
+review: APPROVE|REQUEST_CHANGES|ESCALATE
+summary: {one-line description of what was done}
+corrections: {number of corrections logged}
+---END-OUTCOME---
 
-  ## Review Materials
-  Task spec: {task_spec_summary}
-  Code diff:
-  ```diff
-  {your_git_diff}
-  ```
-  Self-review results: {test_output_and_ac_checklist}
-
-  ## Evaluate
-  - Spec compliance: Are all Acceptance Criteria and Traces To requirements addressed?
-  - Code quality: Does the code follow project patterns? Any duplication, security concerns?
-  - Test coverage: Do tests exist and pass for the new functionality?
-
-  ## Required Output
-  REVIEW VERDICT: [APPROVE | REQUEST_CHANGES | ESCALATE_TO_USER]
-  FINDINGS: [list each finding with severity and detail]
-  SUMMARY: [1-2 sentence assessment]'
-
-- Wait for the reviewer verdict
-
-### 3. Self-Heal Loop
-- If reviewer says REQUEST_CHANGES: fix the cited issues, re-run tests, dispatch a NEW reviewer
-- Max review rounds: read `review.max_rounds` from .sdlc/config.yaml (default: 3)
-- After max rounds with no approval: use AskUserQuestion to escalate to the user
-  Options: "Override & complete", "Continue fixing", "Block task"
-
-### 4. Runtime Test Gate (if configured)
-
-Read `.sdlc/config.yaml` — check if `testing.runtime` section exists:
-- If `testing.runtime` is **NOT** present → skip to step 5 (Log & Complete)
-- If present:
-  1. Run `/sdlc:test --task {task_id}` to validate the running application
-  2. If runtime tests **FAIL**:
-     - DO NOT call `update_task(status='completed')`
-     - Report failure with test results (screenshots, response bodies)
-     - Log correction via `mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='testing', description='Runtime test failure during sprint execution: {summary}')`
-     - Return to Self-Heal Loop (step 3) for one more fix attempt
-     - If still failing after retry: use `AskUserQuestion` to escalate
-       Options: "Override & complete", "Continue fixing", "Block task"
-  3. If runtime tests **PASS**:
-     - Record: "Runtime tests passed ({passed}/{total})"
-     - Proceed to step 5 (Log & Complete)
-  4. If app is not reachable:
-     - Warn: "Runtime testing configured but app not reachable. Skipping."
-     - Proceed to step 5 (Log & Complete)
-
-### 5. Log & Complete
-- For EVERY finding (yours or reviewer's), call:
-  mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what_was_found_and_fixed}')
-- Only after reviewer APPROVE (or user override): call mcp__asdlc__update_task(task_id='{task_id}', status='completed')
-- If you encounter questions you cannot resolve from the provided context, surface them via AskUserQuestion — do NOT guess
+Replace the placeholders with actual values from your implementation:
+- verdict: PASS if task completed successfully, FAIL if it could not be completed, BLOCKED if dependencies are missing
+- files_changed: comma-separated list of files you modified
+- tests: number of tests passed / total tests run (e.g., "12/12")
+- review: the final review verdict (APPROVE, REQUEST_CHANGES, or ESCALATE)
+- summary: one sentence describing what you implemented
+- corrections: integer count of corrections logged via log_correction()
 """,
   subagent_type="general-purpose"
 )
@@ -495,11 +516,16 @@ No special handling is needed in the orchestrator — the `AskUserQuestion` mech
 # Batch 1: 3 independent tasks — dispatched sequentially
 outcomes = {}
 
-# Task 1
+# Task 1: dispatch subagent → orchestrator review → complete
 update_task("PROJ-T00001", status="in_progress")
 context_1 = build_context_package("PROJ-T00001", outcomes)
 result_1 = Task(description="Implement PROJ-T00001: Set up OAuth config",
                 prompt=f"...{context_1}...", subagent_type="general-purpose")
+# Subagent returns after submitting self-review evidence
+# Orchestrator review dispatch (Step 4.4):
+review_result = orchestrator_review_dispatch("PROJ-T00001", review_config)
+if review_result == "approved":
+    update_task("PROJ-T00001", status="completed")
 outcomes["PROJ-T00001"] = "Added OAuth config to src/auth/config.py"
 
 # Task 2 (receives outcome of Task 1 in context if it's a dependency)
@@ -507,6 +533,9 @@ update_task("PROJ-T00002", status="in_progress")
 context_2 = build_context_package("PROJ-T00002", outcomes)
 result_2 = Task(description="Implement PROJ-T00002: Create login endpoint",
                 prompt=f"...{context_2}...", subagent_type="general-purpose")
+review_result = orchestrator_review_dispatch("PROJ-T00002", review_config)
+if review_result == "approved":
+    update_task("PROJ-T00002", status="completed")
 outcomes["PROJ-T00002"] = "Created POST /auth/login endpoint in src/api/auth.py"
 
 # Task 3
@@ -514,6 +543,9 @@ update_task("PROJ-T00003", status="in_progress")
 context_3 = build_context_package("PROJ-T00003", outcomes)
 result_3 = Task(description="Implement PROJ-T00003: Add user model fields",
                 prompt=f"...{context_3}...", subagent_type="general-purpose")
+review_result = orchestrator_review_dispatch("PROJ-T00003", review_config)
+if review_result == "approved":
+    update_task("PROJ-T00003", status="completed")
 outcomes["PROJ-T00003"] = "Added email, role fields to User model, migration 004"
 
 # → Batch checkpoint (Step 4.5) → proceed to Batch 2
@@ -577,6 +609,93 @@ When a subagent completes successfully, extract a concise outcome summary from i
 ```
 
 If the subagent output is too long to summarize automatically, fall back to the git commit message(s) produced during the task.
+
+#### Structured Outcome Parsing
+
+When a subagent returns, the orchestrator first attempts to extract the structured outcome block:
+
+1. Search the subagent result for `---TASK-OUTCOME---` and `---END-OUTCOME---` delimiters
+2. If found, parse the key-value pairs between the delimiters
+3. Store the parsed data in outcomes as a structured dict:
+   outcomes[task_id] = {
+       "verdict": "PASS",
+       "files_changed": ["file1.py", "file2.py"],
+       "tests": "12/12",
+       "review": "APPROVE",
+       "summary": "One-line description",
+       "corrections": 0
+   }
+4. If the delimiters are NOT found (subagent non-compliance), fall back to the existing
+   extract_outcome_summary() approach — extract a 1-2 sentence summary from raw text.
+   Store as: outcomes[task_id] = "free-form summary string"
+
+The orchestrator should handle both dict-style (structured) and string-style (fallback)
+outcomes gracefully in all downstream consumers (build_context_package, present_batch_results).
+
+### 4.4. Review Dispatch (Orchestrator Level)
+
+After the implementing subagent returns for a task, the orchestrator runs the review dispatch sequence before marking the task complete. This ensures review is handled at the orchestrator layer, not inside the implementing subagent.
+
+**Config check**: Read `.sdlc/config.yaml` — if the `review` section exists AND `review.self_review.enabled` is `true`, review is enabled. If the entire `review` section is absent, review is disabled and the orchestrator skips directly to step 5 (complete task).
+
+#### Review Dispatch Sequence
+
+1. **Check self-review**: Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` — verify self-review was submitted
+   - If missing → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review not submitted')` — task cannot complete
+   - If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed')` — task cannot complete
+
+2. **Check subagent review config**: Read `.sdlc/config.yaml` `review.subagent_review.enabled`
+   - If disabled or absent → skip to step 5 (complete task)
+
+3. **Dispatch reviewer subagent**: Launch a fresh Task agent:
+   ```
+   Task(
+     description="Review {task_id}: {task_title}",
+     prompt="You are an independent code reviewer. Review task {task_id}.
+
+            Call mcp__asdlc__get_review_evidence(task_id='{task_id}') to read the self-review.
+            Review the git diff and test output.
+
+            Evaluate: spec compliance, code quality, test coverage.
+
+            Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with:
+            - 'approve' if implementation meets all criteria
+            - 'request_changes' if issues found (list specific fixes needed)
+            - 'escalate' if you cannot determine correctness
+            ",
+     subagent_type="general-purpose"
+   )
+   ```
+
+4. **Read verdict**: Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` — check the subagent review verdict
+   - **APPROVE** → proceed to step 5
+   - **REQUEST_CHANGES** → self-heal loop: dispatch the implementing subagent again with fix instructions from the reviewer's findings. Repeat up to `review.max_rounds` from config (default 3). After max rounds → AskUserQuestion with escalation options:
+     ```
+     AskUserQuestion({
+       questions: [{
+         question: "Task {task_id} failed review after {max_rounds} rounds. How to proceed?",
+         header: "Review Escalation",
+         options: [
+           { label: "Override & complete", description: "Accept current implementation despite review findings" },
+           { label: "Continue fixing", description: "Allow more review rounds" },
+           { label: "Block task", description: "Mark task as blocked for manual handling" }
+         ],
+         multiSelect: false
+       }]
+     })
+     ```
+   - **ESCALATE** → AskUserQuestion immediately with the same options as above
+
+5. **Complete task**: Call `mcp__asdlc__update_task(task_id='{task_id}', status='completed')` — the hard gate in `update_task()` accepts this because approved review evidence now exists in the database
+
+#### Review Dispatch in Isolated Mode
+
+The same review dispatch sequence applies to isolated mode (multi-PRD with worktrees). When the PRD agent returns after executing all tasks, the orchestrator runs the review dispatch for each task that the PRD agent reported as completed.
+
+For isolated mode, the orchestrator:
+1. Parses the structured outcome blocks from the PRD agent's output (one `---TASK-OUTCOME---` block per task)
+2. For each task with `verdict: PASS`, runs the review dispatch sequence above
+3. For each task with `verdict: FAIL` or `verdict: BLOCKED`, skips review and handles via the Batch Failure Handler
 
 #### Integration with Context Package
 
@@ -658,7 +777,7 @@ Proceeding to sprint summary...
 
 #### Batch Failure Handler
 
-When a task fails its review gates after the maximum number of review rounds (read `review.max_rounds` from `.sdlc/config.yaml`, default: 3), the batch pauses and the orchestrator consults the user immediately — do not wait for the entire batch to finish.
+When a task fails its orchestrator-level review dispatch (Step 4.4) after the maximum number of review rounds (read `review.max_rounds` from `.sdlc/config.yaml`, default: 3), the batch pauses and the orchestrator consults the user immediately — do not wait for the entire batch to finish.
 
 ```
 Task {task_id} failed review after {max_rounds} rounds.
@@ -880,7 +999,7 @@ For EACH task:
    - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
 5. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
 6. Run review gates (see below)
-7. Only after reviewer APPROVE: call mcp__asdlc__update_task(task_id, status="completed")
+7. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
 
 ## Batch 1 (independent tasks):
 
@@ -895,73 +1014,50 @@ For EACH task:
 ### Task: PROJ-T00003 — Add token validation
 {context_package_for_PROJ-T00003}
 
-## Review Gates (MANDATORY for EACH task before marking completed)
+## Review Gates (for EACH task)
 
-### 1. Self-Review
-- Re-read the task's Acceptance Criteria from its context package above
-- Verify EACH acceptance criterion is satisfied by your implementation
-- Read .sdlc/config.yaml (if exists) — run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
-- If no config exists, run the project's default test command
-- Capture and include ACTUAL test output — no self-assertions without evidence
-- If any check fails, fix before proceeding
-- Build a findings list for any issues found
+After completing implementation and tests for each task:
+1. Self-review: Re-read the task's Acceptance Criteria from its context package above, verify each criterion is satisfied
+   - Read .sdlc/config.yaml — check `testing.relevance.enabled`
+   - If relevance detection is enabled:
+     a. Assess change scope based on files you modified:
+        - backend-logic: .py files with business logic → RUN unit tests
+        - api-endpoints: route handlers, middleware → RUN unit + integration
+        - database: models, migrations → RUN unit + integration
+        - documentation: .md files, docstrings, skill templates → SKIP all tests
+        - configuration: .yaml, .env, build configs → SKIP unit tests
+        - test-only: test files only → RUN unit tests
+     b. For SKIP verdicts, output rationale: "Skipping unit tests: documentation-only change (modified {file})"
+     c. For RUN verdicts, execute the command from `testing.commands.{type}` and capture output
+   - If relevance detection is disabled or absent:
+     Run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
+   - If no config exists, run the project's default test command
+   - Capture and include ACTUAL test output for any tests run — no self-assertions without evidence
+   - If any executed test fails, fix the issues before proceeding
+2. Call `mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
+3. If self-review verdict is 'fail', fix the issues and re-submit until 'pass'
+4. Log corrections for EVERY finding discovered during implementation:
+   mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what_was_found_and_fixed}')
+5. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
+6. If you encounter unresolvable questions, surface them via AskUserQuestion — do NOT guess
 
-### 2. Subagent Review
-- Dispatch a fresh reviewer agent via the Task tool:
+## CRITICAL: Structured Output (per task)
 
-  'You are an independent code reviewer. Review the implementation of task {task_id} against its specification.
+After completing EACH task in your batch, output a structured outcome block.
+Your output for each task MUST include:
 
-  ## Review Materials
-  Task spec: {task_spec_summary}
-  Code diff:
-  ```diff
-  {your_git_diff}
-  ```
-  Self-review results: {test_output_and_ac_checklist}
+---TASK-OUTCOME---
+task_id: {task_id}
+verdict: PASS|FAIL|BLOCKED
+files_changed: file1.py, file2.py
+tests: {passed}/{total}
+review: APPROVE|REQUEST_CHANGES|ESCALATE
+summary: {one-line description of what was done}
+corrections: {number of corrections logged}
+---END-OUTCOME---
 
-  ## Evaluate
-  - Spec compliance: Are all Acceptance Criteria and Traces To requirements addressed?
-  - Code quality: Does the code follow project patterns? Any duplication, security concerns?
-  - Test coverage: Do tests exist and pass for the new functionality?
-
-  ## Required Output
-  REVIEW VERDICT: [APPROVE | REQUEST_CHANGES | ESCALATE_TO_USER]
-  FINDINGS: [list each finding with severity and detail]
-  SUMMARY: [1-2 sentence assessment]'
-
-- Wait for the reviewer verdict
-
-### 3. Self-Heal Loop
-- If REQUEST_CHANGES: fix cited issues, re-run tests, dispatch a NEW reviewer
-- Max rounds: `review.max_rounds` from .sdlc/config.yaml (default 3)
-- After max rounds: AskUserQuestion to escalate
-  Options: "Override & complete", "Continue fixing", "Block task"
-
-### 4. Runtime Test Gate (if configured)
-
-Read `.sdlc/config.yaml` — check if `testing.runtime` section exists:
-- If `testing.runtime` is **NOT** present → skip to step 5 (Log & Complete)
-- If present:
-  1. Run `/sdlc:test --task {task_id}` to validate the running application
-  2. If runtime tests **FAIL**:
-     - DO NOT call `update_task(status='completed')`
-     - Report failure with test results (screenshots, response bodies)
-     - Log correction via `mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='testing', description='Runtime test failure during sprint execution: {summary}')`
-     - Return to Self-Heal Loop (step 3) for one more fix attempt
-     - If still failing after retry: use `AskUserQuestion` to escalate
-       Options: "Override & complete", "Continue fixing", "Block task"
-  3. If runtime tests **PASS**:
-     - Record: "Runtime tests passed ({passed}/{total})"
-     - Proceed to step 5 (Log & Complete)
-  4. If app is not reachable:
-     - Warn: "Runtime testing configured but app not reachable. Skipping."
-     - Proceed to step 5 (Log & Complete)
-
-### 5. Log & Complete
-- For EVERY finding (yours or reviewer's), call:
-  mcp__asdlc__log_correction(context_type='task', context_id=task_id, category='{category}', description='{what_was_found_and_fixed}')
-- Only after reviewer APPROVE (or user override): call mcp__asdlc__update_task(task_id, status="completed")
-- If you encounter unresolvable questions, surface them via AskUserQuestion — do NOT guess
+The orchestrator parses these blocks for progress tracking.
+Replace placeholders with actual values from your implementation.
 
 When ALL tasks are done:
 - Stop any Docker services you started
@@ -1025,8 +1121,8 @@ When an agent completes:
 
 1. Check result via TaskOutput tool
 2. If success:
-   - **Simple mode**: Mark task as COMPLETED, check if blocked tasks are unblocked, launch them
-   - **Isolated mode**: All tasks for that PRD are done. Report branch name and worktree path.
+   - **Simple mode**: Run orchestrator review dispatch (Step 4.4), then mark task as COMPLETED if approved. Check if blocked tasks are unblocked, launch them.
+   - **Isolated mode**: All tasks for that PRD are done. Run orchestrator review dispatch for each task (Step 4.4). Report branch name and worktree path.
 3. If failure:
    - Mark task as BLOCKED with failure reason
    - Log error details
@@ -1181,10 +1277,24 @@ if sync_enabled and task.external_id:
 ## Execution Algorithm (Pseudocode)
 
 ```python
-def run_sprint(sprint_id: str, max_parallel: int = 3, base_branch: str = None):
+def run_sprint(sprint_id: str, max_parallel: int = 3, base_branch: str = None,
+               resume_flag: bool = False):
     sprint = get_sprint(sprint_id)
     grouped = get_sprint_tasks(sprint_id, group_by_prd=True)
     prd_groups = grouped["prd_groups"]
+
+    # --- Check for --resume flag (FR-005, Step 1.5) ---
+    resume_state = None
+    if resume_flag:
+        context = mcp__asdlc__get_context()
+        project_id = context["project_id"]
+        state_file = f"~/.a-sdlc/runs/{project_id}/{sprint_id}-state.json"
+        try:
+            state_content = Read(state_file)
+            resume_state = json.loads(state_content)
+            # Display resume progress summary (see Step 1.5)
+        except FileNotFoundError:
+            warn(f"No checkpoint found for {sprint_id}. Starting fresh.")
 
     # Check git safety config for worktree support
     config = get_git_safety_config()
@@ -1194,12 +1304,12 @@ def run_sprint(sprint_id: str, max_parallel: int = 3, base_branch: str = None):
     if len(prd_groups) == 1 or not worktree_enabled:
         if len(prd_groups) > 1 and not worktree_enabled:
             warn("Multiple PRDs but worktree isolation disabled. Running sequentially.")
-        run_simple_mode(sprint_id, prd_groups, max_parallel)
+        run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state)
     else:
-        run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch)
+        run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_state)
 
 
-def run_simple_mode(sprint_id, prd_groups, max_parallel):
+def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None):
     """Single PRD or worktree-disabled — run tasks directly in working directory."""
     # Flatten all tasks across PRD groups
     tasks = [t for group in prd_groups for t in group["tasks"]]
@@ -1225,9 +1335,106 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel):
     outcomes = {}  # {task_id: outcome_summary} — fed to build_context_package
     user_clarification = None  # Optional text from user, injected into context
 
+    # --- State persistence setup (FR-001) ---
+    # State file lives at ~/.a-sdlc/runs/{project_id}/{sprint-id}-state.json
+    # The project_id comes from get_context() response
+    context = mcp__asdlc__get_context()
+    project_id = context["project_id"]
+    state_dir = f"~/.a-sdlc/runs/{project_id}"
+    state_file = f"{state_dir}/{sprint_id}-state.json"
+    state_tmp = f"{state_dir}/{sprint_id}-state.tmp.json"
+    sprint_started_at = current_iso_timestamp()
+
+    # Ensure directory exists
+    Bash(f"mkdir -p {state_dir}")
+
+    # --- Context budget tracking (FR-004) ---
+    context_chars_consumed = 0  # Running character count
+
+    # Read budget from config (optional)
+    # .sdlc/config.yaml may contain:
+    #   sprint:
+    #     context_budget: 150000
+    budget_tokens = 150000  # Default
+    try:
+        config = Read(".sdlc/config.yaml")
+        if "sprint:" in config and "context_budget:" in config:
+            budget_tokens = int(config.sprint.context_budget)
+    except:
+        pass  # Use default
+
+    # --- Auto-compact thresholds (FR-005) ---
+    compact_threshold = 70   # Warn and pause at this percentage
+    urgent_threshold = 85    # Warn urgently
+    halt_threshold = 95      # Halt execution
+
+    # Optional: read from .sdlc/config.yaml
+    #   sprint:
+    #     compact_threshold: 70
+    try:
+        if "compact_threshold:" in config:
+            compact_threshold = int(config.sprint.compact_threshold)
+    except:
+        pass  # Use defaults
+
+    # --- Resume support (FR-005) ---
+    # If resuming, pre-populate outcomes and context budget from checkpoint
+    starting_batch = 0
+    if resume_state:
+        outcomes = resume_state["outcomes"]
+        starting_batch = resume_state["current_batch"]
+        # Restore context budget tracking from checkpoint
+        if "context_budget" in resume_state:
+            context_chars_consumed = resume_state["context_budget"]["chars_consumed"]
+
+    def write_state_checkpoint(outcomes, batches, batch_num, mode="simple"):
+        """Write current execution state to disk atomically.
+
+        Uses Write tool to create .tmp file, then Bash mv to rename.
+        This ensures the state file is always valid JSON (NFR-001).
+        """
+        state = {
+            "version": 1,
+            "sprint_id": sprint_id,
+            "project_id": project_id,
+            "started_at": sprint_started_at,
+            "updated_at": current_iso_timestamp(),
+            "mode": mode,
+            "current_batch": batch_num,
+            "total_batches": len(batches),
+            "outcomes": outcomes,
+            "skipped": [tid for tid, o in outcomes.items() if isinstance(o, str) and "skipped" in o],
+            "failed": {tid: o for tid, o in outcomes.items() if isinstance(o, str) and "failed" in o},
+            "batches": [
+                {"batch_num": i+1, "task_ids": [t["id"] for t in b]}
+                for i, b in enumerate(batches)
+            ]
+        }
+
+        # --- Include context budget in state (FR-004) ---
+        state["context_budget"] = {
+            "chars_consumed": context_chars_consumed,
+            "estimated_tokens": context_chars_consumed // 4,
+            "budget_tokens": budget_tokens,
+            "percentage": round((context_chars_consumed // 4) / budget_tokens * 100, 1)
+        }
+
+        # Atomic write: tmp file → rename
+        Write(state_tmp, json.dumps(state, indent=2))
+        Bash(f"mv {state_tmp} {state_file}")
+
     for batch_num, batch in enumerate(batches, 1):
+        # --- Skip completed batches on resume (FR-005) ---
+        if resume_state and batch_num <= starting_batch:
+            all_done = all(t["id"] in outcomes for t in batch)
+            if all_done:
+                continue  # Entire batch was completed previously
+
         # --- Filter out tasks with unmet dependencies (failed/skipped deps) ---
-        executable = [t for t in batch if deps_satisfied(t, outcomes)]
+        # Also exclude already-completed tasks (resume scenario)
+        executable = [t for t in batch
+                      if t["id"] not in outcomes  # Not already completed (resume)
+                      and deps_satisfied(t, outcomes)]
         skipped = [t for t in batch if t not in executable]
         for t in skipped:
             record_outcome(t, "skipped", outcomes, reason="unmet dependency")
@@ -1241,25 +1448,142 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel):
                 context += f"\n\n## User Clarification\n{user_clarification}"
             result = dispatch_subagent(task, context)  # See dispatch_subagent() below
 
-            # --- Handle review failure within batch (Batch Failure Handler) ---
-            if result.review_failed and result.rounds >= max_review_rounds:
-                failure_decision = ask_failure_handler(task, result.feedback)
-                if failure_decision == "retry":
-                    result = dispatch_subagent(task, context, fresh=True)
-                elif failure_decision == "skip":
-                    update_task(task["id"], status="blocked", reason="review failure")
-                elif failure_decision == "abort_batch":
-                    record_outcome(task, result, outcomes)
-                    break  # Exit batch loop, proceed to checkpoint
-                elif failure_decision == "manual":
-                    update_task(task["id"], status="blocked", reason="manual impl")
-                    log_correction(task["id"], "review", "Deferred to manual")
+            # --- Track context consumption (FR-004) ---
+            context_chars_consumed += len(str(result))
+            # Estimate orchestrator output overhead (~500 chars per task for display)
+            context_chars_consumed += 500
+
+            # --- Orchestrator Review Dispatch (Step 4.4) ---
+            review_config = load_review_config()  # from .sdlc/config.yaml
+            if review_config.get("self_review", {}).get("enabled", False):
+                review_result = orchestrator_review_dispatch(task, review_config)
+                # review_result: "approved", "blocked", or "escalated"
+
+                if review_result == "blocked":
+                    # Handle review failure (Batch Failure Handler)
+                    rounds = review_result.rounds
+                    if rounds >= review_config.get("max_rounds", 3):
+                        failure_decision = ask_failure_handler(task, review_result.feedback)
+                        if failure_decision == "retry":
+                            result = dispatch_subagent(task, context, fresh=True)
+                            review_result = orchestrator_review_dispatch(task, review_config)
+                        elif failure_decision == "skip":
+                            update_task(task["id"], status="blocked", reason="review failure")
+                        elif failure_decision == "abort_batch":
+                            record_outcome(task, result, outcomes)
+                            break  # Exit batch loop, proceed to checkpoint
+                        elif failure_decision == "manual":
+                            update_task(task["id"], status="blocked", reason="manual impl")
+                            log_correction(task["id"], "review", "Deferred to manual")
+
+                if review_result == "approved":
+                    update_task(task["id"], status="completed")
+            else:
+                # Review disabled — complete task directly
+                update_task(task["id"], status="completed")
 
             record_outcome(task, result, outcomes)
             batch_results[task["id"]] = result
 
+            # --- Checkpoint state after task completion (FR-001) ---
+            write_state_checkpoint(outcomes, batches, batch_num)
+
+            # --- Intra-batch context check (FR-005) ---
+            estimated_tokens = context_chars_consumed // 4
+            budget_percentage = (estimated_tokens / budget_tokens) * 100
+
+            if budget_percentage >= halt_threshold:
+                write_state_checkpoint(outcomes, batches, batch_num)
+                print(f"🛑 Context budget critical (~{budget_percentage:.0f}%). Halting mid-batch. State saved.")
+                print(f"Resume: /compact → /sdlc:sprint-run {sprint_id} --resume")
+                return  # Emergency exit
+
         # --- Batch checkpoint (Step 4.5) ---
         present_batch_results(batch_num, batch_results, skipped)
+
+        # --- Persist state at batch boundary (FR-001) ---
+        write_state_checkpoint(outcomes, batches, batch_num)
+
+        # --- Context budget display (FR-004, AC-003) ---
+        estimated_tokens = context_chars_consumed // 4
+        budget_percentage = (estimated_tokens / budget_tokens) * 100
+
+        # Display context health with color-coded indicator
+        if budget_percentage < 50:
+            budget_indicator = "🟢"
+        elif budget_percentage < 70:
+            budget_indicator = "🟡"
+        elif budget_percentage < 85:
+            budget_indicator = "🟠"
+        else:
+            budget_indicator = "🔴"
+
+        print(f"{budget_indicator} Context: ~{budget_percentage:.0f}% estimated ({estimated_tokens:,}/{budget_tokens:,} tokens)")
+
+        # --- Auto-compact guidance (FR-005) ---
+        if budget_percentage >= halt_threshold:
+            # HALT: Context critically high
+            write_state_checkpoint(outcomes, batches, batch_num)
+            print(f"""
+🛑 CONTEXT BUDGET CRITICAL: ~{budget_percentage:.0f}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Execution halted to prevent context overflow.
+State saved to: {state_file}
+
+To resume after compacting:
+  1. Run /compact
+  2. Run /sdlc:sprint-run {sprint_id} --resume
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """)
+            break  # Exit the batch loop — halt execution
+
+        elif budget_percentage >= urgent_threshold:
+            # URGENT WARNING
+            write_state_checkpoint(outcomes, batches, batch_num)
+            print(f"""
+⚠️ CONTEXT BUDGET HIGH: ~{budget_percentage:.0f}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+State saved. Strongly recommend compacting NOW.
+
+To resume:
+  1. Run /compact
+  2. Run /sdlc:sprint-run {sprint_id} --resume
+
+Execution will HALT at {halt_threshold}%.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """)
+            # Continue execution but user is warned
+
+        elif budget_percentage >= compact_threshold:
+            # PAUSE: Recommend compacting
+            write_state_checkpoint(outcomes, batches, batch_num)
+
+            compact_decision = AskUserQuestion({
+                questions: [{
+                    question: f"Context budget at ~{budget_percentage:.0f}%. State saved. Compact now?",
+                    header: "Context",
+                    options: [
+                        { label: "Compact & resume", description: f"Run /compact, then /sdlc:sprint-run {sprint_id} --resume" },
+                        { label: "Continue", description: f"Keep going (will warn again at {urgent_threshold}%, halt at {halt_threshold}%)" },
+                        { label: "Abort sprint", description: "Stop execution, state is saved" }
+                    ],
+                    multiSelect: false
+                }]
+            })
+
+            if compact_decision == "Compact & resume":
+                print(f"""
+State saved to: {state_file}
+
+Next steps:
+  1. Run /compact
+  2. Run /sdlc:sprint-run {sprint_id} --resume
+                """)
+                return  # Exit run_simple_mode — user will compact and resume
+            elif compact_decision == "Abort sprint":
+                print("Sprint execution aborted. State saved for later resume.")
+                return
+            # "Continue" — proceed to next batch
 
         if batch_num < len(batches):
             next_batch = batches[batch_num]  # 0-indexed: batch_num is next
@@ -1277,9 +1601,18 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel):
     present_completion_summary(batches, outcomes)
     generate_report(sprint_id, outcomes)
 
+    # --- Clean up state file on successful completion (FR-006) ---
+    # Archive with timestamp for debugging, then remove active state file
+    timestamp = current_iso_timestamp().replace(":", "-")
+    Bash(f"mv {state_file} {state_dir}/{sprint_id}-state.{timestamp}.json 2>/dev/null || true")
+
 
 def dispatch_subagent(task: dict, context_package: str, fresh: bool = False) -> Result:
     """Dispatch a single task to a fresh subagent and wait for completion.
+
+    The subagent implements the task and submits self-review evidence via
+    submit_self_review(). It does NOT dispatch reviewer subagents or mark
+    the task as completed — that happens at the orchestrator level (Step 4.4).
 
     Args:
         task: Task metadata dict with id, title, etc.
@@ -1287,8 +1620,7 @@ def dispatch_subagent(task: dict, context_package: str, fresh: bool = False) -> 
         fresh: If True, this is a retry — add retry context to prompt.
 
     Returns:
-        Result with: success (bool), review_verdict, rounds, outcome_summary,
-                     review_failed (bool), feedback (str).
+        Result with: success (bool), outcome_summary (str).
     """
     retry_note = ""
     if fresh:
@@ -1314,11 +1646,143 @@ def dispatch_subagent(task: dict, context_package: str, fresh: bool = False) -> 
     return parse_subagent_result(result)
 
 
+def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
+    """Run the orchestrator-level review dispatch for a completed task.
+
+    Implements Step 4.4: checks self-review evidence, optionally dispatches
+    a reviewer subagent, and handles the approve/reject/escalate flow.
+
+    Args:
+        task: Task metadata dict with id, title, etc.
+        review_config: The 'review' section from .sdlc/config.yaml.
+
+    Returns:
+        "approved" if review passed, "blocked" if review failed.
+    """
+    task_id = task["id"]
+
+    # 1. Check self-review evidence
+    evidence = mcp__asdlc__get_review_evidence(task_id=task_id)
+    if not evidence.get("self_review"):
+        mcp__asdlc__block_task(task_id=task_id, reason="self-review not submitted")
+        return "blocked"
+    if evidence["self_review"]["verdict"] == "fail":
+        mcp__asdlc__block_task(task_id=task_id, reason="self-review failed")
+        return "blocked"
+
+    # 2. Check if subagent review is enabled
+    if not review_config.get("subagent_review", {}).get("enabled", False):
+        return "approved"  # Skip subagent review, proceed to completion
+
+    # 3. Dispatch reviewer subagent
+    max_rounds = review_config.get("max_rounds", 3)
+    for round_num in range(1, max_rounds + 1):
+        reviewer_result = Task(
+            description=f"Review {task_id}: {task['title']}",
+            prompt=REVIEWER_PROMPT_TEMPLATE.format(task_id=task_id),
+            subagent_type="general-purpose",
+        )
+
+        # 4. Read verdict
+        evidence = mcp__asdlc__get_review_evidence(task_id=task_id)
+        verdict = evidence.get("review_verdict", {}).get("verdict", "")
+
+        if verdict == "approve":
+            return "approved"
+        elif verdict == "escalate":
+            # Escalate to user immediately
+            decision = ask_escalation(task_id, evidence)
+            if decision == "override":
+                return "approved"
+            else:
+                return "blocked"
+        elif verdict == "request_changes":
+            if round_num < max_rounds:
+                # Re-dispatch implementing subagent with fix instructions
+                dispatch_subagent(task, context_with_fix_instructions, fresh=True)
+            # else: loop ends, escalate below
+
+    # Max rounds reached — escalate to user
+    return "blocked"
+
+
 # record_outcome() and extract_outcome_summary() — see Step 4.3 above for full definitions
 
 
-def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch):
+def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_state=None):
     """Multiple PRDs — one worktree per PRD."""
+    # --- State persistence setup (FR-001) ---
+    context = mcp__asdlc__get_context()
+    project_id = context["project_id"]
+    state_dir = f"~/.a-sdlc/runs/{project_id}"
+    state_file = f"{state_dir}/{sprint_id}-state.json"
+    state_tmp = f"{state_dir}/{sprint_id}-state.tmp.json"
+    sprint_started_at = current_iso_timestamp()
+    Bash(f"mkdir -p {state_dir}")
+
+    # --- Context budget tracking (FR-004) ---
+    context_chars_consumed = 0  # Running character count
+
+    # Read budget from config (optional)
+    budget_tokens = 150000  # Default
+    try:
+        config = Read(".sdlc/config.yaml")
+        if "sprint:" in config and "context_budget:" in config:
+            budget_tokens = int(config.sprint.context_budget)
+    except:
+        pass  # Use default
+
+    # --- Auto-compact thresholds (FR-005) ---
+    compact_threshold = 70   # Warn and pause at this percentage
+    urgent_threshold = 85    # Warn urgently
+    halt_threshold = 95      # Halt execution
+
+    # Optional: read from .sdlc/config.yaml
+    #   sprint:
+    #     compact_threshold: 70
+    try:
+        if "compact_threshold:" in config:
+            compact_threshold = int(config.sprint.compact_threshold)
+    except:
+        pass  # Use defaults
+
+    def write_state_checkpoint(outcomes, prd_groups, mode="isolated"):
+        """Write current execution state to disk atomically."""
+        state = {
+            "version": 1,
+            "sprint_id": sprint_id,
+            "project_id": project_id,
+            "started_at": sprint_started_at,
+            "updated_at": current_iso_timestamp(),
+            "mode": mode,
+            "prd_groups": [
+                {"prd_id": g["prd_id"], "task_count": len(g["tasks"])}
+                for g in prd_groups
+            ],
+            "outcomes": outcomes,
+        }
+
+        # --- Include context budget in state (FR-004) ---
+        state["context_budget"] = {
+            "chars_consumed": context_chars_consumed,
+            "estimated_tokens": context_chars_consumed // 4,
+            "budget_tokens": budget_tokens,
+            "percentage": round((context_chars_consumed // 4) / budget_tokens * 100, 1)
+        }
+
+        Write(state_tmp, json.dumps(state, indent=2))
+        Bash(f"mv {state_tmp} {state_file}")
+
+    outcomes = {}  # Track outcomes across all PRD agents
+
+    # --- Resume support (FR-005) ---
+    # If resuming, pre-populate outcomes and context budget from checkpoint
+    if resume_state:
+        outcomes = resume_state.get("outcomes", {})
+        # Restore context budget tracking from checkpoint
+        if "context_budget" in resume_state:
+            context_chars_consumed = resume_state["context_budget"]["chars_consumed"]
+
     # Check for resume state via DB (not filesystem)
     existing = list_worktrees(sprint_id=sprint_id)
     if existing["count"] > 0:
@@ -1354,6 +1818,17 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch):
     active = {}
     queue = list(prd_groups)
 
+    # --- Skip fully-completed PRD groups on resume (FR-005) ---
+    if resume_state:
+        remaining = []
+        for group in queue:
+            all_task_ids = [t["id"] for t in group["tasks"]]
+            all_done = all(tid in outcomes for tid in all_task_ids)
+            if all_done:
+                continue  # Skip — all tasks for this PRD were completed previously
+            remaining.append(group)
+        queue = remaining
+
     while queue or active:
         while len(active) < max_parallel and queue:
             group = queue.pop(0)
@@ -1365,9 +1840,115 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch):
             )
             active[group["prd_id"]] = agent_id
 
-        completed_prd, success, error = wait_for_any(active)
+        completed_prd, prd_result = wait_for_any(active)
         del active[completed_prd]
-        # Report branch + worktree for review
+
+        # --- Track context consumption (FR-004) ---
+        context_chars_consumed += len(str(prd_result))
+        context_chars_consumed += 500  # Orchestrator overhead estimate
+
+        # --- Orchestrator Review Dispatch for isolated mode (Step 4.4) ---
+        # Parse task outcomes from the PRD agent's structured output
+        task_outcomes = parse_prd_agent_task_outcomes(prd_result)
+        review_config = load_review_config()  # from .sdlc/config.yaml
+
+        for task_id, task_outcome in task_outcomes.items():
+            if task_outcome["verdict"] == "PASS" and review_config.get("self_review", {}).get("enabled", False):
+                task = get_task_by_id(task_id)
+                review_result = orchestrator_review_dispatch(task, review_config)
+                if review_result == "approved":
+                    update_task(task_id, status="completed")
+                # else: task remains in current status (blocked by review dispatch)
+            elif task_outcome["verdict"] == "PASS":
+                # Review disabled — complete task directly
+                update_task(task_id, status="completed")
+            # FAIL/BLOCKED tasks: already handled by the PRD agent
+
+        # --- Checkpoint state after PRD agent completion (FR-001) ---
+        outcomes[completed_prd] = {"task_outcomes": task_outcomes}
+        write_state_checkpoint(outcomes, prd_groups)
+
+        # --- Context budget display (FR-004, AC-003) ---
+        estimated_tokens = context_chars_consumed // 4
+        budget_percentage = (estimated_tokens / budget_tokens) * 100
+
+        # Display context health with color-coded indicator
+        if budget_percentage < 50:
+            budget_indicator = "🟢"
+        elif budget_percentage < 70:
+            budget_indicator = "🟡"
+        elif budget_percentage < 85:
+            budget_indicator = "🟠"
+        else:
+            budget_indicator = "🔴"
+
+        print(f"{budget_indicator} Context: ~{budget_percentage:.0f}% estimated ({estimated_tokens:,}/{budget_tokens:,} tokens)")
+
+        # --- Auto-compact guidance (FR-005) ---
+        if budget_percentage >= halt_threshold:
+            # HALT: Context critically high
+            write_state_checkpoint(outcomes, prd_groups)
+            print(f"""
+🛑 CONTEXT BUDGET CRITICAL: ~{budget_percentage:.0f}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Execution halted to prevent context overflow.
+State saved to: {state_file}
+
+To resume after compacting:
+  1. Run /compact
+  2. Run /sdlc:sprint-run {sprint_id} --resume
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """)
+            # Stop launching new PRD agents — exit the while loop
+            break
+
+        elif budget_percentage >= urgent_threshold:
+            # URGENT WARNING
+            write_state_checkpoint(outcomes, prd_groups)
+            print(f"""
+⚠️ CONTEXT BUDGET HIGH: ~{budget_percentage:.0f}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+State saved. Strongly recommend compacting NOW.
+
+To resume:
+  1. Run /compact
+  2. Run /sdlc:sprint-run {sprint_id} --resume
+
+Execution will HALT at {halt_threshold}%.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """)
+            # Continue execution but user is warned
+
+        elif budget_percentage >= compact_threshold:
+            # PAUSE: Recommend compacting
+            write_state_checkpoint(outcomes, prd_groups)
+
+            compact_decision = AskUserQuestion({
+                questions: [{
+                    question: f"Context budget at ~{budget_percentage:.0f}%. State saved. Compact now?",
+                    header: "Context",
+                    options: [
+                        { label: "Compact & resume", description: f"Run /compact, then /sdlc:sprint-run {sprint_id} --resume" },
+                        { label: "Continue", description: f"Keep going (will warn again at {urgent_threshold}%, halt at {halt_threshold}%)" },
+                        { label: "Abort sprint", description: "Stop execution, state is saved" }
+                    ],
+                    multiSelect: false
+                }]
+            })
+
+            if compact_decision == "Compact & resume":
+                print(f"""
+State saved to: {state_file}
+
+Next steps:
+  1. Run /compact
+  2. Run /sdlc:sprint-run {sprint_id} --resume
+                """)
+                return  # Exit run_isolated_mode — user will compact and resume
+            elif compact_decision == "Abort sprint":
+                print("Sprint execution aborted. State saved for later resume.")
+                return
+            # "Continue" — proceed to next PRD agent
 
     # Branch completion — use complete_prd_worktree with config-aware options
     config = get_git_safety_config()
@@ -1376,6 +1957,10 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch):
         complete_prd_worktree(prd_id=group["prd_id"], action=action)
 
     generate_isolated_report(sprint_id, prd_groups)
+
+    # --- Clean up state file on successful completion (FR-006) ---
+    timestamp = current_iso_timestamp().replace(":", "-")
+    Bash(f"mv {state_file} {state_dir}/{sprint_id}-state.{timestamp}.json 2>/dev/null || true")
 ```
 
 ## Edge Cases (Isolated Mode)
@@ -1408,6 +1993,9 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch):
 
 # Run with external system sync
 /sdlc:sprint-run PROJ-S0001 --sync
+
+# Resume after context compact
+/sdlc:sprint-run PROJ-S0001 --resume
 
 # After isolated run — complete PRD branches using the completion tool
 mcp__asdlc__complete_prd_worktree(prd_id="PROJ-P0001", action="keep")

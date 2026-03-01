@@ -22,7 +22,7 @@ from typing import Any
 
 # Schema version for fresh start (hybrid storage with file_path design)
 # Version 2: Added shortname column to projects table
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def get_data_dir() -> Path:
@@ -248,6 +248,23 @@ class Database:
             CREATE INDEX idx_worktrees_prd ON worktrees(prd_id);
             CREATE INDEX idx_worktrees_sprint ON worktrees(sprint_id);
             CREATE INDEX idx_worktrees_status ON worktrees(status);
+
+            -- Reviews table (review evidence per task per round)
+            CREATE TABLE reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                round INTEGER NOT NULL DEFAULT 1,
+                reviewer_type TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                findings TEXT,
+                test_output TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_reviews_task ON reviews(task_id);
+            CREATE INDEX idx_reviews_project ON reviews(project_id);
         """)
 
     def _check_schema_version(self, conn: sqlite3.Connection) -> None:
@@ -303,6 +320,10 @@ class Database:
             if current_version == 6:
                 self._migrate_v6_to_v7(conn)
                 current_version = 7
+
+            if current_version == 7:
+                self._migrate_v7_to_v8(conn)
+                current_version = 8
         except _MigrationError:
             raise
         except Exception as e:
@@ -426,6 +447,27 @@ class Database:
         """Migrate database from version 6 to version 7 (add pr_url to worktrees)."""
         conn.execute("ALTER TABLE worktrees ADD COLUMN pr_url TEXT")
         conn.execute("UPDATE schema_version SET version = 7")
+
+    def _migrate_v7_to_v8(self, conn: sqlite3.Connection) -> None:
+        """Migrate database from version 7 to version 8 (add reviews table)."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                round INTEGER NOT NULL DEFAULT 1,
+                reviewer_type TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                findings TEXT,
+                test_output TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_reviews_task ON reviews(task_id);
+            CREATE INDEX IF NOT EXISTS idx_reviews_project ON reviews(project_id);
+        """)
+        conn.execute("UPDATE schema_version SET version = 8")
 
     @contextmanager
     def connection(self) -> Generator[sqlite3.Connection, None, None]:
@@ -1517,6 +1559,103 @@ class Database:
                 "DELETE FROM worktrees WHERE id = ?", (worktree_id,)
             )
             return cursor.rowcount > 0
+
+    # =========================================================================
+    # Review Operations
+    # =========================================================================
+
+    VALID_REVIEWER_TYPES = ("self", "subagent")
+    VALID_VERDICTS = ("pass", "fail", "approve", "request_changes", "escalate")
+
+    def create_review(
+        self,
+        task_id: str,
+        project_id: str,
+        round_num: int,
+        reviewer_type: str,
+        verdict: str,
+        findings: str | None = None,
+        test_output: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new review record.
+
+        Args:
+            task_id: Task being reviewed.
+            project_id: Parent project ID.
+            round_num: Review round number (1-based).
+            reviewer_type: Type of reviewer ('self' or 'subagent').
+            verdict: Review verdict ('pass', 'fail', 'approve', 'request_changes', 'escalate').
+            findings: Optional JSON array of finding objects.
+            test_output: Optional raw test command output.
+
+        Returns:
+            Created review dict with id.
+
+        Raises:
+            ValueError: If reviewer_type or verdict is invalid.
+        """
+        if reviewer_type not in self.VALID_REVIEWER_TYPES:
+            raise ValueError(
+                f"Invalid reviewer_type: {reviewer_type!r}. "
+                f"Must be one of {self.VALID_REVIEWER_TYPES}"
+            )
+        if verdict not in self.VALID_VERDICTS:
+            raise ValueError(
+                f"Invalid verdict: {verdict!r}. "
+                f"Must be one of {self.VALID_VERDICTS}"
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO reviews
+                   (task_id, project_id, round, reviewer_type, verdict,
+                    findings, test_output, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, project_id, round_num, reviewer_type, verdict,
+                 findings, test_output, now),
+            )
+            review_id = cursor.lastrowid
+            row = conn.execute(
+                "SELECT * FROM reviews WHERE id = ?", (review_id,)
+            ).fetchone()
+            return dict(row)
+
+    def get_reviews_for_task(self, task_id: str) -> list[dict[str, Any]]:
+        """Get all reviews for a task, ordered by round and creation time.
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            List of review dicts ordered by round ASC, created_at ASC.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM reviews WHERE task_id = ? ORDER BY round ASC, created_at ASC",
+                (task_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_latest_approved_review(self, task_id: str) -> dict[str, Any] | None:
+        """Get the most recent approved/passed review for a task.
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            Most recent review with verdict 'pass' or 'approve', or None if not found.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """SELECT * FROM reviews
+                   WHERE task_id = ? AND verdict IN ('pass', 'approve')
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+                (task_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     # =========================================================================
     # Sync Mapping Operations

@@ -56,13 +56,13 @@ Great work! 🎉
 
 ### Orchestration Compatibility Note
 
-When this skill is invoked after subagent dispatch (from `/sdlc:task-start` or `/sdlc:sprint-run`), the implementation subagent may have already performed self-review, subagent review, and committed changes. Before re-triggering the full review cycle:
+When this skill is invoked after subagent dispatch (from `/sdlc:task-start` or `/sdlc:sprint-run`), the implementation subagent may have already submitted self-review evidence via `submit_self_review()`. Before re-triggering the full review cycle:
 
-1. Check if the task has recent commits by the implementation subagent (`git log --oneline -5`)
-2. Check if corrections were already logged for this task (`grep {task_id} .sdlc/corrections.log`)
-3. If evidence of prior review exists (commits, logged corrections, review verdicts in agent output), **skip directly to Phase 4: Evidence-Based Completion** (the final confirmation and logging steps) to avoid redundant review rounds
+1. Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` to check existing review state
+2. If self-review evidence exists AND a subagent review verdict of `approve` is already recorded, **skip directly to Phase 4: Evidence-Based Completion** to avoid redundant review rounds
+3. If self-review evidence exists but no subagent review verdict, skip the Self-Review Phase and proceed directly to **Phase 2: Orchestrator Review Dispatch**
 
-If no evidence of prior review is found, proceed with the full review cycle below.
+If no review evidence is found, proceed with the full review cycle below.
 
 ### Self-Review Phase
 
@@ -225,200 +225,113 @@ mcp__asdlc__log_correction(
 )
 ```
 
-Proceed to Phase 2 (Subagent Review).
-
-### Phase 2: Subagent Review
-
-After self-review passes (no critical findings remaining), dispatch a fresh subagent for independent review. This provides an unbiased second opinion with full context but without the implementing agent's assumptions.
-
-**Step 7: Check Subagent Review Configuration**
-
-Read `.sdlc/config.yaml` and check the `review.subagent_review` section:
-
-```yaml
-review:
-  subagent_review:
-    enabled: true
+Submit self-review evidence via the MCP tool:
+```
+mcp__asdlc__submit_self_review(
+  task_id="{task_id}",
+  verdict="pass",
+  findings="{self_review_findings_summary}",
+  test_output="{actual_test_command_output}"
+)
 ```
 
-- If `review.subagent_review.enabled` is `false` OR the section does not exist, skip Phase 2 and Phase 3 entirely and proceed to Phase 4 (Evidence-Based Completion).
-- Otherwise, continue with Steps 8-10.
+If critical findings remain (user chose "Complete anyway"), submit with verdict `fail` and note the override:
+```
+mcp__asdlc__submit_self_review(
+  task_id="{task_id}",
+  verdict="fail",
+  findings="{unresolved_findings}",
+  test_output="{actual_test_command_output}"
+)
+```
 
-**Step 8: Gather Review Context**
+Proceed to Phase 2 (Orchestrator Review Dispatch).
 
-Collect curated context for the reviewer subagent. Use selective injection — diffs and summaries, not full file contents:
+### Phase 2: Orchestrator Review Dispatch
 
-1. **Task spec** — Read task content via `get_task(task_id)`. Extract:
-   - Traces To section (requirement IDs)
-   - Acceptance Criteria (testable criteria)
-   - Scope Definition (deliverables and exclusions)
-   - Implementation Steps (expected approach)
+After self-review passes and evidence is submitted via `submit_self_review()`, the task-complete orchestrator runs the review dispatch sequence. This follows the same pattern as sprint-run Step 4.4.
 
-2. **PRD content** — If the task has a `prd_id`, read PRD via `get_prd(prd_id)`. Extract:
-   - Functional requirements mapped to this task
-   - Non-functional requirements for this task's component
-   - Acceptance criteria linked via Traces To
+**Step 7: Check Review Configuration**
 
-3. **Design doc** — If the PRD has a design doc, read via `get_design(prd_id)`. Extract:
-   - Architecture decisions relevant to this task
-   - Technical constraints and patterns specified
+Read `.sdlc/config.yaml` — if the `review` section exists AND `review.self_review.enabled` is `true`, review is enabled. If the entire `review` section is absent, review is disabled — skip Phase 2 and Phase 3 entirely and proceed to Phase 4 (Evidence-Based Completion).
 
-4. **Self-review report** — The summary produced at the end of Step 5, including:
-   - Spec compliance results
-   - Code quality assessment
-   - Test coverage results
-   - Self-heal rounds used and any warnings
+**Step 8: Verify Self-Review Evidence**
 
-5. **Code diff** — Run `git diff` to capture the task's changes:
-   ```
-   git diff HEAD~1  # or appropriate range covering this task's commits
-   ```
-   Use the diff output directly — do NOT include full file contents. If the diff exceeds 200 lines, summarize unchanged sections with `[... N unchanged lines ...]` markers.
+Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` to verify self-review was submitted:
 
-6. **Codebase artifacts** (truncated) — Read from `.sdlc/artifacts/`:
-   - `architecture.md` — first 100 lines (high-level structure only)
-   - `codebase-summary.md` — first 100 lines (overview only)
-   If these files do not exist, skip them.
+- If missing → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review not submitted')` — task cannot complete. STOP.
+- If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed')` — task cannot complete. STOP.
+- If present and verdict='pass' → proceed to Step 9.
 
-**Step 9: Dispatch Reviewer Subagent**
+**Step 9: Check Subagent Review Configuration**
 
-Launch a fresh Task agent with the review prompt. The subagent must run synchronously — wait for its result before proceeding.
+Read `.sdlc/config.yaml` and check `review.subagent_review.enabled`:
+
+- If `review.subagent_review.enabled` is `false` OR the section does not exist → skip Phase 2 and Phase 3, proceed to Phase 4 (Evidence-Based Completion).
+- Otherwise, continue with Step 10.
+
+**Step 10: Dispatch Reviewer Subagent**
+
+Launch a fresh Task agent for independent review. The reviewer reads self-review evidence via MCP tools and submits its verdict via `submit_review_verdict()`.
 
 ```
 Task(
-  description="Independent code review for {task_id}",
-  prompt="You are an independent code reviewer. Review the implementation of task {task_id} against its specification.
+  description="Review {task_id}: {task_title}",
+  prompt="You are an independent code reviewer. Review task {task_id}.
 
-## Your Role
-You are a fresh reviewer with NO prior context about this implementation. Evaluate objectively based ONLY on the materials provided below. If the provided documentation does not answer a question, use AskUserQuestion to escalate — do NOT assume or guess.
+         Call mcp__asdlc__get_review_evidence(task_id='{task_id}') to read the self-review.
+         Review the git diff and test output.
 
-## Review Materials
+         Evaluate: spec compliance, code quality, test coverage.
 
-### Task Specification
-{task_spec_content}
-
-### PRD Requirements
-{prd_content_or_'No PRD linked to this task'}
-
-### Design Document
-{design_doc_content_or_'No design doc available'}
-
-### Self-Review Report (from implementing agent)
-{self_review_summary}
-
-### Code Changes (diff)
-```diff
-{git_diff_output}
-```
-
-### Codebase Context
-{truncated_architecture_md}
-{truncated_codebase_summary_md}
-
-## Evaluation Dimensions
-
-Evaluate the implementation across three dimensions:
-
-### 1. Spec Compliance
-- For each item in Traces To: Is the linked requirement fully addressed?
-- For each Acceptance Criterion: Is it satisfied by the implementation?
-- Scope check: Was anything added beyond what the spec requires? (anti-bloat)
-- Scope check: Was anything omitted that the spec requires? (gap detection)
-
-### 2. Code Quality
-- Does the code follow project patterns visible in the codebase context?
-- Is error handling appropriate and consistent?
-- Are naming conventions consistent with the project?
-- Is there unnecessary duplication that should use existing utilities?
-- Are there security concerns (hardcoded secrets, injection risks, etc.)?
-
-### 3. Test Coverage
-- Do tests exist for the new functionality?
-- Do the tests cover the acceptance criteria?
-- Are edge cases tested?
-- Did the self-review report show all tests passing?
-
-## Escalation Rule
-If you encounter a question that the provided documentation does not answer — for example, an ambiguous requirement, an unclear project convention, or a design decision not documented — you MUST escalate to the user:
-
-AskUserQuestion({{
-  questions: [{{
-    question: 'During review of {task_id}, I need clarification: {{your_specific_question}}',
-    header: 'Reviewer Question',
-    options: [
-      {{ label: 'Provide answer', description: 'I will answer this question' }},
-      {{ label: 'Skip this check', description: 'Proceed without this evaluation point' }}
-    ],
-    multiSelect: false
-  }}]
-}})
-
-## Required Output Format
-
-You MUST produce your review in exactly this structure:
-
-REVIEW VERDICT: [APPROVE | REQUEST_CHANGES | ESCALATE_TO_USER]
-
-SPEC COMPLIANCE:
-  Status: [PASS | FAIL]
-  Requirements verified: [count]
-  Gaps found: [list or 'none']
-  Bloat detected: [list or 'none']
-
-CODE QUALITY:
-  Status: [PASS | FAIL]
-  Pattern adherence: [GOOD | ISSUES_FOUND]
-  Issues: [list or 'none']
-
-TEST COVERAGE:
-  Status: [PASS | FAIL]
-  Tests exist: [yes/no]
-  Tests passing: [yes/no/not_verified]
-  AC coverage: [complete/partial/missing]
-  Gaps: [list or 'none']
-
-FINDINGS:
-  [List each finding with severity (critical/warning/info) and actionable detail]
-  [If no findings: 'No issues found']
-
-SUMMARY:
-  [1-2 sentence overall assessment]
-",
+         Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with:
+         - 'approve' if implementation meets all criteria
+         - 'request_changes' if issues found (list specific fixes needed)
+         - 'escalate' if you cannot determine correctness
+         ",
   subagent_type="general-purpose"
 )
 ```
 
 **Important**: Do NOT use `run_in_background=true` — this review must complete before proceeding.
 
-**Step 10: Process Initial Review Result**
+**Step 11: Read and Process Verdict**
 
-Parse the reviewer subagent's output and extract the verdict. The initial verdict determines the next step:
+After the reviewer subagent returns, read the verdict:
+
+```
+evidence = mcp__asdlc__get_review_evidence(task_id='{task_id}')
+verdict = evidence.review_verdict.verdict  # 'approve', 'request_changes', or 'escalate'
+```
 
 **If verdict is APPROVE:**
 ```
-Subagent Review: APPROVED ✅
+Subagent Review: APPROVED
 Reviewer found no critical issues.
-{include any warnings or info-level findings}
+{include any warnings or info-level findings from evidence.review_verdict.findings}
 ```
 
 Proceed directly to Phase 4 (Evidence-Based Completion).
 
-**If verdict is ESCALATE_TO_USER:**
+**If verdict is ESCALATE:**
+
+Present the reviewer's concerns to the user immediately:
 ```
-Subagent Review: ESCALATED TO USER
-The reviewer needs clarification on the following:
-{list each escalation question}
+AskUserQuestion({
+  questions: [{
+    question: "Task {task_id} reviewer escalated. Findings: {evidence.review_verdict.findings}. How to proceed?",
+    header: "Review Escalation",
+    options: [
+      { label: "Override & complete", description: "Accept current implementation despite review findings" },
+      { label: "Continue fixing", description: "Allow more review rounds" },
+      { label: "Block task", description: "Mark task as blocked for manual handling" }
+    ],
+    multiSelect: false
+  }]
+})
 ```
 
-Present the reviewer's questions to the user via AskUserQuestion. After receiving answers, re-dispatch the reviewer subagent (Step 9) with the user's answers appended to the review prompt:
-
-```
-### User Clarifications
-Q: {question}
-A: {user_answer}
-```
-
-After re-dispatch, process the new verdict through this same Step 10.
+Handle the user's choice (same as Phase 3 escalation handling below).
 
 **If verdict is REQUEST_CHANGES:**
 
@@ -426,9 +339,9 @@ Enter Phase 3 (Self-Heal Loop) below.
 
 ### Phase 3: Self-Heal Loop
 
-When the subagent reviewer returns `REQUEST_CHANGES`, the implementer fixes the issues and a fresh reviewer re-reviews. This loop repeats up to a configurable maximum number of rounds. After the maximum is exceeded, the user is escalated with an unresolved issue summary.
+When the reviewer subagent returns `request_changes` via `submit_review_verdict()`, the implementer fixes the issues and a fresh reviewer re-reviews. This loop repeats up to a configurable maximum number of rounds. After the maximum is exceeded, the user is escalated.
 
-**Step 11: Initialize Loop State**
+**Step 12: Initialize Loop State**
 
 ```
 review_round = 1
@@ -439,85 +352,93 @@ unresolved_findings = []    # findings still open
 review_log = []             # per-round log entries for task file appendage
 ```
 
-Parse the reviewer's findings from the `REQUEST_CHANGES` verdict into a structured list:
+Parse the reviewer's findings from the `get_review_evidence()` response:
 ```
-current_findings = [
-  { severity: "critical|warning|info", dimension: "spec_compliance|code_quality|test_coverage", detail: "..." },
-  ...
-]
+evidence = mcp__asdlc__get_review_evidence(task_id='{task_id}')
+current_findings = evidence.review_verdict.findings  # structured list from submit_review_verdict
 all_findings.extend(current_findings)
 ```
 
-**Step 12: Fix-Review Cycle**
+**Step 13: Fix-Review Cycle**
 
 ```
 while unresolved critical findings exist AND review_round <= max_rounds:
 
-  ## 12a: Fix each critical finding
-  For each finding with severity "critical":
-    1. Implement the fix (code change, test addition, etc.)
-    2. Re-run ONLY the affected checks:
-       - If dimension is "code_quality" → re-run lint command
-       - If dimension is "test_coverage" → re-run relevant test commands
-       - If dimension is "spec_compliance" → re-verify the specific requirement
-    3. If fix resolves the finding, move it to resolved_findings
-    4. If fix does NOT resolve it, keep in unresolved_findings
+  ## 13a: Dispatch implementing subagent with fix instructions
+  Launch a fresh implementing subagent with the reviewer's findings:
 
-  ## 12b: Update self-review report
-  Re-run Steps 3-4 (Spec Compliance and Code Quality reviews) for affected dimensions only.
-  Update the self-review summary with current state.
+  Task(
+    description="Fix review findings for {task_id}: {task_title}",
+    prompt="You are fixing review findings for task {task_id}.
 
-  ## 12c: Capture updated diff
-  Run: git diff HEAD~1  (or appropriate range covering all task changes including fixes)
+           Previous reviewer findings:
+           {evidence.review_verdict.findings}
 
-  ## 12d: Dispatch fresh reviewer subagent
-  Launch a NEW Task agent (not the same instance) with:
-    - Updated code diff (from 12c, reflecting all fixes made so far)
-    - Previous round's findings summary (NOT the full transcript)
-    - Updated self-review report (from 12b)
-    - Same review prompt structure as Step 9, with this additional section:
+           Fix each critical finding, re-run tests, then:
+           1. Call mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')
+           2. Do NOT call update_task(status='completed') — the orchestrator handles completion
+           ",
+    subagent_type="general-purpose"
+  )
 
-    ### Previous Review Round ({review_round})
-    Findings from previous round:
-    {list each finding with status: resolved/unresolved}
+  ## 13b: Verify updated self-review
+  evidence = mcp__asdlc__get_review_evidence(task_id='{task_id}')
+  if not evidence.self_review or evidence.self_review.verdict == 'fail':
+      mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed after fix round')
+      break
 
-    Resolved in this round:
-    {list fixes applied}
+  ## 13c: Dispatch fresh reviewer subagent
+  Launch a NEW reviewer Task agent (same pattern as Step 10):
 
-    Focus your review on:
-    1. Whether the fixes adequately address the previous findings
-    2. Whether any new issues were introduced by the fixes
-    3. Any remaining unresolved items
+  Task(
+    description="Review {task_id}: {task_title} (round {review_round + 1})",
+    prompt="You are an independent code reviewer. Review task {task_id}.
 
-  ## 12e: Log round to review log
+           Call mcp__asdlc__get_review_evidence(task_id='{task_id}') to read the self-review.
+           Review the git diff and test output.
+
+           This is review round {review_round + 1}. Previous findings were:
+           {previous_findings_summary}
+
+           Focus on: (1) whether fixes address previous findings, (2) any new issues from fixes, (3) remaining unresolved items.
+
+           Evaluate: spec compliance, code quality, test coverage.
+
+           Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with your verdict.
+           ",
+    subagent_type="general-purpose"
+  )
+
+  ## 13d: Read new verdict
+  evidence = mcp__asdlc__get_review_evidence(task_id='{task_id}')
+  verdict = evidence.review_verdict.verdict
+
+  ## 13e: Log round to review log
   review_log.append({
     round: review_round,
     findings_in: count of findings entering this round,
     resolved: count resolved this round,
     remaining: count still unresolved,
-    verdict: reviewer_verdict
+    verdict: verdict
   })
 
-  ## 12f: Process new verdict
-  If verdict is APPROVE → break loop, proceed to Phase 4
-  If verdict is REQUEST_CHANGES → parse new findings, review_round += 1, continue loop
-  If verdict is ESCALATE_TO_USER → handle escalation (present questions, re-dispatch), then re-process verdict
+  ## 13f: Process new verdict
+  If verdict is 'approve' → break loop, proceed to Phase 4
+  If verdict is 'request_changes' → parse new findings, review_round += 1, continue loop
+  If verdict is 'escalate' → AskUserQuestion immediately (same as Step 14 below)
 
   review_round += 1
 ```
 
-**Step 13: User Escalation (Max Rounds Exceeded)**
+**Step 14: User Escalation (Max Rounds Exceeded)**
 
 If `review_round > max_rounds` and unresolved critical findings still exist:
 
 ```
 AskUserQuestion({
   questions: [{
-    question: "Review found unresolved issues after {review_round - 1} fix rounds:\n\n" +
-              "{for each unresolved finding: '- [{severity}] {dimension}: {detail}\n'}" +
-              "\nRounds summary:\n" +
-              "{for each round in review_log: 'Round {round}: {findings_in} findings → {resolved} resolved, {remaining} remaining\n'}",
-    header: "Unresolved Review Findings — Max Rounds Reached",
+    question: "Task {task_id} failed review after {review_round - 1} rounds. How to proceed?",
+    header: "Review Escalation — Max Rounds Reached",
     options: [
       { label: "Override & complete", description: "Accept current state with remaining issues noted, mark task complete" },
       { label: "Continue fixing", description: "Reset round counter and continue attempting fixes (you may also fix issues manually)" },
@@ -532,7 +453,7 @@ Handle the user's choice:
 
 ```
 If "Block task":
-  call mcp__asdlc__update_task(task_id="{task_id}", status="blocked")
+  call mcp__asdlc__block_task(task_id="{task_id}", reason="Review failed after {max_rounds} rounds")
   Log to corrections:
     mcp__asdlc__log_correction(
       context_type="task",
@@ -544,7 +465,7 @@ If "Block task":
 
 If "Continue fixing":
   review_round = 1  # reset counter
-  Re-enter the fix-review cycle at Step 12.
+  Re-enter the fix-review cycle at Step 13.
   (User may also make manual fixes before the next cycle.)
 
 If "Override & complete":
@@ -552,7 +473,7 @@ If "Override & complete":
   Proceed to Phase 4 with override_mode = true.
 ```
 
-**Step 14: Log All Review Findings**
+**Step 15: Log All Review Findings**
 
 After the self-heal loop completes (whether by approval, override, or block), log all findings for retrospective consumption:
 
@@ -581,7 +502,7 @@ mcp__asdlc__log_correction(
 )
 ```
 
-**Step 15: Append Review Log to Task File**
+**Step 16: Append Review Log to Task File**
 
 After logging corrections, append a review history section to the task's content file. Read the task file path from `get_task(task_id)`, then append:
 
@@ -609,15 +530,16 @@ Use the `Edit` tool to append this section to the task file (do not overwrite ex
 
 After the review process concludes with approval (or user override), present an evidence-based completion summary to the user before finalizing.
 
-**Step 16: Build Evidence Summary**
+**Step 17: Build Evidence Summary**
 
 Gather actual evidence from the review process:
 
-1. **Test results** — Actual command output from Smart Test Relevance Detection (Step 6 of that section)
-2. **Lint results** — Actual lint command output from Step 4 (Code Quality review)
-3. **Acceptance criteria** — Count from Step 3 (Spec Compliance review)
-4. **Review verdict** — Final verdict and round count from Phase 3 (or Phase 2 if approved on first pass)
-5. **Manual tests** — Any test types that were deferred or skipped with rationale
+1. **Review evidence** — Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` to retrieve self-review findings and subagent review verdict
+2. **Test results** — Actual command output from Smart Test Relevance Detection (Step 6 of that section), also available in the self-review evidence
+3. **Lint results** — Actual lint command output from Step 4 (Code Quality review)
+4. **Acceptance criteria** — Count from Step 3 (Spec Compliance review)
+5. **Review verdict** — Final verdict and round count from Phase 3 (or Phase 2 if approved on first pass)
+6. **Manual tests** — Any test types that were deferred or skipped with rationale
 
 Present the summary:
 
@@ -631,7 +553,7 @@ DoD Evidence Summary for {task_id}:
   Manual tests deferred: {list with rationale, or "none"}
 ```
 
-**Step 17: User Confirmation**
+**Step 18: User Confirmation**
 
 Ask the user to confirm task completion:
 

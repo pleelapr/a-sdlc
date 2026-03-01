@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Generate an ADR-style (Architecture Decision Record) design document for an existing PRD by analyzing the actual codebase. Produces a codebase-grounded architecture document with section-by-section user review.
+Generate an ADR-style (Architecture Decision Record) design document for an existing PRD by analyzing the actual codebase. Produces a codebase-grounded architecture document with user review.
 
 ## Arguments
 
@@ -61,21 +61,20 @@ Display PRD title and key requirements for reference.
 
 **This step MUST read actual code. Do NOT skip or approximate.**
 
-#### 2.1: Read Artifacts
+#### 2.1: Read Artifacts (Parallel Batch)
 
-If `.sdlc/artifacts/` exists:
-```
-Read: .sdlc/artifacts/architecture.md
-Read: .sdlc/artifacts/directory-structure.md
-Read: .sdlc/artifacts/codebase-summary.md
-Read: .sdlc/artifacts/data-model.md
-Read: .sdlc/artifacts/key-workflows.md
-```
+**Read all files in a single parallel batch — do NOT read them sequentially.**
 
-Also read lesson-learn files if available:
+If `.sdlc/artifacts/` exists, read all 7 files in one parallel batch:
 ```
-Read: .sdlc/lesson-learn.md
-Read: ~/.a-sdlc/lesson-learn.md
+Parallel Read (all at once):
+- .sdlc/artifacts/architecture.md
+- .sdlc/artifacts/directory-structure.md
+- .sdlc/artifacts/codebase-summary.md
+- .sdlc/artifacts/data-model.md
+- .sdlc/artifacts/key-workflows.md
+- .sdlc/lesson-learn.md
+- ~/.a-sdlc/lesson-learn.md
 ```
 
 If artifacts don't exist:
@@ -83,21 +82,24 @@ If artifacts don't exist:
 Warn: No codebase artifacts found. Run `/sdlc:scan` first for best results.
       Proceeding with direct codebase analysis...
 ```
+Read only the lesson-learn files (parallel) and continue to direct codebase analysis.
 
-#### 2.2: Analyze Affected Components
+#### 2.2: Analyze Affected Components (Batched)
 
-For each functional requirement in the PRD:
+**Group related FRs by component rather than analyzing each FR individually.**
 
-1. Identify which existing components are affected
-2. Read the actual source files to understand current implementation
-3. Find 2-3 similar implementations in the codebase that this design should follow
-4. Document existing patterns with file paths and line references
+1. Scan all functional requirements and group them by affected component/module
+2. For each component group:
+   - If artifacts already describe the component sufficiently, use artifact data — do NOT re-read the source
+   - If artifacts are missing or insufficient for this component, read the actual source files
+   - Find 1-2 similar implementations in the codebase that this design should follow
+3. Document existing patterns with file paths and line references
 
 Record findings as structured evidence:
 ```
 Evidence Log:
-- FR-001 → affects src/module/file.py (class X, method Y)
-- FR-002 → new component needed, follows pattern in src/existing/similar.py
+- [src/module/file.py] FR-001, FR-003 → class X, method Y (from artifacts)
+- [src/new_area/] FR-002 → new component needed, follows pattern in src/existing/similar.py (source read)
 - Existing pattern: adapter pattern used in src/storage/__init__.py
 ```
 
@@ -201,24 +203,6 @@ The approach follows the existing {pattern name} pattern found in `{file_path}`.
 {Which test files need updates — reference existing test patterns}
 ```
 
-#### Section: Alternatives Considered
-
-**What this section covers:** Other approaches evaluated and why they were rejected.
-
-**Grounding sources:** Codebase constraints and PRD requirements
-
-```markdown
-## Alternatives Considered
-
-### Alternative 1: {Name}
-- **Approach:** {Brief description}
-- **Rejected because:** {Specific reason grounded in codebase or PRD constraints}
-
-### Alternative 2: {Name}
-- **Approach:** {Brief description}
-- **Rejected because:** {Specific reason grounded in codebase or PRD constraints}
-```
-
 #### Section: Consequences
 
 **What this section covers:** Positive and negative outcomes of the decision.
@@ -240,73 +224,56 @@ The approach follows the existing {pattern name} pattern found in `{file_path}`.
 - {Implementation risk — with mitigation strategy}
 ```
 
-### 4. Section-by-Section Review
+### 4. Present-and-Flag Review
 
-**Do NOT present the entire design for bulk approval.** Review each section individually.
+**Present the full design document first, then ask which sections need edits.**
 
-#### 4.1: Announce Review
+#### 4.1: Present Full Design
 
-```
-Design Document Generated — Starting Section-by-Section Review
+Display the complete design document with all 5 sections (Context, Decision, Approach, Impact Analysis, Consequences) as a single block so the user can read the full picture.
 
-I'll present each section individually. For each section, you can:
-- **Keep** it as-is
-- **Edit** it (tell me what to change)
-- **Remove** it entirely
-```
+#### 4.2: Flag Sections for Revision
 
-#### 4.2: Review Each Section
-
-For each section in this order — Context, Decision, Approach, Impact Analysis, Alternatives Considered, Consequences:
-
-1. Display the section content
-2. Ask via AskUserQuestion:
+Ask a single multiSelect question to identify which sections need changes:
 
 ```
 AskUserQuestion([
   {
-    question: "Review the '{section_name}' section above:",
-    header: "{section}",
+    question: "Which sections need edits? (Select none to keep all as-is)",
+    header: "Review",
+    multiSelect: true,
     options: [
-      { label: "Keep", description: "This section is accurate and complete" },
-      { label: "Edit", description: "I want to change something in this section" },
-      { label: "Remove", description: "Remove this section from the design doc" }
+      { label: "Context", description: "Problem statement and current state" },
+      { label: "Decision", description: "Core architectural approach" },
+      { label: "Approach", description: "Component changes, data flow, patterns" },
+      { label: "Impact Analysis", description: "Files to modify/create, breaking changes" },
+      { label: "Consequences", description: "Positive/negative outcomes and risks" }
     ]
   }
 ])
 ```
 
-- If **Keep**: Include as-is, move to next section
-- If **Edit**: Ask the user what to change. Revise the section. Re-present the SAME section for approval (loop until user selects Keep or Remove)
-- If **Remove**: Exclude from final design doc, move to next section
+#### 4.3: Revise Flagged Sections Only
 
-#### 4.3: Assemble Final Design Document
+For each section the user flagged:
+1. Ask the user what to change
+2. Revise the section
+3. Re-present the revised section for confirmation
 
-After all sections are reviewed, assemble the final document from kept/edited sections.
-
-Display a summary:
-
-```
-Design Document Assembly Summary:
-
-  Keep  Context
-  Keep  Decision
-  Edit  Approach — revised per feedback
-  Keep  Impact Analysis
-  Remove  Alternatives Considered
-  Keep  Consequences
-```
+Sections NOT flagged are kept as-is — do not re-present them.
 
 #### 4.4: Final Confirmation
+
+After revisions (or if no sections were flagged):
 
 ```
 AskUserQuestion([
   {
-    question: "Final design document assembled. How would you like to proceed?",
+    question: "Design document ready. How would you like to proceed?",
     header: "Save",
     options: [
       { label: "Save", description: "Save this design document" },
-      { label: "Re-review", description: "Go through the sections again" },
+      { label: "Re-review", description: "Review the full document again" },
       { label: "Cancel", description: "Discard without saving" }
     ]
   }
@@ -314,7 +281,7 @@ AskUserQuestion([
 ```
 
 - If **Save**: Proceed to Step 5
-- If **Re-review**: Loop back to Step 4.2
+- If **Re-review**: Loop back to Step 4.1
 - If **Cancel**: Discard and stop
 
 ### 5. Save Design Document
