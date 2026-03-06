@@ -93,6 +93,46 @@ Extracted Signals:
 
 ---
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading context, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection & Persona Panel (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze the problem description for domain signals
+2. Assemble persona panel with relevant domain persona + Security (always included as advisor)
+3. Display panel to user
+
+### Persona-Guided Hypotheses
+
+If round_table_enabled = true, before analysis begins:
+
+Use a single Task tool dispatch (NOT full round-table) to get domain-informed hypotheses:
+
+```
+Task(
+  description="Domain hypothesis generation for investigation",
+  subagent_type="{resolve via Section D from _round-table-blocks.md using the dominant domain keyword from the problem description}",
+  prompt="Based on the problem: {problem_description}
+
+  Generate investigation hypotheses from these domain perspectives:
+  - {relevant_domain_persona}: What could cause this from a {domain} perspective?
+  - Security: Could this be a security-related issue?
+
+  Structure each hypothesis with: domain, hypothesis, evidence to look for, investigation steps"
+)
+```
+
+Present hypotheses to user to guide their investigation approach.
+
+**Note**: This uses a single lightweight dispatch, NOT a full multi-persona round-table.
+
+---
+
 ### Phase 2: Search SDLC History
 
 Query all SDLC data for related context:

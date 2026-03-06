@@ -1,5 +1,6 @@
 """Tests for CLI commands."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -747,3 +748,612 @@ class TestDoctorPlaywright:
         assert "Playwright MCP" in result.output
         assert "Not configured" in result.output
         assert "--with-playwright" in result.output
+
+
+class TestDoctorPersonas:
+    """Tests for Persona Agents check in doctor command."""
+
+    def test_doctor_shows_persona_check(self, runner: CliRunner) -> None:
+        """Test doctor command includes Persona Agents check."""
+        result = runner.invoke(main, ["doctor"])
+        assert result.exit_code in (0, 1)
+        assert "Persona Agents" in result.output
+
+    def test_doctor_personas_pass(self, runner: CliRunner) -> None:
+        """Test doctor reports PASS when all 7 personas are deployed."""
+        mock_personas = [{"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(7)]
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.list_installed_personas.return_value = mock_personas
+            mock_installer.check_template_version.return_value = (True, "0.1.0", "0.1.0")
+            mock_installer.list_installed.return_value = []
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Persona Agents" in result.output
+        assert "7 personas deployed" in result.output
+
+    def test_doctor_personas_warn_partial(self, runner: CliRunner) -> None:
+        """Test doctor reports WARN when fewer than 7 personas deployed."""
+        mock_personas = [{"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(3)]
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.list_installed_personas.return_value = mock_personas
+            mock_installer.check_template_version.return_value = (True, "0.1.0", "0.1.0")
+            mock_installer.list_installed.return_value = []
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Persona Agents" in result.output
+        assert "3/7" in result.output
+        assert "Fix:" in result.output
+
+    def test_doctor_personas_warn_none(self, runner: CliRunner) -> None:
+        """Test doctor reports WARN when no personas deployed."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.list_installed_personas.return_value = []
+            mock_installer.check_template_version.return_value = (True, "0.1.0", "0.1.0")
+            mock_installer.list_installed.return_value = []
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Persona Agents" in result.output
+        assert "No personas found" in result.output
+        assert "Fix:" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Persona install/uninstall lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestInstallPersonas:
+    """Tests for persona deployment lifecycle."""
+
+    def test_install_deploys_persona_files(self, tmp_path: Path) -> None:
+        """Verify install_personas deploys files to target dir."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installed = installer.install_personas()
+        assert len(installed) >= 7
+        for name in installed:
+            assert (persona_target / f"{name}.md").exists()
+
+    def test_install_personas_skip_existing_without_force(self, tmp_path: Path) -> None:
+        """Existing persona files not overwritten without --force."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        # Create a pre-existing file with distinct content
+        existing = persona_target / "sdlc-product-manager.md"
+        existing.write_text("old content")
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installer.install_personas(force=False)
+        assert existing.read_text() == "old content"
+
+    def test_install_personas_force_overwrites(self, tmp_path: Path) -> None:
+        """Force flag overwrites existing persona files."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        existing = persona_target / "sdlc-product-manager.md"
+        existing.write_text("old content")
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installer.install_personas(force=True)
+        assert existing.read_text() != "old content"
+
+    def test_uninstall_personas_only_removes_sdlc_prefix(self, tmp_path: Path) -> None:
+        """uninstall_personas only removes sdlc-*.md, not other files."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        # Create sdlc persona file and non-sdlc file
+        (persona_target / "sdlc-test.md").write_text("sdlc persona")
+        (persona_target / "custom-agent.md").write_text("user agent")
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            count = installer.uninstall_personas()
+        assert count == 1
+        assert not (persona_target / "sdlc-test.md").exists()
+        assert (persona_target / "custom-agent.md").exists()
+
+    def test_uninstall_personas_returns_zero_when_dir_missing(self) -> None:
+        """uninstall_personas returns 0 when PERSONA_TARGET does not exist."""
+        installer = Installer()
+        with patch.object(Installer, "PERSONA_TARGET", Path("/nonexistent/agents")):
+            count = installer.uninstall_personas()
+        assert count == 0
+
+    def test_list_installed_personas(self, tmp_path: Path) -> None:
+        """list_installed_personas returns correct persona list."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installer.install_personas()
+            personas = installer.list_installed_personas()
+        assert len(personas) >= 7
+        names = [p["name"] for p in personas]
+        assert "sdlc-product-manager" in names
+
+    def test_list_installed_personas_empty_when_dir_missing(self) -> None:
+        """list_installed_personas returns empty list when dir does not exist."""
+        installer = Installer()
+        with patch.object(Installer, "PERSONA_TARGET", Path("/nonexistent/agents")):
+            personas = installer.list_installed_personas()
+        assert personas == []
+
+    def test_list_installed_personas_ignores_non_sdlc_files(self, tmp_path: Path) -> None:
+        """list_installed_personas only returns sdlc-*.md files."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        (persona_target / "sdlc-architect.md").write_text("# arch")
+        (persona_target / "custom-agent.md").write_text("# custom")
+        (persona_target / "readme.md").write_text("# readme")
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            personas = installer.list_installed_personas()
+        assert len(personas) == 1
+        assert personas[0]["name"] == "sdlc-architect"
+
+    def test_verify_persona_integrity_pass(self, tmp_path: Path) -> None:
+        """verify_persona_integrity returns True when files match source."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installer.install_personas(force=True)
+            results = installer.verify_persona_integrity()
+        assert all(results.values())
+        assert len(results) >= 7
+
+    def test_verify_persona_integrity_fail_modified(self, tmp_path: Path) -> None:
+        """verify_persona_integrity detects modified files."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installer.install_personas(force=True)
+            # Modify one file
+            modified = persona_target / "sdlc-product-manager.md"
+            modified.write_text("tampered content")
+            results = installer.verify_persona_integrity()
+        assert results["sdlc-product-manager"] is False
+        # Other files should still pass
+        non_modified = {k: v for k, v in results.items() if k != "sdlc-product-manager"}
+        assert all(non_modified.values())
+
+    def test_verify_persona_integrity_fail_missing(self, tmp_path: Path) -> None:
+        """verify_persona_integrity detects missing files."""
+        installer = Installer()
+        persona_target = tmp_path / "agents"
+        persona_target.mkdir()
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installer.install_personas(force=True)
+            # Remove one file
+            (persona_target / "sdlc-architect.md").unlink()
+            results = installer.verify_persona_integrity()
+        assert results["sdlc-architect"] is False
+
+    def test_persona_files_have_valid_yaml_frontmatter(self) -> None:
+        """All source persona files have valid YAML frontmatter."""
+        import yaml
+
+        installer = Installer()
+        persona_dir = installer._get_persona_dir()
+        persona_files = list(persona_dir.glob("*.md"))
+        assert len(persona_files) >= 7, f"Expected 7+ persona files, found {len(persona_files)}"
+
+        required_keys = {"name", "description", "category", "tools", "memory"}
+        for pf in persona_files:
+            content = pf.read_text()
+            # Parse YAML frontmatter (between --- delimiters)
+            assert content.startswith("---"), f"{pf.name} missing frontmatter start"
+            end_idx = content.index("---", 3)
+            frontmatter = yaml.safe_load(content[3:end_idx])
+            assert isinstance(frontmatter, dict), f"{pf.name} frontmatter is not a dict"
+            missing = required_keys - set(frontmatter.keys())
+            assert not missing, f"{pf.name} missing keys: {missing}"
+            assert frontmatter["category"] == "sdlc", f"{pf.name} category must be 'sdlc'"
+
+    def test_install_creates_target_dir_if_missing(self, tmp_path: Path) -> None:
+        """install_personas creates PERSONA_TARGET directory if it does not exist."""
+        installer = Installer()
+        persona_target = tmp_path / "new_agents_dir"
+        assert not persona_target.exists()
+        with patch.object(Installer, "PERSONA_TARGET", persona_target):
+            installed = installer.install_personas()
+        assert persona_target.exists()
+        assert len(installed) >= 7
+
+    def test_install_output_shows_persona_count(self, runner: CliRunner) -> None:
+        """CLI install output includes persona deployment count."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.install.return_value = ["init", "scan", "help"]
+            mock_installer.list_installed_personas.return_value = [
+                {"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"}
+                for i in range(7)
+            ]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install"])
+
+        assert result.exit_code == 0
+        assert "7 agent(s)" in result.output
+
+    def test_install_list_shows_personas(self, runner: CliRunner) -> None:
+        """CLI install --list shows installed personas section."""
+        with patch("a_sdlc.cli.Installer") as mock_installer_cls:
+            mock_installer = mock_installer_cls.return_value
+            mock_installer.list_installed.return_value = [
+                {"name": "init", "file": "init.md"},
+            ]
+            mock_installer.list_installed_personas.return_value = [
+                {"name": "sdlc-product-manager", "file": "sdlc-product-manager.md"},
+            ]
+            mock_installer.target_dir = Path("/tmp/sdlc")
+
+            result = runner.invoke(main, ["install", "--list"])
+
+        assert result.exit_code == 0
+        assert "Persona" in result.output
+        assert "sdlc-product-manager" in result.output
+
+    def test_install_calls_install_personas_via_install(self, tmp_path: Path) -> None:
+        """Installer.install() internally calls install_personas()."""
+        installer = Installer(target_dir=tmp_path / "sdlc")
+        persona_target = tmp_path / "agents"
+        with (
+            patch.object(Installer, "PERSONA_TARGET", persona_target),
+            patch.object(installer, "install_personas") as mock_personas,
+        ):
+            mock_personas.return_value = []
+            installer.install(configure_mcp=False)
+            mock_personas.assert_called_once_with(force=False)
+
+    def test_install_passes_force_to_install_personas(self, tmp_path: Path) -> None:
+        """Installer.install(force=True) passes force to install_personas()."""
+        installer = Installer(target_dir=tmp_path / "sdlc")
+        persona_target = tmp_path / "agents"
+        with (
+            patch.object(Installer, "PERSONA_TARGET", persona_target),
+            patch.object(installer, "install_personas") as mock_personas,
+        ):
+            mock_personas.return_value = []
+            installer.install(force=True, configure_mcp=False)
+            mock_personas.assert_called_once_with(force=True)
+
+
+# ---------------------------------------------------------------------------
+# Agent Teams configuration during install
+# ---------------------------------------------------------------------------
+
+
+class TestInstallAgentTeams:
+    """Tests for Agent Teams configuration during install."""
+
+    def test_install_enables_agent_teams(self, runner: CliRunner, tmp_path: Path) -> None:
+        """install sets CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in settings.json."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("{}")
+
+        with (
+            patch("a_sdlc.cli.Installer") as MockInstaller,  # noqa: N806
+            patch("a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH", settings_file),
+        ):
+            mock_inst = MockInstaller.return_value
+            mock_inst.install.return_value = ["template1"]
+            mock_inst.list_installed_personas.return_value = [{"name": "p1", "file": "p1.md"}]
+            mock_inst.target_dir = tmp_path / "sdlc"
+
+            result = runner.invoke(main, ["install"])
+
+        assert result.exit_code == 0
+        assert "Agent Teams" in result.output
+        assert "Enabled" in result.output
+        settings = json.loads(settings_file.read_text())
+        assert settings.get("environment", {}).get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") == "1"
+
+    def test_install_no_agent_teams_flag(self, runner: CliRunner, tmp_path: Path) -> None:
+        """--no-agent-teams skips Agent Teams configuration."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("{}")
+
+        with (
+            patch("a_sdlc.cli.Installer") as MockInstaller,  # noqa: N806
+            patch("a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH", settings_file),
+        ):
+            mock_inst = MockInstaller.return_value
+            mock_inst.install.return_value = ["template1"]
+            mock_inst.list_installed_personas.return_value = []
+            mock_inst.target_dir = tmp_path / "sdlc"
+
+            result = runner.invoke(main, ["install", "--no-agent-teams"])
+
+        assert result.exit_code == 0
+        assert "Skipped" in result.output
+        settings = json.loads(settings_file.read_text())
+        assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in settings.get("environment", {})
+
+    def test_install_agent_teams_preserves_existing_env(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Agent Teams config preserves existing environment variables."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({
+            "environment": {"MY_EXISTING_VAR": "keep-me"}
+        }))
+
+        with (
+            patch("a_sdlc.cli.Installer") as MockInstaller,  # noqa: N806
+            patch("a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH", settings_file),
+        ):
+            mock_inst = MockInstaller.return_value
+            mock_inst.install.return_value = ["template1"]
+            mock_inst.list_installed_personas.return_value = []
+            mock_inst.target_dir = tmp_path / "sdlc"
+
+            result = runner.invoke(main, ["install"])
+
+        assert result.exit_code == 0
+        settings = json.loads(settings_file.read_text())
+        assert settings["environment"]["MY_EXISTING_VAR"] == "keep-me"
+        assert settings["environment"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
+
+    def test_install_agent_teams_handles_settings_error(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Agent Teams config shows warning when settings.json cannot be written."""
+        with (
+            patch("a_sdlc.cli.Installer") as MockInstaller,  # noqa: N806
+            patch("a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH", tmp_path / "nonexistent_dir" / "settings.json"),
+        ):
+            mock_inst = MockInstaller.return_value
+            mock_inst.install.return_value = ["template1"]
+            mock_inst.list_installed_personas.return_value = []
+            mock_inst.target_dir = tmp_path / "sdlc"
+
+            result = runner.invoke(main, ["install"])
+
+        assert result.exit_code == 0
+        assert "Agent Teams" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility: underscore-prefix exclusion and round-table
+# ---------------------------------------------------------------------------
+
+
+class TestInstallerUnderscorePrefixExclusion:
+    """Tests that installer excludes underscore-prefixed files from deployment."""
+
+    def test_underscore_prefixed_file_exists_in_source(self) -> None:
+        """Verify _round-table-blocks.md exists in source templates directory."""
+        installer = Installer()
+        template_dir = installer._get_template_dir()
+        blocks_file = template_dir / "_round-table-blocks.md"
+        assert blocks_file.exists(), (
+            "_round-table-blocks.md must exist in source templates directory"
+        )
+
+    def test_install_does_not_deploy_underscore_prefixed_files(self, tmp_path: Path) -> None:
+        """Installer.install() must NOT copy files starting with _ to target."""
+        installer = Installer(target_dir=tmp_path / "sdlc")
+        installer.install(configure_mcp=False)
+
+        target_dir = tmp_path / "sdlc"
+        installed_files = [f.name for f in target_dir.iterdir() if f.is_file()]
+
+        # _round-table-blocks.md must not appear in the installed target
+        assert "_round-table-blocks.md" not in installed_files, (
+            "_round-table-blocks.md was deployed but should be excluded by underscore prefix"
+        )
+
+    def test_install_does_not_deploy_any_underscore_prefixed_md(self, tmp_path: Path) -> None:
+        """No underscore-prefixed .md files should appear in installed target."""
+        installer = Installer(target_dir=tmp_path / "sdlc")
+        installer.install(configure_mcp=False)
+
+        target_dir = tmp_path / "sdlc"
+        underscore_files = [
+            f.name for f in target_dir.glob("_*.md")
+        ]
+        assert underscore_files == [], (
+            f"Underscore-prefixed files deployed but should be excluded: {underscore_files}"
+        )
+
+    def test_install_still_deploys_regular_templates(self, tmp_path: Path) -> None:
+        """Installer.install() still deploys non-underscore templates correctly."""
+        installer = Installer(target_dir=tmp_path / "sdlc")
+        installed = installer.install(configure_mcp=False)
+
+        # Should deploy many templates (at least the known ones)
+        assert len(installed) >= 10, (
+            f"Expected at least 10 templates deployed, got {len(installed)}"
+        )
+
+        # Check a few known templates are present
+        target_dir = tmp_path / "sdlc"
+        for expected in ["init.md", "scan.md", "help.md", "ideate.md", "prd-generate.md"]:
+            assert (target_dir / expected).exists(), (
+                f"Expected template {expected} not found in target"
+            )
+
+    def test_round_table_blocks_not_in_installed_list(self, tmp_path: Path) -> None:
+        """_round-table-blocks should not appear in list_installed() results."""
+        installer = Installer(target_dir=tmp_path / "sdlc")
+        installer.install(configure_mcp=False)
+
+        installed_skills = installer.list_installed()
+        installed_names = [s["name"] for s in installed_skills]
+
+        assert "_round-table-blocks" not in installed_names, (
+            "_round-table-blocks appeared in list_installed() but should be excluded"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Template graceful degradation for round-table persona integration
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateGracefulDegradation:
+    """Tests that modified templates contain round-table graceful degradation patterns.
+
+    Templates must gate persona-specific behavior behind a round_table_enabled
+    check and reference --solo or --no-roundtable as bypass flags so that
+    single-agent mode (pre-persona behavior) is preserved.
+    """
+
+    # Full round-table templates: have Section references, full round-table gates
+    FULL_ROUNDTABLE_TEMPLATES = [
+        "ideate.md",
+        "prd-generate.md",
+        "prd-architect.md",
+        "prd-split.md",
+        "sprint-run.md",
+        "task-complete.md",
+        "test.md",
+        "retrospective.md",
+    ]
+
+    # Lightweight templates: have persona panel references but lighter integration
+    LIGHTWEIGHT_TEMPLATES = [
+        "task-start.md",
+        "investigate.md",
+        "pr-feedback.md",
+    ]
+
+    def _read_template(self, filename: str) -> str:
+        """Read a template file from the source templates directory."""
+        installer = Installer()
+        template_dir = installer._get_template_dir()
+        template_path = template_dir / filename
+        assert template_path.exists(), f"Template {filename} not found in {template_dir}"
+        return template_path.read_text()
+
+    def test_full_templates_have_roundtable_enabled_check(self) -> None:
+        """All full round-table templates must contain the round_table_enabled variable."""
+        for template_name in self.FULL_ROUNDTABLE_TEMPLATES:
+            content = self._read_template(template_name)
+            assert "round_table_enabled" in content, (
+                f"{template_name} missing 'round_table_enabled' check pattern"
+            )
+
+    def test_full_templates_reference_bypass_flags(self) -> None:
+        """All full round-table templates must reference --solo or --no-roundtable."""
+        for template_name in self.FULL_ROUNDTABLE_TEMPLATES:
+            content = self._read_template(template_name)
+            has_solo = "--solo" in content
+            has_no_roundtable = "--no-roundtable" in content
+            assert has_solo or has_no_roundtable, (
+                f"{template_name} missing bypass flag reference (--solo or --no-roundtable)"
+            )
+
+    def test_full_templates_reference_round_table_blocks(self) -> None:
+        """All full round-table templates must reference _round-table-blocks.md sections."""
+        for template_name in self.FULL_ROUNDTABLE_TEMPLATES:
+            content = self._read_template(template_name)
+            assert "_round-table-blocks.md" in content, (
+                f"{template_name} missing reference to _round-table-blocks.md"
+            )
+
+    def test_full_templates_have_section_references(self) -> None:
+        """All full round-table templates must reference at least one Section (A, B, or C)."""
+        for template_name in self.FULL_ROUNDTABLE_TEMPLATES:
+            content = self._read_template(template_name)
+            has_section_ref = (
+                "Section A" in content
+                or "Section B" in content
+                or "Section C" in content
+            )
+            assert has_section_ref, (
+                f"{template_name} missing Section A/B/C reference from _round-table-blocks.md"
+            )
+
+    def test_lightweight_templates_have_roundtable_enabled_check(self) -> None:
+        """Lightweight templates must contain the round_table_enabled variable."""
+        for template_name in self.LIGHTWEIGHT_TEMPLATES:
+            content = self._read_template(template_name)
+            assert "round_table_enabled" in content, (
+                f"{template_name} missing 'round_table_enabled' check pattern"
+            )
+
+    def test_lightweight_templates_reference_bypass_flags(self) -> None:
+        """Lightweight templates must reference --solo as a bypass flag."""
+        for template_name in self.LIGHTWEIGHT_TEMPLATES:
+            content = self._read_template(template_name)
+            assert "--solo" in content, (
+                f"{template_name} missing --solo bypass flag reference"
+            )
+
+    def test_lightweight_templates_have_persona_panel_reference(self) -> None:
+        """Lightweight templates must contain Persona Panel references."""
+        for template_name in self.LIGHTWEIGHT_TEMPLATES:
+            content = self._read_template(template_name)
+            has_persona_panel = (
+                "Persona Panel" in content or "persona panel" in content
+            )
+            assert has_persona_panel, (
+                f"{template_name} missing Persona Panel reference"
+            )
+
+    def test_lightweight_templates_reference_blocks_file(self) -> None:
+        """Lightweight templates must reference _round-table-blocks.md."""
+        for template_name in self.LIGHTWEIGHT_TEMPLATES:
+            content = self._read_template(template_name)
+            assert "_round-table-blocks.md" in content, (
+                f"{template_name} missing reference to _round-table-blocks.md"
+            )
+
+    def test_all_modified_templates_gate_on_false(self) -> None:
+        """All modified templates must have conditional logic for round_table_enabled = false.
+
+        This ensures single-agent mode is explicitly handled (graceful degradation).
+        """
+        all_templates = self.FULL_ROUNDTABLE_TEMPLATES + self.LIGHTWEIGHT_TEMPLATES
+        for template_name in all_templates:
+            content = self._read_template(template_name)
+            # Templates should reference the false/disabled case explicitly
+            has_false_gate = (
+                "round_table_enabled = false" in content
+                or "round_table_enabled = False" in content
+            )
+            assert has_false_gate, (
+                f"{template_name} missing explicit 'round_table_enabled = false' gate "
+                f"for single-agent fallback"
+            )
+
+    def test_round_table_blocks_source_exists_and_has_sections(self) -> None:
+        """_round-table-blocks.md must exist and define Sections A, B, and C."""
+        content = self._read_template("_round-table-blocks.md")
+        assert "Section A" in content, "_round-table-blocks.md missing Section A"
+        assert "Section B" in content, "_round-table-blocks.md missing Section B"
+        assert "Section C" in content, "_round-table-blocks.md missing Section C"
+
+    def test_round_table_blocks_not_a_deployable_skill(self) -> None:
+        """_round-table-blocks.md starts with underscore and must not be deployed."""
+        installer = Installer()
+        template_dir = installer._get_template_dir()
+        blocks_file = template_dir / "_round-table-blocks.md"
+        assert blocks_file.name.startswith("_"), (
+            "_round-table-blocks.md must start with underscore to be excluded from deployment"
+        )
+
+    def test_no_templates_are_missing_roundtable_integration(self) -> None:
+        """Verify the expected set of 11 templates have round-table integration.
+
+        This test guards against regression where a template might lose its
+        persona integration during refactoring.
+        """
+        all_expected = self.FULL_ROUNDTABLE_TEMPLATES + self.LIGHTWEIGHT_TEMPLATES
+        assert len(all_expected) == 11, (
+            f"Expected 11 templates with round-table integration, got {len(all_expected)}"
+        )
+        for template_name in all_expected:
+            content = self._read_template(template_name)
+            assert "round_table_enabled" in content, (
+                f"{template_name} has lost its round-table integration"
+            )

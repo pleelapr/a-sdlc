@@ -25,7 +25,7 @@ This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
 ## Syntax
 
 ```
-/sdlc:sprint-run <sprint-id> [--parallel <n>] [--dry-run] [--sync] [--base-branch <branch>] [--resume]
+/sdlc:sprint-run <sprint-id> [--parallel <n>] [--dry-run] [--sync] [--base-branch <branch>] [--resume] [--solo]
 ```
 
 ## Parameters
@@ -38,6 +38,7 @@ This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
 | `--sync` | No | Sync status to external system as tasks complete |
 | `--base-branch` | No | Branch to base worktrees on (multi-PRD mode only, default: current HEAD) |
 | `--resume` | No | Resume from last checkpoint (reads state from `~/.a-sdlc/runs/{project_id}/`) |
+| `--solo` | No | Disable persona round-table, run in single-agent mode |
 
 ---
 
@@ -146,6 +147,27 @@ If the `--resume` flag is present:
    - Set `resume_state = state` (the parsed JSON)
    - Pass it to `run_simple_mode()` or `run_isolated_mode()`
 
+### 1.6. Persona Availability Check
+
+After loading sprint context and handling resume, check for persona agents:
+
+1. Check `~/.claude/agents/` for files matching `sdlc-*.md` pattern
+2. Determine round-table eligibility:
+   - If `--solo` or `--no-roundtable` appears in the user's command: **round_table_enabled = false**
+   - If no `sdlc-*.md` files found: **round_table_enabled = false**
+   - Otherwise: **round_table_enabled = true**
+3. If round_table_enabled = false, skip ALL persona-specific sections below. The template operates in single-agent mode (existing behavior preserved).
+
+```
+Persona Check:
+  Agents directory: ~/.claude/agents/
+  Persona files found: {count} sdlc-*.md files
+  Solo mode: {--solo flag present}
+  Round-table: {enabled | disabled (reason)}
+```
+
+> **Reference**: This implements Section A from `_round-table-blocks.md`.
+
 ---
 
 ## Simple Mode (1 PRD)
@@ -217,6 +239,53 @@ def build_batches(tasks: list[dict]) -> tuple[list[list[dict]], list[dict]]:
 
 **Circular dependency detection**: If an iteration produces no new batch members but pending tasks remain, those tasks form one or more dependency cycles. They are returned as `unresolvable` and reported to the user before execution begins.
 
+### 2.5. Domain Detection + Panel Assembly (Round-Table)
+
+If round_table_enabled = true, perform domain detection after sprint analysis provides multi-domain signals:
+
+#### Domain Detection
+
+Analyze sprint context to identify relevant domains. Unlike single-PRD templates, a sprint may span multiple domains simultaneously. Check in priority order:
+
+1. **Explicit tags** -- Look for `<!-- personas: frontend, security -->` markers in ALL PRD and task content across the sprint. If found, use those domains directly.
+2. **Codebase signals** -- From `.sdlc/artifacts/architecture.md`, identify affected components across ALL sprint tasks (e.g., components with "UI", "React", "frontend" -> frontend domain; "API", "database" -> backend domain; "CI/CD", "Docker" -> devops domain).
+3. **Keyword analysis** -- Scan ALL sprint PRDs and tasks for domain keywords:
+   - Frontend: UI, component, React, CSS, layout, responsive, accessibility
+   - Backend: API, endpoint, database, query, migration, service, middleware
+   - DevOps: CI/CD, pipeline, Docker, deploy, infrastructure, monitoring
+   - Security: auth, vulnerability, encryption, OWASP, credentials, permissions
+4. **Content structure** -- PRD functional requirements referencing specific technical domains
+
+**Sprint-specific note**: Multiple domains are expected in a sprint scope. Assemble all relevant domain personas rather than selecting a single lead domain.
+
+#### Panel Assembly
+
+Based on detected domains, assemble the persona panel:
+
+| Rule | Logic |
+|------|-------|
+| **Domain personas** (Frontend, Backend, DevOps) | Include only if their domain is detected in any sprint PRD/task |
+| **Cross-cutting** (Security, QA) | Always included as advisors |
+| **Phase-role** (Product Manager, Architect) | PM for sprint goal alignment; Architect for cross-PRD dependency analysis |
+| **Lead assignment** | The persona whose domain has the strongest signal becomes lead. If unclear, Architect leads (sprint-level cross-cutting concerns). |
+
+Display the panel to the user:
+
+```
+Persona Panel (Sprint Scope):
+  Lead: {persona_name} (signal: {detection_reason})
+  Domain: {persona_name} (signal: {detection_reason})
+  Domain: {persona_name} (signal: {detection_reason})
+  Advisor: {persona_name} (signal: {detection_reason})
+  ...
+
+  Domains detected: {domain_list}
+  PRDs analyzed: {prd_count}
+  Tasks analyzed: {task_count}
+```
+
+> **Reference**: This implements Section B from `_round-table-blocks.md`, extended for multi-PRD sprint scope.
+
 ### 3. Display Execution Plan
 
 Present the batch-grouped execution plan derived from `build_batches()` (Step 2). The plan shows each batch with its tasks and dependency reasoning, giving the user a clear picture of execution order before committing.
@@ -266,7 +335,113 @@ Execution Plan (2 batches, 5 tasks):
       └─ depends on: PROJ-T00002
 ```
 
-After displaying the plan, ask the user to approve before execution begins:
+### 3.1. Round-Table: Sprint Execution Strategy
+
+If round_table_enabled = true, run the round-table discussion BEFORE presenting the execution plan for user approval. The personas review the dependency graph and execution plan from their domain perspectives.
+
+#### Build Context Packages per Persona
+
+For each persona in the panel, build a filtered context package containing sprint-level information relevant to their domain:
+
+- **PM**: Sprint goal, PRD summaries (titles + overviews), business context, acceptance criteria summaries
+- **Architect**: Architecture sections from `.sdlc/artifacts/architecture.md`, design docs for all sprint PRDs, dependency graph structure, cross-PRD integration points
+- **Frontend/Backend/DevOps**: Domain-specific architecture sections + PRD requirements relevant to their domain + task details for their component area
+- **QA**: Acceptance criteria from all tasks, test patterns from `.sdlc/artifacts/`, quality gates, testing configuration from `.sdlc/config.yaml`
+- **Security**: Security-related requirements across all PRDs, API surface area, authentication/authorization patterns, data handling requirements
+
+Include the execution plan (batch structure with dependency reasoning) in every persona's context package.
+
+#### Detect Round-Table Mode
+
+Check the execution environment:
+- If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable equals `"1"`: Use **Agent Teams mode**
+- Otherwise: Use **Task tool mode**
+
+Display: `Round-Table Mode: {Agent Teams | Task Tool Fallback}`
+
+#### Dispatch Personas
+
+**Agent Teams mode** (when `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`):
+
+1. Create an agent team with persona teammates. For each persona in the panel:
+   - Spawn a teammate with the persona's role and sprint-level domain context
+   - Instruct them to: analyze the sprint execution strategy from their domain, identify risks in the batch ordering, and suggest optimizations
+2. Teammates debate via SendMessage:
+   - Each persona presents their analysis of the execution plan
+   - Personas challenge each other's findings on batch ordering, parallelization opportunities, and risk areas
+   - Lead monitors progress and steers toward actionable recommendations
+3. When discussion converges (or after each persona has spoken at least twice), lead collects final positions
+4. Shut down teammates and clean up team
+
+**Task tool mode** (fallback when Agent Teams not enabled):
+
+Dispatch persona subagents in parallel via Task tool. For each persona:
+
+```
+Task(
+  description="{persona_name} sprint strategy review",
+  subagent_type="{persona_agent_name}",
+  prompt="""You are the {persona_name} — {persona_description}.
+
+{persona_sprint_context_package}
+
+Analyze the sprint execution plan from your domain perspective. Consider:
+- Batch ordering: Are dependencies correctly sequenced?
+- Risk areas: Which tasks or transitions carry the highest risk?
+- Optimization opportunities: Could any tasks be parallelized differently?
+- Domain-specific concerns: Issues visible only from your expertise area
+
+Structure your response as:
+
+---PERSONA-FINDINGS---
+role: {lead|advisor}
+domain: {domain}
+findings:
+- {finding with domain context}
+risks:
+- {risk from your perspective}
+recommendations:
+- {specific, actionable recommendation}
+---END-FINDINGS---
+"""
+)
+```
+
+Collect all `---PERSONA-FINDINGS---` blocks from subagent responses.
+
+#### Synthesize Findings
+
+Merge all persona findings into an attributed synthesis document:
+
+```markdown
+## Round-Table Synthesis: Sprint Execution Strategy
+
+### [{Persona Name} -- {Role}]:
+- {Finding/recommendation about batch ordering or execution plan}
+
+### [{Persona Name} -- {Role}]:
+- {Finding/recommendation about domain-specific risks}
+
+### Consensus:
+- [Agreed] {Point all personas support}
+- [Debated] {Point with disagreement} -- {Persona A} suggests X, {Persona B} suggests Y -> escalating to user
+
+### Risks Identified:
+- [{Persona}] {Risk description with affected tasks/batches}
+
+### Recommended Plan Adjustments:
+- {Specific adjustment with rationale from persona analysis}
+```
+
+**Critical rule**: Disagreements between personas are ALWAYS surfaced to the user for decision. The orchestrator/lead never resolves disagreements autonomously.
+
+#### Present Synthesis
+
+Present the round-table synthesis to the user alongside the execution plan. The user reviews persona recommendations as part of the execution plan approval below.
+
+> **Reference**: This implements Section C from `_round-table-blocks.md`, adapted for sprint execution strategy review.
+
+After displaying the plan (and round-table synthesis if enabled), ask the user to approve before execution begins:
 
 ```
 AskUserQuestion({
@@ -495,7 +670,7 @@ Replace the placeholders with actual values from your implementation:
 - summary: one sentence describing what you implemented
 - corrections: integer count of corrections logged via log_correction()
 """,
-  subagent_type="general-purpose"
+  subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}"
 )
 ```
 
@@ -520,7 +695,7 @@ outcomes = {}
 update_task("PROJ-T00001", status="in_progress")
 context_1 = build_context_package("PROJ-T00001", outcomes)
 result_1 = Task(description="Implement PROJ-T00001: Set up OAuth config",
-                prompt=f"...{context_1}...", subagent_type="general-purpose")
+                prompt=f"...{context_1}...", subagent_type="sdlc-backend-engineer")
 # Subagent returns after submitting self-review evidence
 # Orchestrator review dispatch (Step 4.4):
 review_result = orchestrator_review_dispatch("PROJ-T00001", review_config)
@@ -532,7 +707,7 @@ outcomes["PROJ-T00001"] = "Added OAuth config to src/auth/config.py"
 update_task("PROJ-T00002", status="in_progress")
 context_2 = build_context_package("PROJ-T00002", outcomes)
 result_2 = Task(description="Implement PROJ-T00002: Create login endpoint",
-                prompt=f"...{context_2}...", subagent_type="general-purpose")
+                prompt=f"...{context_2}...", subagent_type="sdlc-backend-engineer")
 review_result = orchestrator_review_dispatch("PROJ-T00002", review_config)
 if review_result == "approved":
     update_task("PROJ-T00002", status="completed")
@@ -542,7 +717,7 @@ outcomes["PROJ-T00002"] = "Created POST /auth/login endpoint in src/api/auth.py"
 update_task("PROJ-T00003", status="in_progress")
 context_3 = build_context_package("PROJ-T00003", outcomes)
 result_3 = Task(description="Implement PROJ-T00003: Add user model fields",
-                prompt=f"...{context_3}...", subagent_type="general-purpose")
+                prompt=f"...{context_3}...", subagent_type="sdlc-backend-engineer")
 review_result = orchestrator_review_dispatch("PROJ-T00003", review_config)
 if review_result == "approved":
     update_task("PROJ-T00003", status="completed")
@@ -663,7 +838,7 @@ After the implementing subagent returns for a task, the orchestrator runs the re
             - 'request_changes' if issues found (list specific fixes needed)
             - 'escalate' if you cannot determine correctness
             ",
-     subagent_type="general-purpose"
+     subagent_type="sdlc-qa-engineer"
    )
    ```
 
@@ -846,6 +1021,16 @@ If overlap is detected, warn the user:
   Proceed with parallel execution? [Y/n]
 ```
 
+### 6.5. Domain Detection + Panel Assembly (Round-Table, Isolated Mode)
+
+If round_table_enabled = true, perform domain detection across all PRDs in the sprint. This is the same detection as Step 2.5 (Simple Mode) but applied across multiple PRDs with worktree isolation context.
+
+The panel assembly follows the same rules as Step 2.5. See that section for the full domain detection and panel assembly procedure.
+
+**Isolated mode note**: The overlap analysis from Step 6 provides additional domain signals. If two PRDs touch different components, the panel should include domain personas for both component areas. The Architect persona is particularly valuable here for cross-PRD integration analysis.
+
+> **Reference**: This implements Section B from `_round-table-blocks.md`, applied in isolated mode context.
+
 ### 7. Check for Resume via DB State
 
 Query the database for existing worktrees from a previous run:
@@ -917,6 +1102,30 @@ services:
 ```
 
 If no `docker-compose.yml` exists, skip this step entirely.
+
+### 8.6. Round-Table: Isolated Execution Strategy
+
+If round_table_enabled = true, run the round-table discussion BEFORE presenting the isolated execution plan for user approval.
+
+This follows the same pattern as Step 3.1 (Simple Mode round-table) with the following differences for isolated mode:
+
+1. **Context packages per persona** include cross-PRD information:
+   - **PM**: Sprint goal, ALL PRD summaries, cross-PRD business dependencies
+   - **Architect**: Overlap analysis results (Step 6), worktree isolation strategy, cross-PRD integration points, merge conflict risk areas
+   - **Frontend/Backend/DevOps**: Domain-specific tasks grouped by PRD, worktree-specific environment configurations
+   - **QA**: Acceptance criteria from ALL PRDs, cross-PRD integration test requirements
+   - **Security**: Security requirements spanning all PRDs, isolation boundary analysis
+
+2. **Dispatch personas** following Section C from `_round-table-blocks.md` (same Agent Teams / Task tool detection and dispatch pattern as Step 3.1).
+
+3. **Synthesis** should additionally address:
+   - PRD execution ordering recommendations (which PRDs to prioritize)
+   - Cross-PRD integration risks that may surface during merge
+   - Worktree isolation adequacy (are the PRDs sufficiently independent?)
+
+Present the round-table synthesis to the user alongside the isolated execution plan below.
+
+> **Reference**: This implements Section C from `_round-table-blocks.md`, adapted for isolated multi-PRD execution strategy.
 
 ### 9. Show Isolated Plan & Confirm
 
@@ -1278,10 +1487,17 @@ if sync_enabled and task.external_id:
 
 ```python
 def run_sprint(sprint_id: str, max_parallel: int = 3, base_branch: str = None,
-               resume_flag: bool = False):
+               resume_flag: bool = False, solo: bool = False):
     sprint = get_sprint(sprint_id)
     grouped = get_sprint_tasks(sprint_id, group_by_prd=True)
     prd_groups = grouped["prd_groups"]
+
+    # --- Persona Availability Check (Step 1.6) ---
+    round_table_enabled = False
+    if not solo:
+        persona_files = Glob("~/.claude/agents/sdlc-*.md")
+        if persona_files:
+            round_table_enabled = True
 
     # --- Check for --resume flag (FR-005, Step 1.5) ---
     resume_state = None
@@ -1304,12 +1520,13 @@ def run_sprint(sprint_id: str, max_parallel: int = 3, base_branch: str = None,
     if len(prd_groups) == 1 or not worktree_enabled:
         if len(prd_groups) > 1 and not worktree_enabled:
             warn("Multiple PRDs but worktree isolation disabled. Running sequentially.")
-        run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state)
+        run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state, round_table_enabled)
     else:
-        run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_state)
+        run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_state, round_table_enabled)
 
 
-def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None):
+def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
+                    round_table_enabled=False):
     """Single PRD or worktree-disabled — run tasks directly in working directory."""
     # Flatten all tasks across PRD groups
     tasks = [t for group in prd_groups for t in group["tasks"]]
@@ -1322,8 +1539,23 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None):
         # Present unresolvable tasks to user before proceeding
         # Execution continues with the batches that CAN be resolved
 
+    # --- Domain Detection + Panel Assembly (Step 2.5) ---
+    persona_panel = None
+    if round_table_enabled:
+        persona_panel = detect_domains_and_assemble_panel(prd_groups, tasks)
+
+    # --- Round-Table: Sprint Execution Strategy (Step 3.1) ---
+    round_table_synthesis = None
+    if round_table_enabled and persona_panel:
+        round_table_synthesis = run_round_table(
+            persona_panel, sprint_id, batches, prd_groups,
+            topic="sprint_execution_strategy"
+        )
+
     # --- Present execution plan and get user approval (Step 3) ---
     present_execution_plan(sprint_id, batches, unresolvable)
+    if round_table_synthesis:
+        present_round_table_synthesis(round_table_synthesis)
     plan_decision = ask_plan_approval()  # AskUserQuestion: Start/Adjust/Abort
     if plan_decision == "abort":
         report("Sprint execution cancelled by user.")
@@ -1639,7 +1871,7 @@ def dispatch_subagent(task: dict, context_package: str, fresh: bool = False) -> 
             context_package=context_package,
             retry_note=retry_note,
         ),
-        subagent_type="general-purpose",
+        subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}",
         # run_in_background=false — orchestrator waits
     )
 
@@ -1680,7 +1912,7 @@ def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
         reviewer_result = Task(
             description=f"Review {task_id}: {task['title']}",
             prompt=REVIEWER_PROMPT_TEMPLATE.format(task_id=task_id),
-            subagent_type="general-purpose",
+            subagent_type="sdlc-qa-engineer",
         )
 
         # 4. Read verdict
@@ -1709,7 +1941,8 @@ def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
 # record_outcome() and extract_outcome_summary() — see Step 4.3 above for full definitions
 
 
-def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_state=None):
+def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
+                      resume_state=None, round_table_enabled=False):
     """Multiple PRDs — one worktree per PRD."""
     # --- State persistence setup (FR-001) ---
     context = mcp__asdlc__get_context()
@@ -1798,6 +2031,12 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_s
             port_offset=idx * 100,
         )
 
+    # --- Domain Detection + Panel Assembly (Step 6.5) ---
+    persona_panel = None
+    if round_table_enabled:
+        all_tasks = [t for g in prd_groups for t in g["tasks"]]
+        persona_panel = detect_domains_and_assemble_panel(prd_groups, all_tasks)
+
     # --- Pre-build context packages and batch groupings per PRD ---
     for group in prd_groups:
         batches, unresolvable = build_batches(group["tasks"])
@@ -1812,6 +2051,20 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch, resume_s
                 group["context_packages"][task["id"]] = build_context_package(
                     task["id"], completed_outcomes={}
                 )
+
+    # --- Round-Table: Isolated Execution Strategy (Step 8.6) ---
+    round_table_synthesis = None
+    if round_table_enabled and persona_panel:
+        round_table_synthesis = run_round_table(
+            persona_panel, sprint_id, prd_groups,
+            topic="isolated_execution_strategy"
+        )
+
+    # --- Present isolated plan and get user approval (Step 9) ---
+    present_isolated_plan(sprint_id, prd_groups)
+    if round_table_synthesis:
+        present_round_table_synthesis(round_table_synthesis)
+    # User confirms execution (existing Step 9 confirmation flow)
 
     # --- Launch one agent per PRD (up to max_parallel) ---
     # Each agent receives pre-built context packages organized by batch

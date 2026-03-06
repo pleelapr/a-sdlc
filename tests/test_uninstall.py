@@ -11,6 +11,7 @@ from a_sdlc.uninstall import (
     _remove_asdlc_mcp,
     _remove_data_dir,
     _remove_monitoring,
+    _remove_personas,
     _remove_settings_entries,
     _remove_skill_templates,
     build_uninstall_plan,
@@ -37,6 +38,13 @@ def test_uninstall_plan_defaults():
     assert plan.has_monitoring_dir is False
     assert plan.has_data_dir is False
     assert plan.include_data is False
+
+
+def test_uninstall_plan_persona_defaults():
+    """UninstallPlan has correct persona field defaults."""
+    plan = UninstallPlan()
+    assert plan.persona_dir is None
+    assert plan.persona_count == 0
 
 
 def test_uninstall_result_success():
@@ -174,6 +182,68 @@ def test_build_plan_malformed_claude_json(tmp_path):
 
         plan = build_uninstall_plan()
         assert plan.has_asdlc_mcp is False
+
+
+def test_build_plan_detects_personas(tmp_path):
+    """build_uninstall_plan() detects persona files in agents dir."""
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "sdlc-architect.md").write_text("# arch")
+    (agents_dir / "sdlc-qa-engineer.md").write_text("# qa")
+    (agents_dir / "custom-agent.md").write_text("# custom")  # Should NOT be counted
+
+    with (
+        patch(
+            "a_sdlc.uninstall.get_claude_settings_path",
+            return_value=tmp_path / "none.json",
+        ),
+        patch(
+            "a_sdlc.uninstall.CLAUDE_SETTINGS_PATH",
+            tmp_path / "none2.json",
+        ),
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
+        patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
+        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+    ):
+        # Set PERSONA_TARGET on the mock class so build_uninstall_plan()
+        # sees the real agents_dir when it accesses Installer.PERSONA_TARGET
+        MockInstaller.PERSONA_TARGET = agents_dir
+
+        mock_inst = MockInstaller.return_value
+        mock_inst.target_dir = tmp_path / "cmds"
+        mock_inst.target_dir.mkdir(parents=True)
+
+        plan = build_uninstall_plan()
+        assert plan.persona_count == 2  # Only sdlc-*.md files
+        assert plan.persona_dir == agents_dir
+
+
+def test_build_plan_no_personas_when_dir_missing(tmp_path):
+    """build_uninstall_plan() reports 0 personas when agents dir missing."""
+    nonexistent_dir = tmp_path / "no_agents"
+
+    with (
+        patch(
+            "a_sdlc.uninstall.get_claude_settings_path",
+            return_value=tmp_path / "none.json",
+        ),
+        patch(
+            "a_sdlc.uninstall.CLAUDE_SETTINGS_PATH",
+            tmp_path / "none2.json",
+        ),
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
+        patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
+        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+    ):
+        MockInstaller.PERSONA_TARGET = nonexistent_dir
+
+        mock_inst = MockInstaller.return_value
+        mock_inst.target_dir = tmp_path / "cmds"
+        mock_inst.target_dir.mkdir(parents=True)
+
+        plan = build_uninstall_plan()
+        assert plan.persona_count == 0
+        assert plan.persona_dir is None
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +560,60 @@ def test_remove_skill_templates_error():
 
 
 # ---------------------------------------------------------------------------
+# _remove_personas
+# ---------------------------------------------------------------------------
+
+
+def test_remove_personas_delegates_to_installer():
+    """_remove_personas delegates to Installer.uninstall_personas()."""
+    plan = UninstallPlan(
+        persona_dir=Path("/some/agents"),
+        persona_count=5,
+    )
+    result = UninstallResult()
+
+    with patch("a_sdlc.uninstall.Installer") as MockInstaller:  # noqa: N806
+        MockInstaller.return_value.uninstall_personas.return_value = 5
+        _remove_personas(plan, result)
+
+    assert any("5 persona" in a for a in result.actions)
+
+
+def test_remove_personas_skips_when_none():
+    """_remove_personas no-ops when persona_count is 0."""
+    plan = UninstallPlan(persona_dir=None, persona_count=0)
+    result = UninstallResult()
+
+    _remove_personas(plan, result)
+    assert len(result.actions) == 0
+
+
+def test_remove_personas_handles_error():
+    """_remove_personas records error on failure."""
+    plan = UninstallPlan(
+        persona_dir=Path("/some/agents"),
+        persona_count=3,
+    )
+    result = UninstallResult()
+
+    with patch("a_sdlc.uninstall.Installer") as MockInstaller:  # noqa: N806
+        MockInstaller.return_value.uninstall_personas.side_effect = OSError("perm denied")
+        _remove_personas(plan, result)
+
+    assert len(result.errors) == 1
+    assert "persona" in result.errors[0].lower()
+
+
+def test_remove_personas_skips_when_dir_set_but_count_zero():
+    """_remove_personas no-ops when persona_dir is set but count is 0."""
+    plan = UninstallPlan(persona_dir=Path("/some/agents"), persona_count=0)
+    result = UninstallResult()
+
+    _remove_personas(plan, result)
+    assert len(result.actions) == 0
+
+
+# ---------------------------------------------------------------------------
 # _remove_monitoring
 # ---------------------------------------------------------------------------
 
@@ -691,6 +815,7 @@ def test_execute_uninstall_no_data():
         patch("a_sdlc.uninstall._remove_asdlc_mcp"),
         patch("a_sdlc.uninstall._remove_settings_entries"),
         patch("a_sdlc.uninstall._remove_skill_templates"),
+        patch("a_sdlc.uninstall._remove_personas"),
         patch("a_sdlc.uninstall._remove_monitoring"),
         patch("a_sdlc.uninstall._remove_data_dir") as mock_remove_data,
     ):
@@ -706,8 +831,94 @@ def test_execute_uninstall_with_data():
         patch("a_sdlc.uninstall._remove_asdlc_mcp"),
         patch("a_sdlc.uninstall._remove_settings_entries"),
         patch("a_sdlc.uninstall._remove_skill_templates"),
+        patch("a_sdlc.uninstall._remove_personas"),
         patch("a_sdlc.uninstall._remove_monitoring"),
         patch("a_sdlc.uninstall._remove_data_dir") as mock_remove_data,
     ):
         execute_uninstall(plan)
         mock_remove_data.assert_called_once()
+
+
+def test_execute_uninstall_calls_remove_personas():
+    """execute_uninstall includes _remove_personas phase."""
+    plan = UninstallPlan(persona_dir=Path("/agents"), persona_count=3)
+
+    with (
+        patch("a_sdlc.uninstall._remove_asdlc_mcp"),
+        patch("a_sdlc.uninstall._remove_settings_entries"),
+        patch("a_sdlc.uninstall._remove_skill_templates"),
+        patch("a_sdlc.uninstall._remove_personas") as mock_remove_personas,
+        patch("a_sdlc.uninstall._remove_monitoring"),
+    ):
+        execute_uninstall(plan)
+        mock_remove_personas.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Agent Teams env var in managed keys
+# ---------------------------------------------------------------------------
+
+
+def test_agent_teams_env_in_managed_keys():
+    """Agent Teams env var is included in ALL_MANAGED_ENV_KEYS for cleanup."""
+    from a_sdlc.uninstall import ALL_MANAGED_ENV_KEYS
+
+    assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" in ALL_MANAGED_ENV_KEYS
+
+
+def test_uninstall_removes_agent_teams_env(tmp_path):
+    """Uninstall removes CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS from settings.json."""
+    settings = {
+        "environment": {
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+            "MY_CUSTOM_VAR": "keep-me",
+        },
+    }
+
+    plan = UninstallPlan(
+        managed_env_keys=["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"]
+    )
+    result = UninstallResult()
+
+    saved_settings = {}
+
+    def mock_save(s):
+        saved_settings.update(s)
+
+    with (
+        patch("a_sdlc.uninstall.load_claude_settings", return_value=settings),
+        patch("a_sdlc.uninstall.save_claude_settings", side_effect=mock_save),
+    ):
+        _remove_settings_entries(plan, result)
+
+    assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in saved_settings["environment"]
+    assert saved_settings["environment"]["MY_CUSTOM_VAR"] == "keep-me"
+
+
+def test_build_plan_detects_agent_teams_env(tmp_path):
+    """build_uninstall_plan() detects CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS."""
+    settings_json = tmp_path / "settings.json"
+    settings_json.write_text(json.dumps({
+        "environment": {
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        },
+    }))
+
+    with (
+        patch(
+            "a_sdlc.uninstall.get_claude_settings_path",
+            return_value=tmp_path / "nonexistent.json",
+        ),
+        patch("a_sdlc.uninstall.CLAUDE_SETTINGS_PATH", settings_json),
+        patch("a_sdlc.uninstall.load_claude_settings") as mock_load,
+        patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
+        patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "monitoring"),
+        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+    ):
+        mock_load.return_value = json.loads(settings_json.read_text())
+        mock_inst = MockInstaller.return_value
+        mock_inst.target_dir = tmp_path / "commands" / "sdlc"
+        mock_inst.target_dir.mkdir(parents=True, exist_ok=True)
+
+        plan = build_uninstall_plan()
+        assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" in plan.managed_env_keys

@@ -219,6 +219,123 @@ class TestGetSprintTasksGroupByPrd:
 
 
 # =============================================================================
+# complete_sprint — auto-complete PRDs
+# =============================================================================
+
+
+class TestCompleteSprintPrdCascade:
+    """Test that complete_sprint auto-completes PRDs with all tasks done."""
+
+    @patch("a_sdlc.server.get_db")
+    def test_completes_prds_with_all_tasks_done(self, mock_get_db):
+        """PRDs in 'split' status are completed when all tasks are done."""
+        from a_sdlc.server import complete_sprint
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_sprint.return_value = {
+            "id": "TEST-S0001",
+            "project_id": "test-project",
+            "status": "active",
+        }
+        mock_db.list_tasks_by_sprint.return_value = [
+            {"status": "completed"},
+            {"status": "completed"},
+        ]
+        mock_db.get_sprint_prds.return_value = [
+            {"id": "TEST-P0001", "project_id": "test-project", "status": "split"},
+        ]
+        mock_db.list_tasks.return_value = [
+            {"status": "completed"},
+            {"status": "completed"},
+        ]
+        mock_db.update_sprint.return_value = {"id": "TEST-S0001", "status": "completed"}
+
+        result = complete_sprint("TEST-S0001")
+
+        assert result["status"] == "completed"
+        assert "TEST-P0001" in result["statistics"]["prds_completed"]
+        mock_db.update_prd.assert_called_once_with("TEST-P0001", status="completed")
+
+    @patch("a_sdlc.server.get_db")
+    def test_skips_prds_with_incomplete_tasks(self, mock_get_db):
+        """PRDs with incomplete tasks are not auto-completed."""
+        from a_sdlc.server import complete_sprint
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_sprint.return_value = {
+            "id": "TEST-S0001",
+            "project_id": "test-project",
+            "status": "active",
+        }
+        mock_db.list_tasks_by_sprint.return_value = [
+            {"status": "completed"},
+            {"status": "in_progress"},
+        ]
+        mock_db.get_sprint_prds.return_value = [
+            {"id": "TEST-P0001", "project_id": "test-project", "status": "split"},
+        ]
+        mock_db.list_tasks.return_value = [
+            {"status": "completed"},
+            {"status": "in_progress"},
+        ]
+        mock_db.update_sprint.return_value = {"id": "TEST-S0001", "status": "completed"}
+
+        result = complete_sprint("TEST-S0001")
+
+        assert result["statistics"]["prds_completed"] == []
+        mock_db.update_prd.assert_not_called()
+
+    @patch("a_sdlc.server.get_db")
+    def test_skips_prds_not_in_split_status(self, mock_get_db):
+        """PRDs not in 'split' status are not touched."""
+        from a_sdlc.server import complete_sprint
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_sprint.return_value = {
+            "id": "TEST-S0001",
+            "project_id": "test-project",
+            "status": "active",
+        }
+        mock_db.list_tasks_by_sprint.return_value = []
+        mock_db.get_sprint_prds.return_value = [
+            {"id": "TEST-P0001", "project_id": "test-project", "status": "draft"},
+        ]
+        mock_db.update_sprint.return_value = {"id": "TEST-S0001", "status": "completed"}
+
+        result = complete_sprint("TEST-S0001")
+
+        assert result["statistics"]["prds_completed"] == []
+        mock_db.update_prd.assert_not_called()
+
+    @patch("a_sdlc.server.get_db")
+    def test_skips_prds_with_no_tasks(self, mock_get_db):
+        """PRDs with zero tasks are not auto-completed."""
+        from a_sdlc.server import complete_sprint
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_sprint.return_value = {
+            "id": "TEST-S0001",
+            "project_id": "test-project",
+            "status": "active",
+        }
+        mock_db.list_tasks_by_sprint.return_value = []
+        mock_db.get_sprint_prds.return_value = [
+            {"id": "TEST-P0001", "project_id": "test-project", "status": "split"},
+        ]
+        mock_db.list_tasks.return_value = []
+        mock_db.update_sprint.return_value = {"id": "TEST-S0001", "status": "completed"}
+
+        result = complete_sprint("TEST-S0001")
+
+        assert result["statistics"]["prds_completed"] == []
+        mock_db.update_prd.assert_not_called()
+
+
+# =============================================================================
 # setup_prd_worktree
 # =============================================================================
 

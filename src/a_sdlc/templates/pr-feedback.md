@@ -57,6 +57,45 @@ mcp__asdlc__get_pr_feedback(
 
 If the tool returns `status: "error"` or `status: "no_pr"`, display the message and stop.
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading PR context, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection & Persona Panel (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze PR changes for domain signals (file paths, component areas, change types)
+2. Assemble persona panel with relevant domain personas + Security and QA as advisors
+3. Display panel to user
+
+### Persona-Attributed Comment Categorization
+
+If round_table_enabled = true, when processing PR review comments in Phase 2 below:
+
+Categorize each review comment by which persona domain it relates to:
+
+| Comment Category | Persona Domain | Example |
+|---|---|---|
+| Security concern | sdlc-security-engineer | "This exposes user credentials" |
+| Test coverage | sdlc-qa-engineer | "Missing edge case test" |
+| Architecture | sdlc-architect | "This violates the adapter pattern" |
+| Performance | Domain lead | "This query is O(n^2)" |
+| UX/accessibility | sdlc-frontend-engineer | "Needs ARIA labels" |
+| Infrastructure | sdlc-devops-engineer | "Missing health check endpoint" |
+
+Display categorized comments with persona attribution:
+```
+PR Comment Analysis:
+  [Security] Comment #3: "Input not sanitized" → sdlc-security-engineer concern
+  [QA] Comment #7: "No test for error path" → sdlc-qa-engineer concern
+  ...
+```
+
+**Note**: This is categorization only -- no full round-table discussion.
+
 ## Phase 2: Categorize Comments
 
 For each comment returned, classify it into one of these categories:

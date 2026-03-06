@@ -14,9 +14,18 @@
         <h1 class="title-full" style="margin: 0;">{{ prd.title }}</h1>
         <div style="display: flex; align-items: center; gap: 0.5rem;">
             {% if prd.status in ['draft', 'ready'] %}
+            {% if design %}
             <button class="btn-copy" onclick="copyCommand('/sdlc:prd-split {{ prd.id }}')" title="Copy split command">
                 Split into Tasks
             </button>
+            {% else %}
+            <button class="btn-copy" onclick="copyCommand('/sdlc:prd-architect {{ prd.id }}')" title="Copy architect command">
+                Architect
+            </button>
+            <button class="btn" onclick="copyCommand('/sdlc:prd-split {{ prd.id }}')" title="Copy split command">
+                Split into Tasks
+            </button>
+            {% endif %}
             {% endif %}
             <select id="status-select" onchange="updateStatus(this.value)" style="
                 padding: 0.4rem 0.75rem;
@@ -222,7 +231,12 @@
         {% else %}
         <div class="empty-state">
             <p>No tasks have been split from this PRD yet.</p>
+            {% if design %}
             <button class="btn-copy" onclick="copyCommand('/sdlc:prd-split {{ prd.id }}')" style="margin-top: 0.75rem;">/sdlc:prd-split {{ prd.id }}</button>
+            {% else %}
+            <p style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--text-muted);">Design first, then split into tasks:</p>
+            <button class="btn-copy" onclick="copyCommand('/sdlc:prd-architect {{ prd.id }}')" style="margin-top: 0.75rem;">/sdlc:prd-architect {{ prd.id }}</button>
+            {% endif %}
         </div>
         {% endif %}
     </div>

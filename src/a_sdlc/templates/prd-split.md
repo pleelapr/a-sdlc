@@ -268,6 +268,66 @@ Extracted {N} design decisions from design document for PRD {prd_id}.
 
 **Store Output As:** `design_decisions`
 
+Proceed to Step 1.5d.
+
+---
+
+### Step 1.5d: Persona Check
+
+After loading context, check for persona agents:
+
+1. Check `~/.claude/agents/` for files matching `sdlc-*.md` pattern
+2. Determine round-table eligibility:
+   - If `--solo` or `--no-roundtable` appears in the user's command: **round_table_enabled = false**
+   - If no `sdlc-*.md` files found: **round_table_enabled = false**
+   - Otherwise: **round_table_enabled = true**
+3. If round_table_enabled = false, skip ALL persona-specific sections below. The template operates in single-agent mode (existing behavior preserved).
+
+Reference: `_round-table-blocks.md` Section A
+
+---
+
+### Step 1.5e: Domain Detection + Panel Assembly
+
+**Gate:** If round_table_enabled = false, skip this step entirely and proceed to Step 2.
+
+If round_table_enabled = true, perform domain detection and panel assembly:
+
+**1.5e.1: Domain Detection**
+
+Analyze available context to identify relevant domains. Check in priority order:
+
+1. **Explicit tags** — Look for `<!-- personas: frontend, security -->` markers in PRD/design content. If found, use those domains directly.
+2. **Codebase signals** — From `.sdlc/artifacts/architecture.md`, identify affected components (e.g., components with "UI", "React", "frontend" -> frontend domain; "API", "database" -> backend domain; "CI/CD", "Docker" -> devops domain).
+3. **Keyword analysis** — Scan PRD content and design doc for domain keywords:
+   - Frontend: UI, component, React, CSS, layout, responsive, accessibility
+   - Backend: API, endpoint, database, query, migration, service, middleware
+   - DevOps: CI/CD, pipeline, Docker, deploy, infrastructure, monitoring
+   - Security: auth, vulnerability, encryption, OWASP, credentials, permissions
+4. **Content structure** — PRD functional requirements referencing specific technical domains
+
+**1.5e.2: Panel Assembly**
+
+Based on detected domains, assemble the persona panel:
+
+| Rule | Logic |
+|------|-------|
+| **Domain personas** (Frontend, Backend, DevOps) | Include only if their domain is detected |
+| **Cross-cutting** (Security, QA) | Always included — both are always relevant for task splitting |
+| **Phase-role** (Architect) | Always included — Architect validates task granularity and dependency structure |
+| **Lead assignment** | The persona whose domain has the strongest signal becomes lead. If unclear, Architect leads. |
+
+Display the panel to the user:
+
+```
+Persona Panel for PRD Split:
+  Lead: {persona_name} (signal: {detection_reason})
+  Advisor: {persona_name} (signal: {detection_reason})
+  ...
+```
+
+Reference: `_round-table-blocks.md` Section B
+
 Proceed to Step 2.
 
 ---
@@ -370,6 +430,70 @@ Return a structured investigation report:
 
 ---
 
+### Step 2.5: Round-Table — Task Breakdown Review
+
+**Gate:** If round_table_enabled = false, skip this step entirely and proceed to Step 3.
+
+If round_table_enabled = true, run a round-table discussion after the investigation phase and before proposing the task breakdown in Step 3.
+
+Execute the round-table following `_round-table-blocks.md` Section C:
+
+**2.5.1: Build Context Packages**
+
+For each persona in the panel, build a filtered context package containing:
+- PRD content (`prd_content`)
+- Design document (`design_content`)
+- Investigation report from Step 2 (`investigation_report`)
+- Extracted requirements (`requirement_list`) and design decisions (`design_decisions`)
+- The specific question: "How should this PRD be decomposed into implementation tasks?"
+
+**2.5.2: Detect Round-Table Mode**
+
+Check the execution environment:
+- If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable equals `"1"`: Use **Agent Teams mode** (Section C.3a)
+- Otherwise: Use **Task tool mode** (Section C.3b)
+
+Display: `Round-Table Mode: {Agent Teams | Task Tool Fallback}`
+
+**2.5.3: Dispatch Personas**
+
+Launch persona subagents (parallel via Task tool, or as teammates in Agent Teams mode). Each persona analyzes from their domain perspective:
+
+- **Architect** reviews task granularity, validates dependency structure, and checks that the proposed decomposition aligns with the system architecture
+- **QA** validates that each proposed task area has testable acceptance criteria and identifies testing gaps
+- **Security** validates presence of security-related tasks where the PRD touches authentication, authorization, data handling, or external integrations
+- **Domain leads** (Frontend, Backend, DevOps — if on panel) validate implementation feasibility from their domain perspective, flag missing technical tasks
+
+Each persona responds using the structured `---PERSONA-FINDINGS---` format from Section C.3b.
+
+**2.5.4: Synthesize Recommendations**
+
+Merge all persona findings into an attributed synthesis (Section C.4):
+
+```markdown
+## Round-Table Synthesis: Task Breakdown Review
+
+### [{Persona Name} — {Role}]:
+- {Finding/recommendation about task structure}
+
+### Consensus:
+- [Agreed] {Points all personas support about the decomposition}
+- [Debated] {Disagreements} — {Persona A} suggests X, {Persona B} suggests Y → escalating to user
+
+### Risks Identified:
+- [{Persona}] {Risk to the task breakdown approach}
+```
+
+**Critical rule**: Disagreements between personas are ALWAYS surfaced to the user for decision. The orchestrator never resolves disagreements autonomously.
+
+**2.5.5: Present and Continue**
+
+Present the synthesis to the user. The synthesized recommendations inform the task breakdown proposal in Step 3. The Plan agent in Step 3 receives the round-table synthesis as additional input.
+
+**Store Output As:** `roundtable_breakdown_review`
+
+---
+
 ### Step 3: Phase 2 - Task Design (Plan Agent)
 
 Launch a **Plan** agent to design the task breakdown:
@@ -412,6 +536,14 @@ Every task MUST trace back to at least one requirement from this list via its `t
 
 This is the structured list of all design decisions (DD-N) extracted in Step 1.5c.
 Every task MUST declare which design decisions it implements via its `design_compliance` field.
+
+## Round-Table Recommendations (if available)
+{roundtable_breakdown_review or "No round-table review performed (single-agent mode)."}
+
+If round-table recommendations are present, incorporate them into the task breakdown:
+- Address consensus points as requirements for the breakdown structure
+- Resolve or flag debated points in the output
+- Account for identified risks in task scope and dependencies
 
 ## Traceability Mapping Instructions
 
@@ -663,6 +795,100 @@ If "Cancel": Abort the splitting process.
 
 ---
 
+### Step 3.7: Round-Table — Pre-Approval Validation
+
+**Gate:** If round_table_enabled = false, skip this step entirely and proceed to Step 4.
+
+If round_table_enabled = true, run a round-table discussion after the task breakdown is finalized (Step 3 through 3.6) and before presenting to the user for approval in Step 4.
+
+Execute the round-table following `_round-table-blocks.md` Section C:
+
+**3.7.1: Build Context Packages**
+
+For each persona in the panel, build a filtered context package containing:
+- The proposed task breakdown (`task_breakdown`)
+- The traceability matrix (`traceability_matrix`)
+- The coverage summary (`coverage_summary`)
+- The specific question: "Does this task breakdown fully cover your domain's requirements? Are there traceability gaps or missing tasks?"
+
+**3.7.2: Detect Round-Table Mode**
+
+Check the execution environment:
+- If `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable equals `"1"`: Use **Agent Teams mode** (Section C.3a)
+- Otherwise: Use **Task tool mode** (Section C.3b)
+
+Display: `Round-Table Mode: {Agent Teams | Task Tool Fallback}`
+
+**3.7.3: Dispatch Personas for Final Validation**
+
+Launch persona subagents (parallel via Task tool, or as teammates in Agent Teams mode). Each persona validates the complete breakdown:
+
+- **Each persona validates**: Does this breakdown cover my domain's requirements from the PRD?
+- **Traceability check**: Every PRD requirement has at least one task (`traces_to` coverage is 100%)
+- **Completeness check**: No orphan tasks exist without PRD requirement traceability
+- **Feasibility check**: Each task is implementable as scoped, with realistic dependencies
+
+Each persona responds using the structured `---PERSONA-FINDINGS---` format from Section C.3b.
+
+**3.7.4: Synthesize Validation Results**
+
+Merge all persona findings into an attributed synthesis (Section C.4):
+
+```markdown
+## Round-Table Synthesis: Pre-Approval Validation
+
+### [{Persona Name} — {Role}]:
+- {Validation finding about task completeness from their domain}
+
+### Consensus:
+- [Agreed] {Points all personas confirm about the breakdown}
+- [Debated] {Disagreements about task completeness} — {Persona A} suggests X, {Persona B} suggests Y → escalating to user
+
+### Traceability Gaps Surfaced:
+- [{Persona}] {Any requirement or design decision they believe is inadequately covered}
+
+### Missing Tasks Identified:
+- [{Persona}] {Any task they believe should be added}
+```
+
+**Critical rule**: Disagreements about task completeness are ALWAYS escalated to the user. The orchestrator never resolves completeness disputes autonomously.
+
+**3.7.5: Handle Validation Findings**
+
+If personas identified traceability gaps or missing tasks:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Round-table validation surfaced {N} findings ({G} traceability gaps, {M} missing tasks). How to proceed?",
+    header: "Round-Table Validation",
+    options: [
+      { label: "Add tasks", description: "Return to Step 3 to design additional tasks addressing the findings" },
+      { label: "Acknowledge findings", description: "Findings noted — proceed to approval with current breakdown" },
+      { label: "Cancel", description: "Abort splitting and rethink the breakdown" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+If "Add tasks" selected: Return to Step 3 (Plan Agent) with the validation findings to design additional tasks.
+If "Acknowledge findings": Record the findings and proceed to Step 4.
+If "Cancel": Abort the splitting process.
+
+If no gaps or missing tasks identified:
+```
+Round-table validation passed. All personas confirm the task breakdown is complete and traceable.
+```
+
+**3.7.6: Present and Continue**
+
+Present the validation synthesis to the user. The results are included alongside the task breakdown in Step 4's approval presentation.
+
+**Store Output As:** `roundtable_validation`
+
+---
+
 ### Step 4: User Approval
 
 Present the task breakdown and coverage summary to the user for review:
@@ -680,6 +906,8 @@ Present the task breakdown and coverage summary to the user for review:
 - Design Decisions: {dd_covered}/{dd_total} covered ({dd_percentage}%)
 - Cross-Cutting Concerns: {cross_cutting_count} identified
 {if gaps: "⚠️ Uncovered items documented — see traceability matrix above."}
+
+{if roundtable_validation: include round-table validation synthesis here}
 
 ---
 

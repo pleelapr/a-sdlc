@@ -57,6 +57,20 @@ existing_design = mcp__asdlc__get_design(prd_id)
 
 Display PRD title and key requirements for reference.
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading context, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze PRD requirements for domain signals
+2. Assemble persona panel — Architect always included as lead for design phase
+3. Display panel to user
+
 ### 2. Codebase Analysis
 
 **This step MUST read actual code. Do NOT skip or approximate.**
@@ -110,6 +124,21 @@ From codebase analysis, identify:
 - API contract changes (backward compatibility?)
 - Dependency additions (new packages?)
 - Test infrastructure (existing test patterns?)
+
+### Round-Table: Architecture Review (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run after Step 2 and before Step 3:
+
+Execute round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives PRD + codebase analysis from Step 2
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas — Architect leads architecture review:
+   - Architect evaluates architectural patterns and trade-offs
+   - Domain leads challenge design from their implementation perspective
+   - Security validates security architecture decisions
+   - QA validates testability of proposed architecture
+4. Synthesize — present architectural recommendations and disagreements
+5. User reviews synthesis before ADR generation proceeds
 
 ### 3. Generate ADR Sections
 

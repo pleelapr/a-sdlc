@@ -122,6 +122,7 @@ class Installer:
     """Deploys a-sdlc skill templates to Claude Code configuration."""
 
     DEFAULT_TARGET = Path.home() / ".claude" / "commands" / "sdlc"
+    PERSONA_TARGET = Path.home() / ".claude" / "agents"
 
     def __init__(self, target_dir: Path | None = None) -> None:
         """Initialize installer with target directory.
@@ -152,6 +153,9 @@ class Installer:
 
         installed = []
         for template_file in template_dir.glob("*.md"):
+            # Skip underscore-prefixed files (internal blocks, not user skills)
+            if template_file.name.startswith("_"):
+                continue
             target_file = self.target_dir / template_file.name
 
             if target_file.exists() and not force:
@@ -161,6 +165,9 @@ class Installer:
 
             shutil.copy2(template_file, target_file)
             installed.append(template_file.stem)
+
+        # Deploy persona agent files
+        self.install_personas(force=force)
 
         # Write version marker
         version_file = self.target_dir / ".version"
@@ -223,6 +230,91 @@ class Installer:
         except (TypeError, AttributeError):
             # Fallback for development
             return Path(__file__).parent / "templates"
+
+    def _get_persona_dir(self) -> Path:
+        """Get the path to bundled persona files.
+
+        Returns:
+            Path to personas directory.
+        """
+        try:
+            with resources.files("a_sdlc").joinpath("personas") as persona_path:
+                return Path(persona_path)
+        except (TypeError, AttributeError):
+            # Fallback for development
+            return Path(__file__).parent / "personas"
+
+    def install_personas(self, force: bool = False) -> list[str]:
+        """Deploy persona agent files to ~/.claude/agents/.
+
+        Args:
+            force: If True, overwrite existing persona files.
+
+        Returns:
+            List of installed persona names.
+        """
+        self.PERSONA_TARGET.mkdir(parents=True, exist_ok=True)
+        persona_dir = self._get_persona_dir()
+        installed = []
+        for persona_file in persona_dir.glob("*.md"):
+            target_file = self.PERSONA_TARGET / persona_file.name
+            if target_file.exists() and not force:
+                installed.append(persona_file.stem)
+                continue
+            shutil.copy2(persona_file, target_file)
+            installed.append(persona_file.stem)
+        return installed
+
+    def uninstall_personas(self) -> int:
+        """Remove only sdlc-prefixed persona files from ~/.claude/agents/.
+
+        CRITICAL: Only removes sdlc-*.md files — never touches other agent files.
+
+        Returns:
+            Number of persona files removed.
+        """
+        if not self.PERSONA_TARGET.exists():
+            return 0
+        count = 0
+        for persona_file in self.PERSONA_TARGET.glob("sdlc-*.md"):
+            persona_file.unlink()
+            count += 1
+        return count
+
+    def list_installed_personas(self) -> list[dict]:
+        """List deployed persona agent files matching sdlc-* pattern.
+
+        Returns:
+            List of dicts with 'name' and 'file' keys.
+        """
+        if not self.PERSONA_TARGET.exists():
+            return []
+        personas = []
+        for persona_file in sorted(self.PERSONA_TARGET.glob("sdlc-*.md")):
+            personas.append({
+                "name": persona_file.stem,
+                "file": persona_file.name,
+            })
+        return personas
+
+    def verify_persona_integrity(self) -> dict[str, bool]:
+        """Verify installed personas match source versions.
+
+        Returns:
+            Dict mapping persona name to verification status.
+        """
+        persona_dir = self._get_persona_dir()
+        results = {}
+        for persona_file in persona_dir.glob("*.md"):
+            target_file = self.PERSONA_TARGET / persona_file.name
+            name = persona_file.stem
+            if not target_file.exists():
+                results[name] = False
+                continue
+            source_content = persona_file.read_text()
+            target_content = target_file.read_text()
+            results[name] = source_content == target_content
+        return results
 
     def verify_integrity(self) -> dict[str, bool]:
         """Verify installed templates match source versions.

@@ -910,3 +910,64 @@ class TestCompletionConfigAwareness:
 
         pr_result = complete_prd_worktree(prd_id="TEST-P0001", action="pr")
         assert pr_result["status"] == "disabled"
+
+
+# =============================================================================
+# Subagent Type Mapping Validation
+# =============================================================================
+
+
+class TestSubagentTypeMapping:
+    """Validate subagent_type specialization across templates."""
+
+    @pytest.fixture(autouse=True)
+    def load_templates(self):
+        """Load all affected template files."""
+        base = Path(__file__).parent.parent / "src" / "a_sdlc" / "templates"
+        self.round_table = (base / "_round-table-blocks.md").read_text(encoding="utf-8")
+        self.task_start = (base / "task-start.md").read_text(encoding="utf-8")
+        self.task_complete = (base / "task-complete.md").read_text(encoding="utf-8")
+        self.sprint_run = (base / "sprint-run.md").read_text(encoding="utf-8")
+        self.investigate = (base / "investigate.md").read_text(encoding="utf-8")
+
+    # AC-001: Zero general-purpose in task-start, task-complete, _round-table-blocks
+    def test_no_general_purpose_in_round_table(self):
+        assert 'subagent_type="general-purpose"' not in self.round_table
+
+    def test_no_general_purpose_in_task_start(self):
+        assert 'subagent_type="general-purpose"' not in self.task_start
+
+    def test_no_general_purpose_in_task_complete(self):
+        assert 'subagent_type="general-purpose"' not in self.task_complete
+
+    # AC-002: sprint-run has general-purpose only at PRD agent sites (exactly 2)
+    def test_sprint_run_general_purpose_only_at_prd_agents(self):
+        count = self.sprint_run.count('subagent_type="general-purpose"')
+        assert count == 2, f"Expected 2 PRD agent dispatches, found {count}"
+
+    # AC-003: Section D exists with all personas
+    def test_section_d_exists(self):
+        assert "## Section D" in self.round_table
+
+    def test_section_d_contains_all_personas(self):
+        personas = [
+            "sdlc-backend-engineer", "sdlc-frontend-engineer",
+            "sdlc-devops-engineer", "sdlc-security-engineer",
+            "sdlc-architect", "sdlc-qa-engineer", "sdlc-product-manager",
+        ]
+        for persona in personas:
+            assert persona in self.round_table, f"Missing persona: {persona}"
+
+    # Reviewer-specific tests
+    def test_task_start_reviewer_uses_qa(self):
+        assert 'subagent_type="sdlc-qa-engineer"' in self.task_start
+
+    def test_task_complete_reviewer_uses_qa(self):
+        assert 'subagent_type="sdlc-qa-engineer"' in self.task_complete
+
+    def test_sprint_run_reviewer_uses_qa(self):
+        assert 'subagent_type="sdlc-qa-engineer"' in self.sprint_run
+
+    # investigate template test
+    def test_no_general_purpose_in_investigate(self):
+        assert 'subagent_type="general-purpose"' not in self.investigate

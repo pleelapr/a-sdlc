@@ -94,6 +94,17 @@ context = mcp__asdlc__get_context()
 
 **Then acknowledge the user's initial thought and transition to Phase 1.**
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading context, check for persona agents:
+
+1. Check `~/.claude/agents/` for files matching `sdlc-*.md` pattern
+2. Determine round-table eligibility:
+   - If `--solo` or `--no-roundtable` appears in the user's command: **round_table_enabled = false**
+   - If no `sdlc-*.md` files found: **round_table_enabled = false**
+   - Otherwise: **round_table_enabled = true**
+3. If round_table_enabled = false, skip ALL persona-specific sections below. The template operates in single-agent mode (existing behavior preserved).
+
 ### Phase 1: Understand the Vision
 
 **Goal**: Explore the user's aspirations openly. Understand *why* they're thinking about this.
@@ -156,6 +167,18 @@ Use the evidence type to ground the PRD's Problem Statement. If "Intuition" only
 
 **Do NOT** jump to solutions. Stay in the problem/aspiration space.
 
+### Domain Detection & Panel Assembly (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true, perform after Phase 1:
+
+1. Analyze the user's vision statement and initial thought for domain signals
+2. Check codebase artifacts (if available) for affected components
+3. Assemble persona panel following `_round-table-blocks.md` Section B rules
+4. **Phase-role rule**: Product Manager is always included for ideation
+5. **Cross-cutting rule**: Security and QA always included as advisors
+
+Display the assembled panel to the user before continuing to Phase 2.
+
 ### Phase 2: Map the Problem Space
 
 **Goal**: Identify users, problems, and constraints concretely.
@@ -195,6 +218,23 @@ AskUserQuestion({
 ```
 
 Adapt options based on prior answers and codebase context. If artifacts are available, reference real components in the descriptions (e.g., "Friction in `UserService` login flow" instead of generic descriptions).
+
+### Round-Table: Solution Exploration (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run before Phase 3:
+
+Execute the round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives the vision (Phase 1) and problem analysis (Phase 2)
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas to analyze solution approaches from their domains:
+   - PM evaluates solution-user fit and business viability
+   - Domain leads (Frontend/Backend/DevOps) assess technical feasibility
+   - Security evaluates security implications of each approach
+   - QA evaluates testability and quality implications
+4. Synthesize findings into attributed recommendations
+5. Present synthesis before proceeding to Phase 3
+
+The user's solution exploration in Phase 3 is enriched by persona recommendations.
 
 ### Phase 3: Explore Solution Approaches
 
@@ -274,6 +314,23 @@ AskUserQuestion({
 ```
 
 Items not selected as must-haves become candidates for the parking lot.
+
+### Round-Table: PRD Scope Validation (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run before Phase 5:
+
+Execute the round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives everything from Phases 1-4
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas to validate PRD scope completeness:
+   - PM validates that all user-stated requirements are captured
+   - Domain leads validate that their domain's concerns are addressed
+   - Security checks for missing security requirements
+   - QA checks for missing testability criteria
+4. Synthesize findings — highlight any gaps or missing requirements
+5. Present synthesis before proceeding to Phase 5 convergence
+
+Disagreements between personas about scope are escalated to the user for decision.
 
 ### Phase 5: Converge on PRD Themes
 

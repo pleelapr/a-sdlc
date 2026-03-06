@@ -125,7 +125,12 @@ def serve(transport: str, host: str, port: int) -> None:
     is_flag=True,
     help="Also configure Playwright MCP server for runtime testing"
 )
-def install(list_skills: bool, force: bool, target: Path | None, with_playwright: bool) -> None:
+@click.option(
+    "--no-agent-teams",
+    is_flag=True,
+    help="Skip enabling Agent Teams experimental feature"
+)
+def install(list_skills: bool, force: bool, target: Path | None, with_playwright: bool, no_agent_teams: bool) -> None:
     """Deploy skill templates to Claude Code (non-interactive).
 
     For interactive setup with optional integrations, use: a-sdlc setup
@@ -144,10 +149,28 @@ def install(list_skills: bool, force: bool, target: Path | None, with_playwright
 
     try:
         installed = installer.install(force=force)
+        personas = installer.list_installed_personas()
+
+        # Configure Agent Teams env var
+        agent_teams_status = ""
+        if not no_agent_teams:
+            try:
+                from a_sdlc.mcp_setup import load_claude_settings, save_claude_settings
+                settings = load_claude_settings()
+                env = settings.setdefault("environment", {})
+                env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+                save_claude_settings(settings)
+                agent_teams_status = "Agent Teams: [cyan]Enabled[/cyan]\n"
+            except Exception:
+                agent_teams_status = "Agent Teams: [yellow]Could not configure (settings.json issue)[/yellow]\n"
+        else:
+            agent_teams_status = "Agent Teams: [dim]Skipped (--no-agent-teams)[/dim]\n"
 
         console.print()
         console.print(Panel(
-            f"[green]Successfully installed {len(installed)} skill templates![/green]\n\n"
+            f"[green]Successfully installed {len(installed)} skill templates![/green]\n"
+            f"Personas deployed: [cyan]{len(personas)} agent(s) to ~/.claude/agents/[/cyan]\n"
+            f"{agent_teams_status}\n"
             f"Skills location: [cyan]{installer.target_dir}[/cyan]\n"
             f"MCP server: [cyan]Configured in ~/.claude.json[/cyan]\n\n"
             "[dim]For full interactive setup with optional integrations: a-sdlc setup[/dim]\n"
@@ -450,7 +473,7 @@ def setup(upgrade: bool):
 
 
 def _list_installed_skills(installer: Installer) -> None:
-    """Display table of installed skill templates."""
+    """Display table of installed skill templates and personas."""
     skills = installer.list_installed()
 
     if not skills:
@@ -471,6 +494,24 @@ def _list_installed_skills(installer: Installer) -> None:
         )
 
     console.print(table)
+
+    # Persona agents
+    personas = installer.list_installed_personas()
+    if personas:
+        console.print()
+        persona_table = Table(title="Installed Persona Agents")
+        persona_table.add_column("Persona", style="cyan")
+        persona_table.add_column("File", style="dim")
+        persona_table.add_column("Status", style="green")
+
+        for p in personas:
+            persona_table.add_row(
+                p['name'],
+                p['file'],
+                "Installed"
+            )
+
+        console.print(persona_table)
 
 
 def _setup_serena_mcp(force: bool = False) -> bool:
@@ -728,6 +769,11 @@ def _display_uninstall_plan(plan) -> None:
         f"Delete {plan.skill_template_count} templates" if plan.skill_template_count else "Skip",
     )
     table.add_row(
+        "Persona agents",
+        f"[green]{plan.persona_count} files[/green]" if plan.persona_count else "[dim]None[/dim]",
+        f"Remove {plan.persona_count} from ~/.claude/agents/" if plan.persona_count else "Skip",
+    )
+    table.add_row(
         "Monitoring hook",
         "[green]Found[/green]" if plan.has_monitoring_hook else "[dim]Not found[/dim]",
         "Remove from settings.json" if plan.has_monitoring_hook else "Skip",
@@ -759,6 +805,7 @@ def _plan_has_work(plan) -> bool:
         plan.has_asdlc_mcp,
         plan.has_serena_mcp,
         plan.skill_template_count > 0,
+        plan.persona_count > 0,
         plan.has_monitoring_hook,
         plan.managed_env_keys,
         plan.has_monitoring_dir,
@@ -1441,6 +1488,36 @@ def doctor() -> None:
         "status": pw_status,
         "detail": pw_detail,
     })
+
+    # Persona agents check
+    try:
+        persona_installer = Installer()
+        personas = persona_installer.list_installed_personas()
+        persona_count = len(personas)
+        if persona_count >= 7:
+            checks.append({
+                "name": "Persona Agents",
+                "status": "pass",
+                "detail": f"{persona_count} personas deployed to ~/.claude/agents/"
+            })
+        elif persona_count > 0:
+            checks.append({
+                "name": "Persona Agents",
+                "status": "warn",
+                "detail": f"Only {persona_count}/7 personas deployed. Fix: a-sdlc install --force"
+            })
+        else:
+            checks.append({
+                "name": "Persona Agents",
+                "status": "warn",
+                "detail": "No personas found. Fix: a-sdlc install"
+            })
+    except Exception:
+        checks.append({
+            "name": "Persona Agents",
+            "status": "warn",
+            "detail": "Could not check personas. Fix: a-sdlc install"
+        })
 
     # Database accessibility check
     import sqlite3

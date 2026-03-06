@@ -146,6 +146,22 @@ Set `app_url` from the user's response. Use defaults for all other settings:
 
 ---
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading test configuration, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze test scope for domain signals
+2. Assemble persona panel — QA (lead) + domain engineer for test approach
+3. Display panel to user
+
+---
+
 ### Step 3: Check App Readiness
 
 Verify the application is running and reachable using a fallback discovery chain.
@@ -299,6 +315,22 @@ If playwright_available == false AND mode_filter == "both":
       a-sdlc install --with-playwright"
   mode_filter = "api-only"
 ```
+
+---
+
+### Round-Table: Test Strategy Review (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run before test strategy:
+
+Execute round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives test scope and requirements
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas — QA leads test strategy review:
+   - QA identifies coverage gaps and suggests edge cases
+   - Domain engineer reviews test approach for their domain
+   - Security suggests security-specific test cases
+4. Synthesize test strategy recommendations
+5. Present before proceeding with test generation
 
 ---
 

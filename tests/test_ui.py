@@ -392,10 +392,10 @@ class TestPRDRoutes:
         assert response.status_code == 200
         assert "/sdlc:prd-generate" in response.text
 
-    def test_prd_split_copy_button(
+    def test_prd_list_architect_button_no_design(
         self, storage_with_project, monkeypatch
     ):
-        """PRD list shows copy split command for splittable PRDs."""
+        """PRD list shows Architect button when no design exists."""
         storage_with_project.create_prd(
             prd_id="TEST-P0001",
             project_id="test-proj",
@@ -406,7 +406,104 @@ class TestPRDRoutes:
         client = _make_client(storage_with_project, monkeypatch)
         response = client.get("/prds?project=test-proj")
         assert response.status_code == 200
+        assert "/sdlc:prd-architect TEST-P0001" in response.text
+        assert "Architect" in response.text
+
+    def test_prd_list_split_button_with_design(
+        self, storage_with_project, monkeypatch
+    ):
+        """PRD list shows Split button when design exists."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+            status="draft",
+        )
+        storage_with_project.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds?project=test-proj")
+        assert response.status_code == 200
         assert "/sdlc:prd-split TEST-P0001" in response.text
+
+    def test_prd_detail_architect_primary_no_design(
+        self, storage_with_project, monkeypatch
+    ):
+        """PRD detail shows Architect as primary button when no design."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+            status="draft",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds/TEST-P0001")
+        assert response.status_code == 200
+        assert "/sdlc:prd-architect TEST-P0001" in response.text
+        # Secondary split button should also be present
+        assert "/sdlc:prd-split TEST-P0001" in response.text
+
+    def test_prd_detail_split_primary_with_design(
+        self, storage_with_project, monkeypatch
+    ):
+        """PRD detail shows Split as primary button when design exists."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+            status="draft",
+        )
+        storage_with_project.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds/TEST-P0001")
+        assert response.status_code == 200
+        assert "/sdlc:prd-split TEST-P0001" in response.text
+        # Architect button should NOT appear when design exists
+        assert "/sdlc:prd-architect TEST-P0001" not in response.text
+
+    def test_prd_detail_tasks_empty_state_no_design(
+        self, storage_with_project, monkeypatch
+    ):
+        """Tasks tab empty state shows Architect command when no design."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+            status="draft",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds/TEST-P0001")
+        assert response.status_code == 200
+        assert "Design first, then split into tasks:" in response.text
+
+    def test_prd_detail_tasks_empty_state_with_design(
+        self, storage_with_project, monkeypatch
+    ):
+        """Tasks tab empty state shows Split command when design exists."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+            status="draft",
+        )
+        storage_with_project.create_design(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds/TEST-P0001")
+        assert response.status_code == 200
+        assert "Design first, then split into tasks:" not in response.text
 
 
 # =============================================================================

@@ -38,6 +38,20 @@ Existing Lessons:
 
 If either file does not exist, note it and continue — the file will be created when lessons are written.
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading context, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze correction log domains and sprint content for domain signals
+2. Assemble persona panel with personas relevant to correction categories
+3. Display panel to user
+
 ## Step 2: Collect Corrections
 
 ### 2.1: Determine Which Files to Read
@@ -93,6 +107,22 @@ Found {N} corrections from {source}:
 ### 3.1: Identify Patterns
 
 Group corrections by category. A **pattern** is a category with **2 or more** corrections.
+
+### Round-Table: Retrospective Analysis (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run during pattern analysis:
+
+Execute round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives corrections from their domain
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas for domain-attributed reflection:
+   - Each persona reflects on corrections from their domain
+   - Identifies domain-specific patterns (recurring issues)
+   - Proposes domain-relevant lessons learned
+4. Synthesize — attribute patterns and lessons to specific personas
+5. Present before proceeding with lesson proposals
+
+Domain-attributed reflection produces more actionable lessons than generic analysis.
 
 ### 3.2: Present Analysis
 

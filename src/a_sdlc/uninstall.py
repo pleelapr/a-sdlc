@@ -25,7 +25,8 @@ from a_sdlc.monitoring_setup import MONITORING_DIR, OTEL_ENV_VARS
 
 # Environment variable keys installed by monitoring setup
 LANGFUSE_ENV_KEYS = {"LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_HOST"}
-ALL_MANAGED_ENV_KEYS = set(OTEL_ENV_VARS.keys()) | LANGFUSE_ENV_KEYS
+AGENT_TEAMS_ENV_KEY = "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
+ALL_MANAGED_ENV_KEYS = set(OTEL_ENV_VARS.keys()) | LANGFUSE_ENV_KEYS | {AGENT_TEAMS_ENV_KEY}
 
 
 @dataclass
@@ -53,6 +54,10 @@ class UninstallPlan:
     # Monitoring files
     has_monitoring_dir: bool = False
     monitoring_dir: Path = field(default_factory=lambda: MONITORING_DIR)
+
+    # Persona agents
+    persona_dir: Path | None = None
+    persona_count: int = 0
 
     # Project data
     has_data_dir: bool = False
@@ -124,6 +129,14 @@ def build_uninstall_plan(include_data: bool = False) -> UninstallPlan:
             plan.skill_template_dir = installer.target_dir
             plan.skill_template_count = len(templates)
 
+    # Check persona agents
+    persona_target = Installer.PERSONA_TARGET
+    if persona_target.exists():
+        personas = list(persona_target.glob("sdlc-*.md"))
+        if personas:
+            plan.persona_dir = persona_target
+            plan.persona_count = len(personas)
+
     # Check monitoring directory
     plan.has_monitoring_dir = MONITORING_DIR.exists()
 
@@ -163,6 +176,9 @@ def execute_uninstall(plan: UninstallPlan) -> UninstallResult:
 
     # Phase 3: Remove skill templates
     _remove_skill_templates(plan, result)
+
+    # Phase 3.5: Remove persona agents
+    _remove_personas(plan, result)
 
     # Phase 4: Stop Docker and remove monitoring files
     _remove_monitoring(plan, result)
@@ -262,6 +278,20 @@ def _remove_skill_templates(plan: UninstallPlan, result: UninstallResult) -> Non
             result.actions.append(f"Removed {count} skill template(s)")
     except OSError as e:
         result.errors.append(f"Failed to remove skill templates: {e}")
+
+
+def _remove_personas(plan: UninstallPlan, result: UninstallResult) -> None:
+    """Remove persona agent files via Installer.uninstall_personas()."""
+    if not plan.persona_dir or plan.persona_count == 0:
+        return
+
+    try:
+        installer = Installer()
+        count = installer.uninstall_personas()
+        if count > 0:
+            result.actions.append(f"Removed {count} persona agent(s)")
+    except OSError as e:
+        result.errors.append(f"Failed to remove persona agents: {e}")
 
 
 def _remove_monitoring(plan: UninstallPlan, result: UninstallResult) -> None:

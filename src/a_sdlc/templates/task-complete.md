@@ -64,6 +64,20 @@ When this skill is invoked after subagent dispatch (from `/sdlc:task-start` or `
 
 If no review evidence is found, proceed with the full review cycle below.
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading task context, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze task metadata and PRD content for domain signals
+2. Assemble persona panel — QA Engineer leads review, Security Engineer as advisor
+3. Display panel to user
+
 ### Self-Review Phase
 
 Before finalizing completion, the implementing agent performs a structured self-review.
@@ -247,6 +261,20 @@ mcp__asdlc__submit_self_review(
 
 Proceed to Phase 2 (Orchestrator Review Dispatch).
 
+### Round-Table: Task Review (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, extend the review step:
+
+Execute round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives task content, changes made, and acceptance criteria
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas for domain-specific review:
+   - QA (lead): Test coverage, acceptance criteria verification, edge cases
+   - Security (advisor): Vulnerability check, compliance, credential handling
+   - Domain leads: Implementation quality from their perspective
+4. Synthesize review findings — each finding attributed to its persona
+5. Present before proceeding with completion
+
 ### Phase 2: Orchestrator Review Dispatch
 
 After self-review passes and evidence is submitted via `submit_self_review()`, the task-complete orchestrator runs the review dispatch sequence. This follows the same pattern as sprint-run Step 4.4.
@@ -289,7 +317,7 @@ Task(
          - 'request_changes' if issues found (list specific fixes needed)
          - 'escalate' if you cannot determine correctness
          ",
-  subagent_type="general-purpose"
+  subagent_type="sdlc-qa-engineer"
 )
 ```
 
@@ -378,7 +406,7 @@ while unresolved critical findings exist AND review_round <= max_rounds:
            1. Call mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')
            2. Do NOT call update_task(status='completed') — the orchestrator handles completion
            ",
-    subagent_type="general-purpose"
+    subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}"
   )
 
   ## 13b: Verify updated self-review
@@ -406,7 +434,7 @@ while unresolved critical findings exist AND review_round <= max_rounds:
 
            Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with your verdict.
            ",
-    subagent_type="general-purpose"
+    subagent_type="sdlc-qa-engineer"
   )
 
   ## 13d: Read new verdict

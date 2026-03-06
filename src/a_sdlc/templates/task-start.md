@@ -64,6 +64,28 @@ AskUserQuestion({
 
 If no relevant lessons, proceed silently.
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading task context, check for persona agents:
+1. Check `~/.claude/agents/` for `sdlc-*.md` files
+2. If `--solo` specified OR no personas found: round_table_enabled = false
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection & Persona Panel (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze task metadata and component field for domain signals
+2. Assemble persona panel showing which personas are relevant for this task
+3. Display panel in the context section -- which personas will focus on what during review:
+
+```
+Persona Panel for this task:
+  Relevant: {persona_name} — will focus on {domain concern} during review
+  Relevant: {persona_name} — will focus on {domain concern} during review
+```
+
+**Note**: No full round-table discussion for task-start. This is informational only -- shows the user which personas will be active during task-complete review.
+
 ## Display Format
 
 After starting the task, check for relevant codebase context:
@@ -378,7 +400,7 @@ After completing implementation and tests:
 5. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
 6. If you encounter questions you cannot resolve from the provided context, surface them via AskUserQuestion — do NOT guess
 """,
-  subagent_type="general-purpose"
+  subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}"
 )
 ```
 
@@ -415,7 +437,7 @@ After the implementing subagent returns, the orchestrator runs the review dispat
             - 'request_changes' if issues found (list specific fixes needed)
             - 'escalate' if you cannot determine correctness
             ",
-     subagent_type="general-purpose"
+     subagent_type="sdlc-qa-engineer"
    )
    ```
 

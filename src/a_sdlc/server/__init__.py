@@ -1505,6 +1505,15 @@ def complete_sprint(sprint_id: str) -> dict[str, Any]:
     # Get PRD stats
     prds = db.get_sprint_prds(sprint_id)
 
+    # Auto-complete PRDs where all tasks are done
+    completed_prds = []
+    for prd in prds:
+        if prd["status"] == "split":
+            prd_tasks = db.list_tasks(prd["project_id"], prd_id=prd["id"])
+            if prd_tasks and all(t["status"] == "completed" for t in prd_tasks):
+                db.update_prd(prd["id"], status="completed")
+                completed_prds.append(prd["id"])
+
     sprint = db.update_sprint(sprint_id, status="completed")
 
     return {
@@ -1516,6 +1525,7 @@ def complete_sprint(sprint_id: str) -> dict[str, Any]:
             "total_tasks": total,
             "completed_tasks": completed,
             "completion_rate": f"{(completed / total * 100):.0f}%" if total > 0 else "N/A",
+            "prds_completed": completed_prds,
         },
     }
 

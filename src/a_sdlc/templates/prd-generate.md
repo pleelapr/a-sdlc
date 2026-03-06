@@ -81,6 +81,20 @@ If `context.artifacts.scan_status` is `"not_scanned"`:
    Continuing without codebase context...
 ```
 
+### Persona Check (Section A from _round-table-blocks.md)
+
+After loading context, check for persona agents:
+1. Check `~/.claude/agents/` for files matching `sdlc-*.md` pattern
+2. If `--solo` specified OR no personas found: round_table_enabled = false, skip all persona sections
+3. Otherwise: round_table_enabled = true
+
+### Domain Detection (Section B from _round-table-blocks.md)
+
+If round_table_enabled = true:
+1. Analyze the user's description for domain signals
+2. Assemble persona panel — Product Manager always included for PRD generation
+3. Display panel to user
+
 ### 2. Ask Clarifying Questions (Interactive with AskUserQuestion)
 
 **IMPORTANT**: Use the `AskUserQuestion` tool for ALL clarifying questions. This gives users selectable multiple-choice options instead of free-form text. Users can always pick "Other" to provide custom answers.
@@ -122,6 +136,20 @@ Options:
 - "Medium" — Important but not time-sensitive
 - "Low" — Nice to have, can wait
 ```
+
+#### Round-Table: Requirements Enrichment (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run before Round 2:
+
+Execute round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives the user description + Round 1 answers
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas to identify missing requirements from their domains:
+   - PM validates requirement completeness and user story coverage
+   - Domain leads identify technical requirements from their perspective
+   - Security identifies security-related requirements that may be missing
+   - QA identifies testability gaps
+4. Synthesize — present gaps/additions for user to confirm before Round 2
 
 #### Round 2: Scope & Requirements
 
@@ -225,6 +253,20 @@ Round 5 example (if component boundaries are unclear):
 - All ambiguity triggers are resolved
 - User explicitly says scope is clear (via "Other" response)
 - Maximum 6 rounds reached
+
+#### Round-Table: Pre-Generation Review (Section C from _round-table-blocks.md)
+
+If round_table_enabled = true, run after Round 3 and before Step 3:
+
+Execute round-table discussion following `_round-table-blocks.md` Section C:
+1. Build context packages: each persona receives all rounds of Q&A
+2. Detect mode (Agent Teams vs Task tool)
+3. Dispatch personas for final validation before PRD is generated:
+   - Each persona validates that their domain's requirements are adequately captured
+   - PM confirms scope boundaries are clear
+   - Security confirms security requirements are explicit, not implied
+   - QA confirms acceptance criteria are measurable
+4. Synthesize — surface any final gaps for user confirmation before PRD generation
 
 ### 3. Generate PRD Content
 

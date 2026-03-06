@@ -61,9 +61,15 @@
                 <td>{{ prd.updated_at[:10] if prd.updated_at else '-' }}</td>
                 <td>
                     {% if prd.status in ['draft', 'ready'] %}
+                    {% if prd.has_design %}
                     <button class="btn-copy-sm" onclick="copyCommand('/sdlc:prd-split {{ prd.id }}')" title="Copy split command">
                         Split
                     </button>
+                    {% else %}
+                    <button class="btn-copy-sm" onclick="copyCommand('/sdlc:prd-architect {{ prd.id }}')" title="Copy architect command">
+                        Architect
+                    </button>
+                    {% endif %}
                     {% endif %}
                 </td>
             </tr>
