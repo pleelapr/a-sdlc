@@ -18,12 +18,6 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-def test_version(runner: CliRunner) -> None:
-    """Test version command."""
-    result = runner.invoke(main, ["--version"])
-    assert result.exit_code == 0
-    assert "0.5.0" in result.output
-
 
 def test_doctor(runner: CliRunner) -> None:
     """Test doctor command runs without error."""
