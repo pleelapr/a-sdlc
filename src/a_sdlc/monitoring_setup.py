@@ -174,23 +174,23 @@ def install_monitoring_files(force: bool = False) -> tuple[bool, str]:
         # Copy langfuse-compose.yaml
         if force or not LANGFUSE_COMPOSE_PATH.exists():
             pkg_files = importlib.resources.files("a_sdlc.monitoring_files")
-            compose_content = (pkg_files / "langfuse-compose.yaml").read_text()
-            LANGFUSE_COMPOSE_PATH.write_text(compose_content)
+            compose_content = (pkg_files / "langfuse-compose.yaml").read_text(encoding="utf-8")
+            LANGFUSE_COMPOSE_PATH.write_text(compose_content, encoding="utf-8")
 
         # Copy langfuse-hook.py
         if force or not LANGFUSE_HOOK_PATH.exists():
             pkg_files = importlib.resources.files("a_sdlc.monitoring_files")
-            hook_content = (pkg_files / "langfuse-hook.py").read_text()
-            LANGFUSE_HOOK_PATH.write_text(hook_content)
+            hook_content = (pkg_files / "langfuse-hook.py").read_text(encoding="utf-8")
+            LANGFUSE_HOOK_PATH.write_text(hook_content, encoding="utf-8")
             LANGFUSE_HOOK_PATH.chmod(0o755)
 
         # Generate langfuse.env with fresh secrets
         if force or not LANGFUSE_ENV_PATH.exists():
-            LANGFUSE_ENV_PATH.write_text(_generate_langfuse_env())
+            LANGFUSE_ENV_PATH.write_text(_generate_langfuse_env(), encoding="utf-8")
 
         # Generate top-level docker-compose.yaml
         if force or not DOCKER_COMPOSE_PATH.exists():
-            DOCKER_COMPOSE_PATH.write_text(_generate_docker_compose())
+            DOCKER_COMPOSE_PATH.write_text(_generate_docker_compose(), encoding="utf-8")
 
         return True, f"Monitoring files installed to {MONITORING_DIR}"
 

@@ -73,7 +73,7 @@ class LocalArtifactPlugin(ArtifactPlugin):
 
         # Write markdown content
         artifact_path = self._get_artifact_path(artifact.id)
-        artifact_path.write_text(artifact.content)
+        artifact_path.write_text(artifact.content, encoding="utf-8")
 
         # Store metadata
         self._metadata[artifact.id] = {
@@ -97,7 +97,7 @@ class LocalArtifactPlugin(ArtifactPlugin):
         if not artifact_path.exists():
             return None
 
-        content = artifact_path.read_text()
+        content = artifact_path.read_text(encoding="utf-8")
 
         # Get metadata if available
         metadata = self._metadata.get(artifact_id, {})

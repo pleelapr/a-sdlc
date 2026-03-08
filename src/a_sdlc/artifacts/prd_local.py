@@ -93,7 +93,7 @@ class LocalPRDPlugin(PRDPlugin):
 
         # Write markdown content
         prd_path = self._get_prd_path(prd.id)
-        prd_path.write_text(prd.content)
+        prd_path.write_text(prd.content, encoding="utf-8")
 
         # Store metadata
         self._metadata[prd.id] = {
@@ -123,7 +123,7 @@ class LocalPRDPlugin(PRDPlugin):
         if not prd_path.exists():
             return None
 
-        content = prd_path.read_text()
+        content = prd_path.read_text(encoding="utf-8")
 
         # Get metadata if available
         metadata = self._metadata.get(prd_id, {})

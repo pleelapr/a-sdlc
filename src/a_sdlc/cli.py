@@ -2452,7 +2452,7 @@ def prd_push(prd_id_or_file: str, force: bool) -> None:
     if Path(prd_id_or_file).exists():
         # It's a file path
         filepath = Path(prd_id_or_file)
-        content = filepath.read_text()
+        content = filepath.read_text(encoding="utf-8")
         prd_obj = PRD.from_file(str(filepath), content)
 
         # Store in local storage first
@@ -2866,7 +2866,7 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
     ]:
         artifact_path = artifacts_dir / f"{artifact_name}.md"
         if artifact_path.exists():
-            context[artifact_name] = artifact_path.read_text()
+            context[artifact_name] = artifact_path.read_text(encoding="utf-8")
             console.print(f"   [green]✓[/green] {artifact_name}")
         else:
             console.print(

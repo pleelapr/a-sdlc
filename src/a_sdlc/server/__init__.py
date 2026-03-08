@@ -1856,14 +1856,14 @@ def _ensure_gitignore_entry(repo_root: Path, entry: str) -> None:
     """Ensure an entry exists in .gitignore."""
     gitignore = repo_root / ".gitignore"
     if gitignore.exists():
-        content = gitignore.read_text()
+        content = gitignore.read_text(encoding="utf-8")
         if entry not in content.splitlines():
-            with open(gitignore, "a") as f:
+            with open(gitignore, "a", encoding="utf-8") as f:
                 if not content.endswith("\n"):
                     f.write("\n")
                 f.write(f"{entry}\n")
     else:
-        gitignore.write_text(f"{entry}\n")
+        gitignore.write_text(f"{entry}\n", encoding="utf-8")
 
 
 @mcp.tool()

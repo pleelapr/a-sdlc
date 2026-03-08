@@ -285,7 +285,7 @@ def process_transcript(langfuse, session_id: str, transcript_path: str, state: d
     turn_count = session_state.get("turn_count", 0)
 
     # Read transcript
-    lines = transcript_file.read_text().strip().split("\n")
+    lines = transcript_file.read_text(encoding="utf-8").strip().split("\n")
     total_lines = len(lines)
 
     if last_line >= total_lines:

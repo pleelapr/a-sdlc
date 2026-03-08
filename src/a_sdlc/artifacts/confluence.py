@@ -1386,7 +1386,7 @@ class ConfluencePlugin(ArtifactPlugin):
             return published
 
         for md_file in artifacts_dir.glob("*.md"):
-            content = md_file.read_text()
+            content = md_file.read_text(encoding="utf-8")
             artifact = Artifact.from_file(str(md_file), content)
 
             try:

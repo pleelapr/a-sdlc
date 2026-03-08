@@ -18,6 +18,36 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _mock_doctor_externals():
+    """Auto-mock slow external calls used by the doctor command.
+
+    The doctor command checks Docker, monitoring services (HTTP to localhost
+    ports 13000/8080 with 5s timeouts each), SonarQube, and Playwright.
+    Without mocking, each doctor test waits ~15s for these timeouts.
+    """
+    with patch("a_sdlc.cli.check_docker_available", return_value=False), \
+         patch("a_sdlc.cli.check_services_health", return_value={
+             "langfuse_reachable": False,
+             "langfuse_url": "http://localhost:13000 (not reachable)",
+             "signoz_reachable": False,
+             "signoz_url": "http://localhost:8080 (not reachable)",
+             "services_running": False,
+         }), \
+         patch("a_sdlc.cli.verify_monitoring_setup", return_value={
+             "files_ready": False,
+             "settings_ready": False,
+             "ready": False,
+             "hook_registered": False,
+             "otel_configured": False,
+         }), \
+         patch("a_sdlc.cli.verify_sonarqube_setup", return_value={
+             "ready": False,
+             "host_url_configured": False,
+         }):
+        yield
+
+
 
 def test_doctor(runner: CliRunner) -> None:
     """Test doctor command runs without error."""
@@ -1226,7 +1256,7 @@ class TestTemplateGracefulDegradation:
         template_dir = installer._get_template_dir()
         template_path = template_dir / filename
         assert template_path.exists(), f"Template {filename} not found in {template_dir}"
-        return template_path.read_text()
+        return template_path.read_text(encoding="utf-8")
 
     def test_full_templates_have_roundtable_enabled_check(self) -> None:
         """All full round-table templates must contain the round_table_enabled variable."""

@@ -311,8 +311,8 @@ class Installer:
             if not target_file.exists():
                 results[name] = False
                 continue
-            source_content = persona_file.read_text()
-            target_content = target_file.read_text()
+            source_content = persona_file.read_text(encoding="utf-8")
+            target_content = target_file.read_text(encoding="utf-8")
             results[name] = source_content == target_content
         return results
 
@@ -334,8 +334,8 @@ class Installer:
                 continue
 
             # Simple content comparison
-            source_content = template_file.read_text()
-            target_content = target_file.read_text()
+            source_content = template_file.read_text(encoding="utf-8")
+            target_content = target_file.read_text(encoding="utf-8")
             results[name] = source_content == target_content
 
         return results

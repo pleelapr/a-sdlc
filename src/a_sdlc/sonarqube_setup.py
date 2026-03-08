@@ -516,7 +516,7 @@ def generate_code_quality_artifact(
     artifact_path = artifacts_dir / "code-quality.md"
 
     try:
-        artifact_path.write_text(report)
+        artifact_path.write_text(report, encoding="utf-8")
         return True, f"Code quality report generated: {artifact_path}"
     except OSError as e:
         return False, f"Failed to write artifact: {e}"

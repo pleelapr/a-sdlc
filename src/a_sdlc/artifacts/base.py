@@ -258,7 +258,7 @@ class ArtifactPlugin(ABC):
 
         synced = 0
         for md_file in artifacts_dir.glob("*.md"):
-            content = md_file.read_text()
+            content = md_file.read_text(encoding="utf-8")
             artifact = Artifact.from_file(str(md_file), content)
             self.store_artifact(artifact)
             synced += 1

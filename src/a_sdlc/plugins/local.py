@@ -165,7 +165,7 @@ class LocalPlugin(TaskPlugin):
 
         # Write task file
         task_path = self._get_task_path(task.id, task.status)
-        task_path.write_text(self._task_to_markdown(task))
+        task_path.write_text(self._task_to_markdown(task), encoding="utf-8")
 
         # Also save JSON for easy parsing
         json_path = task_path.with_suffix(".json")
@@ -252,13 +252,13 @@ class LocalPlugin(TaskPlugin):
                 old_json.unlink()
 
             # Write to new location
-            new_path.write_text(self._task_to_markdown(task))
+            new_path.write_text(self._task_to_markdown(task), encoding="utf-8")
             with open(new_path.with_suffix(".json"), "w") as f:
                 json.dump(task.to_dict(), f, indent=2)
         else:
             # Update in place
             task_path = self._get_task_path(task_id, task.status)
-            task_path.write_text(self._task_to_markdown(task))
+            task_path.write_text(self._task_to_markdown(task), encoding="utf-8")
             with open(task_path.with_suffix(".json"), "w") as f:
                 json.dump(task.to_dict(), f, indent=2)
 
