@@ -1,15 +1,17 @@
-"""Tests for init file generation (CLAUDE.md, lesson-learn.md)."""
+"""Tests for init file generation (CLAUDE.md, lesson-learn.md, config.yaml)."""
 
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from a_sdlc.core.init_files import (
     _load_template,
     ensure_global_lesson_learn,
     generate_claude_md,
+    generate_config_yaml,
     generate_init_files,
     generate_lesson_learn,
 )
@@ -46,6 +48,12 @@ class TestLoadTemplate:
         assert "MUST" in content
         assert "SHOULD" in content
         assert "MAY" in content
+
+    def test_loads_config_template(self):
+        content = _load_template("config.template.yaml")
+        assert "testing:" in content
+        assert "review:" in content
+        assert "git:" in content
 
     def test_raises_for_missing_template(self):
         with pytest.raises(FileNotFoundError):
@@ -147,6 +155,80 @@ class TestGenerateLessonLearn:
         assert "## Documentation" in content
 
 
+class TestGenerateConfigYaml:
+    """Tests for generate_config_yaml."""
+
+    def test_creates_config_yaml(self, temp_project):
+        result = generate_config_yaml(temp_project)
+        assert result["status"] == "created"
+        config_file = temp_project / ".sdlc" / "config.yaml"
+        assert config_file.exists()
+
+    def test_creates_sdlc_directory(self, temp_project):
+        generate_config_yaml(temp_project)
+        assert (temp_project / ".sdlc").is_dir()
+
+    def test_skips_existing_config(self, temp_project):
+        sdlc_dir = temp_project / ".sdlc"
+        sdlc_dir.mkdir()
+        config_file = sdlc_dir / "config.yaml"
+        config_file.write_text("existing: true")
+
+        result = generate_config_yaml(temp_project)
+        assert result["status"] == "exists"
+        assert config_file.read_text() == "existing: true"
+
+    def test_overwrites_when_forced(self, temp_project):
+        sdlc_dir = temp_project / ".sdlc"
+        sdlc_dir.mkdir()
+        config_file = sdlc_dir / "config.yaml"
+        config_file.write_text("old: true")
+
+        result = generate_config_yaml(temp_project, overwrite=True)
+        assert result["status"] == "created"
+        assert "testing:" in config_file.read_text()
+
+    def test_contains_testing_section(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "testing:" in content
+        assert "commands:" in content
+        assert "coverage:" in content
+        assert "relevance:" in content
+
+    def test_contains_review_section(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "review:" in content
+        assert "enabled: false" in content  # master toggle defaults off
+        assert "self_review:" in content
+        assert "subagent_review:" in content
+        assert "max_rounds:" in content
+        assert "evidence_required:" in content
+
+    def test_contains_git_section(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "git:" in content
+        assert "auto_commit:" in content
+        assert "auto_pr:" in content
+        assert "auto_merge:" in content
+        assert "worktree_enabled:" in content
+
+    def test_has_yaml_comments(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "#" in content
+
+    def test_is_valid_yaml(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        assert "testing" in parsed
+        assert "review" in parsed
+        assert "git" in parsed
+
+
 class TestEnsureGlobalLessonLearn:
     """Tests for ensure_global_lesson_learn."""
 
@@ -171,13 +253,14 @@ class TestGenerateInitFiles:
 
     def test_generates_all_files(self, temp_project, temp_global_dir):
         result = generate_init_files(temp_project, "My Project")
-        assert len(result["results"]) == 3
+        assert len(result["results"]) == 4
 
         statuses = [r["status"] for r in result["results"]]
-        assert statuses == ["created", "created", "created"]
+        assert statuses == ["created", "created", "created", "created"]
 
         assert (temp_project / "CLAUDE.md").exists()
         assert (temp_project / ".sdlc" / "lesson-learn.md").exists()
+        assert (temp_project / ".sdlc" / "config.yaml").exists()
         assert (temp_global_dir / "lesson-learn.md").exists()
 
     def test_idempotent_on_second_run(self, temp_project, temp_global_dir):
@@ -185,7 +268,7 @@ class TestGenerateInitFiles:
         result = generate_init_files(temp_project, "My Project")
 
         statuses = [r["status"] for r in result["results"]]
-        assert statuses == ["exists", "exists", "exists"]
+        assert statuses == ["exists", "exists", "exists", "exists"]
 
     def test_preserves_existing_files(self, temp_project, temp_global_dir):
         # Pre-create files with custom content

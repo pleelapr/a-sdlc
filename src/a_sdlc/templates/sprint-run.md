@@ -811,7 +811,7 @@ outcomes gracefully in all downstream consumers (build_context_package, present_
 
 After the implementing subagent returns for a task, the orchestrator runs the review dispatch sequence before marking the task complete. This ensures review is handled at the orchestrator layer, not inside the implementing subagent.
 
-**Config check**: Read `.sdlc/config.yaml` — if the `review` section exists AND `review.self_review.enabled` is `true`, review is enabled. If the entire `review` section is absent, review is disabled and the orchestrator skips directly to step 5 (complete task).
+**Config check**: Read `.sdlc/config.yaml` — if `review.enabled` is `true`, the review system is active. If `review.enabled` is `false` or the entire `review` section is absent, review is disabled and the orchestrator skips directly to step 5 (complete task). When the master toggle is on, sub-features default to enabled: `self_review` defaults to `true`, `subagent_review` defaults to `true`.
 
 #### Review Dispatch Sequence
 
@@ -819,8 +819,8 @@ After the implementing subagent returns for a task, the orchestrator runs the re
    - If missing → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review not submitted')` — task cannot complete
    - If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed')` — task cannot complete
 
-2. **Check subagent review config**: Read `.sdlc/config.yaml` `review.subagent_review.enabled`
-   - If disabled or absent → skip to step 5 (complete task)
+2. **Check subagent review config**: Read `.sdlc/config.yaml` `review.subagent_review.enabled` (defaults to `true` when `review.enabled` is `true`)
+   - If explicitly set to `false` → skip to step 5 (complete task)
 
 3. **Dispatch reviewer subagent**: Launch a fresh Task agent:
    ```
@@ -1687,7 +1687,7 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
 
             # --- Orchestrator Review Dispatch (Step 4.4) ---
             review_config = load_review_config()  # from .sdlc/config.yaml
-            if review_config.get("self_review", {}).get("enabled", False):
+            if review_config.get("enabled", False):
                 review_result = orchestrator_review_dispatch(task, review_config)
                 # review_result: "approved", "blocked", or "escalated"
 
@@ -1902,8 +1902,10 @@ def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
         mcp__asdlc__block_task(task_id=task_id, reason="self-review failed")
         return "blocked"
 
-    # 2. Check if subagent review is enabled
-    if not review_config.get("subagent_review", {}).get("enabled", False):
+    # 2. Check if subagent review is enabled (defaults to True when review.enabled is True)
+    subagent_cfg = review_config.get("subagent_review", {})
+    subagent_enabled = subagent_cfg.get("enabled", True) if isinstance(subagent_cfg, dict) else bool(subagent_cfg)
+    if not subagent_enabled:
         return "approved"  # Skip subagent review, proceed to completion
 
     # 3. Dispatch reviewer subagent
@@ -2106,7 +2108,7 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
         review_config = load_review_config()  # from .sdlc/config.yaml
 
         for task_id, task_outcome in task_outcomes.items():
-            if task_outcome["verdict"] == "PASS" and review_config.get("self_review", {}).get("enabled", False):
+            if task_outcome["verdict"] == "PASS" and review_config.get("enabled", False):
                 task = get_task_by_id(task_id)
                 review_result = orchestrator_review_dispatch(task, review_config)
                 if review_result == "approved":

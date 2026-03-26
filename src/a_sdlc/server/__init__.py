@@ -91,6 +91,15 @@ def get_context() -> dict[str, Any]:
         }
 
     project = db.get_project(project_id)
+
+    # Ensure .sdlc/config.yaml exists (auto-create with defaults if missing)
+    project_path = Path(project["path"])
+    config_path = project_path / ".sdlc" / "config.yaml"
+    if not config_path.exists():
+        from a_sdlc.core.init_files import generate_config_yaml
+
+        generate_config_yaml(project_path)
+
     tasks = db.list_tasks(project_id)
     sprints = db.list_sprints(project_id)
     prds = db.list_prds(project_id)
@@ -198,6 +207,7 @@ def init_project(
         has_claude_md = (project_path / "CLAUDE.md").exists()
         has_lesson_learn = (project_path / ".sdlc" / "lesson-learn.md").exists()
         has_sdlc_dir = (project_path / ".sdlc").exists()
+        has_config_yaml = (project_path / ".sdlc" / "config.yaml").exists()
 
         return {
             "status": "exists",
@@ -207,6 +217,7 @@ def init_project(
                 "claude_md": has_claude_md,
                 "lesson_learn": has_lesson_learn,
                 "sdlc_dir": has_sdlc_dir,
+                "config_yaml": has_config_yaml,
             },
         }
 

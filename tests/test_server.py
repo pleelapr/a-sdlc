@@ -115,6 +115,61 @@ class TestGetContextArtifacts:
 
 
 # =============================================================================
+# get_context — config.yaml auto-creation
+# =============================================================================
+
+
+class TestGetContextConfigAutoCreate:
+    """Test that get_context() auto-creates .sdlc/config.yaml when missing."""
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_creates_config_yaml_when_missing(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """When project exists but config.yaml is missing, get_context() creates it."""
+        from a_sdlc.server import get_context
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_mocks(mock_db, str(mock_project_dir))
+
+        # No config.yaml exists initially
+        assert not (mock_project_dir / ".sdlc" / "config.yaml").exists()
+
+        result = get_context()
+
+        assert result["status"] == "ok"
+        config_path = mock_project_dir / ".sdlc" / "config.yaml"
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert "testing:" in content
+        assert "review:" in content
+        assert "git:" in content
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_does_not_overwrite_existing_config(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """When config.yaml already exists, get_context() leaves it alone."""
+        from a_sdlc.server import get_context
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_mocks(mock_db, str(mock_project_dir))
+
+        # Create pre-existing config.yaml
+        sdlc_dir = mock_project_dir / ".sdlc"
+        sdlc_dir.mkdir(parents=True)
+        config_path = sdlc_dir / "config.yaml"
+        config_path.write_text("custom: true")
+
+        result = get_context()
+
+        assert result["status"] == "ok"
+        assert config_path.read_text() == "custom: true"
+
+
+# =============================================================================
 # get_sprint_tasks — group_by_prd parameter
 # =============================================================================
 
@@ -1667,6 +1722,7 @@ class TestInitProjectExistingContext:
         sdlc_dir = mock_project_dir / ".sdlc"
         sdlc_dir.mkdir()
         (sdlc_dir / "lesson-learn.md").write_text("# Lessons")
+        (sdlc_dir / "config.yaml").write_text("testing: {}")
 
         result = init_project()
 
@@ -1674,6 +1730,7 @@ class TestInitProjectExistingContext:
         assert result["init_files"]["claude_md"] is True
         assert result["init_files"]["lesson_learn"] is True
         assert result["init_files"]["sdlc_dir"] is True
+        assert result["init_files"]["config_yaml"] is True
 
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
@@ -1692,6 +1749,7 @@ class TestInitProjectExistingContext:
         assert result["init_files"]["claude_md"] is False
         assert result["init_files"]["lesson_learn"] is False
         assert result["init_files"]["sdlc_dir"] is False
+        assert result["init_files"]["config_yaml"] is False
 
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
@@ -1713,6 +1771,7 @@ class TestInitProjectExistingContext:
         assert result["init_files"]["claude_md"] is True
         assert result["init_files"]["lesson_learn"] is False
         assert result["init_files"]["sdlc_dir"] is False
+        assert result["init_files"]["config_yaml"] is False
 
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")

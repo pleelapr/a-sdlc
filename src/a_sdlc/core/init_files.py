@@ -1,9 +1,9 @@
 """
 Init file generation for a-sdlc projects.
 
-Generates CLAUDE.md and lesson-learn.md files during project initialization.
-Used by both the CLI `a-sdlc init` command and the MCP `init_project()` tool
-to ensure identical output regardless of init path.
+Generates CLAUDE.md, lesson-learn.md, and config.yaml files during project
+initialization. Used by both the CLI `a-sdlc init` command and the MCP
+`init_project()` tool to ensure identical output regardless of init path.
 """
 
 from importlib import resources
@@ -112,6 +112,41 @@ def generate_lesson_learn(
     }
 
 
+def generate_config_yaml(
+    project_path: Path,
+    overwrite: bool = False,
+) -> dict[str, str]:
+    """Generate .sdlc/config.yaml for the project.
+
+    Args:
+        project_path: Path to the project root directory.
+        overwrite: If False, skip if config.yaml already exists.
+
+    Returns:
+        Dict with 'status' ('created', 'exists') and 'path'.
+    """
+    sdlc_dir = project_path / ".sdlc"
+    sdlc_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = sdlc_dir / "config.yaml"
+
+    if config_path.exists() and not overwrite:
+        return {
+            "status": "exists",
+            "path": str(config_path),
+            "message": "config.yaml already exists. Skipped.",
+        }
+
+    template = _load_template("config.template.yaml")
+    config_path.write_text(template, encoding="utf-8")
+
+    return {
+        "status": "created",
+        "path": str(config_path),
+        "message": "Project config.yaml created.",
+    }
+
+
 def ensure_global_lesson_learn() -> dict[str, str]:
     """Ensure global lesson-learn.md exists at ~/.a-sdlc/lesson-learn.md.
 
@@ -164,6 +199,7 @@ def generate_init_files(
 
     results.append(generate_claude_md(project_path, project_name, overwrite))
     results.append(generate_lesson_learn(project_path, overwrite))
+    results.append(generate_config_yaml(project_path, overwrite))
     results.append(ensure_global_lesson_learn())
 
     return {"results": results}

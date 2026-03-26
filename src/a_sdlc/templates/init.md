@@ -56,8 +56,9 @@ This will:
 2. Create the project in the a-sdlc database
 3. Generate `CLAUDE.md` in the project root (with lesson-learn and correction logging rules)
 4. Generate `.sdlc/lesson-learn.md` (project-level lessons tracking)
-5. Generate `~/.a-sdlc/lesson-learn.md` (global lessons, if it doesn't exist)
-6. Return the project context with ID format examples
+5. Generate `.sdlc/config.yaml` (default testing, review, and git configuration)
+6. Generate `~/.a-sdlc/lesson-learn.md` (global lessons, if it doesn't exist)
+7. Return the project context with ID format examples
 
 **Note:** If `CLAUDE.md` or `lesson-learn.md` already exists, they will NOT be overwritten.
 
@@ -212,55 +213,11 @@ Then update `.gitignore` (create if it doesn't exist):
 .sdlc/artifacts/
 ```
 
-### Step 6: Generate config.yaml
+### Step 6: Customize config.yaml
 
-Create `.sdlc/config.yaml` with default testing, review, and git configuration (if it doesn't already exist):
+`.sdlc/config.yaml` was auto-generated in Step 3 with default `testing`, `review`, and `git` sections.
 
-```yaml
-testing:
-  defaults:
-    # Required test types for all tasks (unless overridden or deemed irrelevant)
-    required:
-    - unit
-    - integration
-    # Available test types: unit, integration, e2e, performance, security, accessibility
-  commands:
-    # Commands to run for each test type (project-specific)
-    unit: ""
-    integration: ""
-    e2e: ""
-  coverage:
-    # Minimum coverage threshold (percentage) — 0 to disable
-    min_threshold: 0
-  relevance:
-    # Smart relevance detection — skip test types that don't apply to a change
-    # When enabled, the reviewer assesses which test types are relevant based on change scope
-    enabled: true
-
-review:
-  self_review:
-    # Whether implementing agent must self-review before subagent review
-    enabled: true
-  subagent_review:
-    # Whether a fresh subagent performs independent review after self-review
-    enabled: true
-  # Maximum self-heal iterations before escalating to user
-  max_rounds: 3
-  # Require actual test command output before marking task complete
-  evidence_required: true
-
-git:
-  # Allow agent to commit changes automatically (default: false — agent stages only)
-  auto_commit: false
-  # Allow agent to create pull requests
-  auto_pr: false
-  # Allow agent to merge branches
-  auto_merge: false
-  # Use git worktree isolation for PRD execution
-  worktree_enabled: false
-```
-
-**Customization prompt**: After writing the default config, ask the user:
+**Customization prompt**: Ask the user:
 
 > "Default testing and review configuration has been created in `.sdlc/config.yaml`.
 >
@@ -269,11 +226,7 @@ git:
 > - **integration**: Command to run integration tests (leave empty if not applicable)
 > - **e2e**: Command to run end-to-end tests (leave empty if not applicable)"
 
-If the user provides test commands, update the `testing.commands` section accordingly.
-
-**If `.sdlc/config.yaml` already exists**, read it and check whether `testing`, `review`, and `git` sections are present:
-- If all sections exist: No changes needed
-- If sections are missing: Append the missing sections to the existing file (preserve existing content like `sonarqube` configuration)
+If the user provides test commands, update the `testing.commands` section in `.sdlc/config.yaml` accordingly.
 
 ## MCP Tools Available
 

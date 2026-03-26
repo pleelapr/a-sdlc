@@ -86,8 +86,9 @@ Before finalizing completion, the implementing agent performs a structured self-
 
 Read `.sdlc/config.yaml` and check the `review` and `testing` sections.
 
-- If `review.self_review.enabled` is `false` OR `.sdlc/config.yaml` does not exist, skip to **Step 6** (Legacy DoD Checklist).
-- Otherwise, proceed with Steps 2-5.
+- If `review.enabled` is `false` OR `.sdlc/config.yaml` does not exist, skip to **Step 6** (Legacy DoD Checklist).
+- If `review.enabled` is `true` but `review.self_review.enabled` is explicitly `false`, skip to **Phase 2: Orchestrator Review Dispatch**.
+- Otherwise, proceed with Steps 2-5. When `review.enabled` is `true`, `self_review` defaults to enabled.
 - Note the `review.max_rounds` value (default: 3) for the self-heal loop.
 - Note `review.evidence_required` (default: true) for test output requirements.
 
@@ -281,7 +282,7 @@ After self-review passes and evidence is submitted via `submit_self_review()`, t
 
 **Step 7: Check Review Configuration**
 
-Read `.sdlc/config.yaml` — if the `review` section exists AND `review.self_review.enabled` is `true`, review is enabled. If the entire `review` section is absent, review is disabled — skip Phase 2 and Phase 3 entirely and proceed to Phase 4 (Evidence-Based Completion).
+Read `.sdlc/config.yaml` — if `review.enabled` is `true`, the review system is active. If `review.enabled` is `false` or the entire `review` section is absent, review is disabled — skip Phase 2 and Phase 3 entirely and proceed to Phase 4 (Evidence-Based Completion).
 
 **Step 8: Verify Self-Review Evidence**
 
@@ -295,8 +296,8 @@ Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` to verify self-revie
 
 Read `.sdlc/config.yaml` and check `review.subagent_review.enabled`:
 
-- If `review.subagent_review.enabled` is `false` OR the section does not exist → skip Phase 2 and Phase 3, proceed to Phase 4 (Evidence-Based Completion).
-- Otherwise, continue with Step 10.
+- If `review.subagent_review.enabled` is explicitly `false` → skip Phase 2 and Phase 3, proceed to Phase 4 (Evidence-Based Completion).
+- Otherwise (including when `subagent_review` is absent — it defaults to `true` when `review.enabled` is `true`), continue with Step 10.
 
 **Step 10: Dispatch Reviewer Subagent**
 
