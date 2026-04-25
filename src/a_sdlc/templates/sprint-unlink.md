@@ -21,7 +21,7 @@ Remove the link between a local sprint and its external system sprint/cycle. The
 ### 1. Call Unlink Sprint MCP Tool
 
 ```
-mcp__asdlc__unlink_sprint(sprint_id="SPRINT-001")
+mcp__asdlc__manage_sync_mapping(action="unlink", entity_type="sprint", entity_id="SPRINT-001")
 ```
 
 ### 2. Review Unlink Result

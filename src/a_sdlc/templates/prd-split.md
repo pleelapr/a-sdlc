@@ -1267,6 +1267,222 @@ The tool will:
 
 ---
 
+### Step 6.5: Post-Split Verification
+
+After tasks are persisted, run server-side requirement parsing and coverage verification to ensure the split is complete.
+
+#### 6.5.1: Parse Requirements (MCP Tool)
+
+Call the `parse_requirements` MCP tool to extract and classify PRD requirements server-side. This ensures the database has up-to-date requirement records with depth classifications for the coverage report.
+
+```
+parse_result = mcp__asdlc__parse_requirements(prd_id="{prd_id}")
+```
+
+Display the result:
+```
+Requirements parsed: {parse_result.total} total
+  - {parse_result.counts.FR} Functional Requirements
+  - {parse_result.counts.NFR} Non-Functional Requirements
+  - {parse_result.counts.AC} Acceptance Criteria
+
+{If parse_result.unrecognized_candidates is non-empty:}
+  Unrecognized candidates found (may be requirements with non-standard IDs):
+  {list unrecognized_candidates}
+```
+
+If `parse_requirements` returns `status: "not_found"`, the PRD was not saved correctly. Report an error and stop.
+
+#### 6.5.2: Coverage Report (MCP Tool)
+
+Call the `get_quality_report` MCP tool to verify that all parsed requirements are linked to tasks:
+
+```
+coverage = mcp__asdlc__get_quality_report("coverage", prd_id="{prd_id}")
+```
+
+Display the coverage summary:
+```
+Coverage Report for PRD {prd_id}:
+  - Linkage: {coverage.linkage_pct}% ({coverage.linked}/{coverage.total} requirements linked to tasks)
+  - Completion: {coverage.completion_pct}% ({coverage.completed_tasks}/{coverage.total_tasks} tasks completed)
+
+{If coverage.orphaned is non-empty:}
+  Orphaned requirements (not linked to any task):
+  {list each orphaned requirement with ID and summary}
+
+{If coverage.behavioral_gaps is non-empty:}
+  Behavioral requirements lacking test-evidence tasks:
+  {list each behavioral gap}
+```
+
+If orphaned requirements are found (AC-014), present them for resolution:
+
+```
+AskUserQuestion([
+  {
+    question: "Coverage report found {N} orphaned requirements not linked to any task. How to proceed?",
+    header: "Orphaned Requirements",
+    options: [
+      { label: "Add tasks", description: "Return to Step 3 to design tasks covering orphaned requirements" },
+      { label: "Acknowledge gaps", description: "Orphaned requirements are intentional — proceed" },
+      { label: "Cancel", description: "Abort and rethink the split" }
+    ]
+  }
+])
+```
+
+- If **Add tasks**: Return to Step 3 (Plan Agent) with orphaned requirement IDs
+- If **Acknowledge gaps**: Record and proceed
+- If **Cancel**: Abort
+
+#### 6.5.3: Cross-PRD Integration Recommendations (FR-019)
+
+Check if the project has other active PRDs that may interact with this one:
+
+```
+all_prds = mcp__asdlc__list_prds(status="approved")
+# Also check draft and split PRDs
+draft_prds = mcp__asdlc__list_prds(status="draft")
+split_prds = mcp__asdlc__list_prds(status="split")
+```
+
+If other PRDs exist, scan for potential integration points:
+1. Compare affected components across PRDs (from task component assignments)
+2. Look for shared files in "Files to Modify" across PRDs
+3. Identify overlapping requirement areas (e.g., both PRDs touch authentication)
+
+If integration points are found:
+```
+Cross-PRD Integration Recommendations:
+
+- PRD {other_prd_id} ("{other_prd_title}") shares component "{component}":
+  Tasks {task_ids} may need coordination with tasks from {other_prd_id}.
+
+- PRD {other_prd_id} modifies "{shared_file}":
+  Consider dependency ordering to avoid merge conflicts.
+
+Recommendation: Review these integration points during sprint planning.
+```
+
+If no other PRDs exist or no integration points found:
+```
+No cross-PRD integration concerns identified.
+```
+
+---
+
+### Step 6.6: Challenge Gate (Post-Split)
+
+**This gate is conditional on quality configuration. Skip entirely if not configured.**
+
+#### 6.6.1: Check Quality Config
+
+```
+Read: .sdlc/config.yaml → look for quality.enabled and quality.challenge sections
+```
+
+**Skip this entire section if ANY of these are true:**
+- `.sdlc/config.yaml` does not exist
+- `quality.enabled` is `false` or absent
+- `quality.challenge.enabled` is `false`
+- `quality.challenge.gates.split` is `false`
+
+If skipping:
+```
+Challenge gate: skipped (quality challenges not enabled for split)
+```
+Proceed to Step 7.
+
+#### 6.6.2: Initiate Split Challenge
+
+```
+challenge = mcp__asdlc__challenge_artifact(
+    artifact_type="split",
+    artifact_id="{prd_id}"
+)
+```
+
+The challenge tool assembles:
+- The list of tasks created for this PRD
+- Linked requirements and their coverage status
+- The challenge checklist for split reviews
+
+#### 6.6.3: Run Challenger via Task Tool
+
+Launch a challenger agent:
+
+```
+Task:
+  description: "Challenge this task split as a critical reviewer"
+  prompt: |
+    You are a challenger reviewing a PRD-to-task split for completeness and quality.
+
+    {challenge.challenge_prompt}
+
+    ## Coverage Report
+    {coverage report from Step 6.5.2}
+
+    ## Cross-PRD Integration
+    {integration recommendations from Step 6.5.3}
+
+    Focus your review on:
+    - Orphaned requirements not covered by any task (AC-014)
+    - Tasks that are too large or too vague to implement in one session
+    - Missing dependencies between tasks
+    - Component assignments that don't match the architecture
+    - Cross-PRD integration risks that are not addressed
+    - Tasks without clear acceptance criteria
+
+    Return your objections in this format:
+    ---CHALLENGE-OBJECTIONS---
+    - category: coverage|granularity|dependency|assignment|integration|criteria
+      description: "..."
+      severity: blocking|warning
+      requirement_ref: "FR-xxx or AC-xxx if applicable"
+    ---END-OBJECTIONS---
+```
+
+#### 6.6.4: Record and Resolve
+
+Follow the same challenge round loop:
+
+1. Record objections via `mcp__asdlc__record_challenge_round(artifact_type="split", artifact_id="{prd_id}", ...)`
+2. Present objections to user
+3. User addresses (may need to add/modify tasks), accepts risk, or skips (soft gate only)
+4. Re-challenge if needed, up to `quality.challenge.max_rounds`
+5. Check status via `mcp__asdlc__get_challenge_status(artifact_type="split", artifact_id="{prd_id}")`
+
+#### 6.6.5: Gate Enforcement
+
+- If `quality.challenge.gate` is `"hard"` AND unresolved blocking objections remain:
+  ```
+  BLOCKED: Split challenge has unresolved blocking objections.
+  The split cannot be finalized until these are addressed.
+
+  Unresolved:
+  - {objection description}
+
+  Modify the tasks and re-run the challenge.
+  ```
+  **Do not proceed to Step 7. Return to Step 4 (User Approval) to modify the split.**
+
+- If `quality.challenge.gate` is `"soft"` AND unresolved objections remain:
+  ```
+  WARNING: Split challenge has unresolved objections. Proceeding with warnings.
+  Consider addressing these before starting implementation:
+  - {objection description}
+  ```
+  Proceed to Step 7.
+
+- If all objections resolved:
+  ```
+  Split challenge passed. All objections resolved.
+  ```
+  Proceed to Step 7.
+
+---
+
 ### Step 7: Display Results
 
 ```

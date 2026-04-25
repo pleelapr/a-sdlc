@@ -28,8 +28,10 @@ Link an existing local sprint to an external system sprint/cycle for bidirection
 ### 1. Call Link Sprint MCP Tool
 
 ```
-mcp__asdlc__link_sprint(
-    sprint_id="SPRINT-001",
+mcp__asdlc__manage_sync_mapping(
+    action="link",
+    entity_type="sprint",
+    entity_id="SPRINT-001",
     system="linear",
     external_id="ENG-Q1-2025"
 )

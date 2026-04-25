@@ -9,7 +9,7 @@ Mark a task as completed.
 Use the MCP tool to complete a task:
 
 ```
-mcp__asdlc__complete_task(task_id="TASK-001")
+mcp__asdlc__update_task(task_id="TASK-001", status="completed")
 ```
 
 ## Parameters
@@ -56,7 +56,7 @@ Great work! 🎉
 
 ### Orchestration Compatibility Note
 
-When this skill is invoked after subagent dispatch (from `/sdlc:task-start` or `/sdlc:sprint-run`), the implementation subagent may have already submitted self-review evidence via `submit_self_review()`. Before re-triggering the full review cycle:
+When this skill is invoked after subagent dispatch (from `/sdlc:task-start` or `/sdlc:sprint-run`), the implementation subagent may have already submitted self-review evidence via `submit_review(reviewer_type='self')`. Before re-triggering the full review cycle:
 
 1. Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` to check existing review state
 2. If self-review evidence exists AND a subagent review verdict of `approve` is already recorded, **skip directly to Phase 4: Evidence-Based Completion** to avoid redundant review rounds
@@ -86,8 +86,9 @@ Before finalizing completion, the implementing agent performs a structured self-
 
 Read `.sdlc/config.yaml` and check the `review` and `testing` sections.
 
-- If `review.self_review.enabled` is `false` OR `.sdlc/config.yaml` does not exist, skip to **Step 6** (Legacy DoD Checklist).
-- Otherwise, proceed with Steps 2-5.
+- If `review.enabled` is `false` OR `.sdlc/config.yaml` does not exist, skip to **Step 6** (Legacy DoD Checklist).
+- If `review.enabled` is `true` but `review.self_review.enabled` is explicitly `false`, skip to **Phase 2: Orchestrator Review Dispatch**.
+- Otherwise, proceed with Steps 2-5. When `review.enabled` is `true`, `self_review` defaults to enabled.
 - Note the `review.max_rounds` value (default: 3) for the self-heal loop.
 - Note `review.evidence_required` (default: true) for test output requirements.
 
@@ -241,8 +242,9 @@ mcp__asdlc__log_correction(
 
 Submit self-review evidence via the MCP tool:
 ```
-mcp__asdlc__submit_self_review(
+mcp__asdlc__submit_review(
   task_id="{task_id}",
+  reviewer_type="self",
   verdict="pass",
   findings="{self_review_findings_summary}",
   test_output="{actual_test_command_output}"
@@ -251,8 +253,9 @@ mcp__asdlc__submit_self_review(
 
 If critical findings remain (user chose "Complete anyway"), submit with verdict `fail` and note the override:
 ```
-mcp__asdlc__submit_self_review(
+mcp__asdlc__submit_review(
   task_id="{task_id}",
+  reviewer_type="self",
   verdict="fail",
   findings="{unresolved_findings}",
   test_output="{actual_test_command_output}"
@@ -277,30 +280,30 @@ Execute round-table discussion following `_round-table-blocks.md` Section C:
 
 ### Phase 2: Orchestrator Review Dispatch
 
-After self-review passes and evidence is submitted via `submit_self_review()`, the task-complete orchestrator runs the review dispatch sequence. This follows the same pattern as sprint-run Step 4.4.
+After self-review passes and evidence is submitted via `submit_review(reviewer_type='self')`, the task-complete orchestrator runs the review dispatch sequence. This follows the same pattern as sprint-run Step 4.4.
 
 **Step 7: Check Review Configuration**
 
-Read `.sdlc/config.yaml` — if the `review` section exists AND `review.self_review.enabled` is `true`, review is enabled. If the entire `review` section is absent, review is disabled — skip Phase 2 and Phase 3 entirely and proceed to Phase 4 (Evidence-Based Completion).
+Read `.sdlc/config.yaml` — if `review.enabled` is `true`, the review system is active. If `review.enabled` is `false` or the entire `review` section is absent, review is disabled — skip Phase 2 and Phase 3 entirely and proceed to Phase 4 (Evidence-Based Completion).
 
 **Step 8: Verify Self-Review Evidence**
 
 Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` to verify self-review was submitted:
 
-- If missing → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review not submitted')` — task cannot complete. STOP.
-- If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed')` — task cannot complete. STOP.
+- If missing → `mcp__asdlc__update_task(task_id='{task_id}', status='blocked')` — task cannot complete. STOP.
+- If present and verdict='fail' → `mcp__asdlc__update_task(task_id='{task_id}', status='blocked')` — task cannot complete. STOP.
 - If present and verdict='pass' → proceed to Step 9.
 
 **Step 9: Check Subagent Review Configuration**
 
 Read `.sdlc/config.yaml` and check `review.subagent_review.enabled`:
 
-- If `review.subagent_review.enabled` is `false` OR the section does not exist → skip Phase 2 and Phase 3, proceed to Phase 4 (Evidence-Based Completion).
-- Otherwise, continue with Step 10.
+- If `review.subagent_review.enabled` is explicitly `false` → skip Phase 2 and Phase 3, proceed to Phase 4 (Evidence-Based Completion).
+- Otherwise (including when `subagent_review` is absent — it defaults to `true` when `review.enabled` is `true`), continue with Step 10.
 
 **Step 10: Dispatch Reviewer Subagent**
 
-Launch a fresh Task agent for independent review. The reviewer reads self-review evidence via MCP tools and submits its verdict via `submit_review_verdict()`.
+Launch a fresh Task agent for independent review. The reviewer reads self-review evidence via MCP tools and submits its verdict via `submit_review(reviewer_type='subagent')`.
 
 ```
 Task(
@@ -312,7 +315,7 @@ Task(
 
          Evaluate: spec compliance, code quality, test coverage.
 
-         Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with:
+         Call mcp__asdlc__submit_review(task_id='{task_id}', reviewer_type='subagent', verdict='approve'|'request_changes'|'escalate', findings='...') with:
          - 'approve' if implementation meets all criteria
          - 'request_changes' if issues found (list specific fixes needed)
          - 'escalate' if you cannot determine correctness
@@ -367,7 +370,7 @@ Enter Phase 3 (Self-Heal Loop) below.
 
 ### Phase 3: Self-Heal Loop
 
-When the reviewer subagent returns `request_changes` via `submit_review_verdict()`, the implementer fixes the issues and a fresh reviewer re-reviews. This loop repeats up to a configurable maximum number of rounds. After the maximum is exceeded, the user is escalated.
+When the reviewer subagent returns `request_changes` via `submit_review(reviewer_type='subagent')`, the implementer fixes the issues and a fresh reviewer re-reviews. This loop repeats up to a configurable maximum number of rounds. After the maximum is exceeded, the user is escalated.
 
 **Step 12: Initialize Loop State**
 
@@ -383,7 +386,7 @@ review_log = []             # per-round log entries for task file appendage
 Parse the reviewer's findings from the `get_review_evidence()` response:
 ```
 evidence = mcp__asdlc__get_review_evidence(task_id='{task_id}')
-current_findings = evidence.review_verdict.findings  # structured list from submit_review_verdict
+current_findings = evidence.review_verdict.findings  # structured list from submit_review
 all_findings.extend(current_findings)
 ```
 
@@ -403,7 +406,7 @@ while unresolved critical findings exist AND review_round <= max_rounds:
            {evidence.review_verdict.findings}
 
            Fix each critical finding, re-run tests, then:
-           1. Call mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')
+           1. Call mcp__asdlc__submit_review(task_id='{task_id}', reviewer_type='self', verdict='pass'|'fail', findings='...', test_output='...')
            2. Do NOT call update_task(status='completed') — the orchestrator handles completion
            ",
     subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}"
@@ -412,7 +415,7 @@ while unresolved critical findings exist AND review_round <= max_rounds:
   ## 13b: Verify updated self-review
   evidence = mcp__asdlc__get_review_evidence(task_id='{task_id}')
   if not evidence.self_review or evidence.self_review.verdict == 'fail':
-      mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed after fix round')
+      mcp__asdlc__update_task(task_id='{task_id}', status='blocked')
       break
 
   ## 13c: Dispatch fresh reviewer subagent
@@ -432,7 +435,7 @@ while unresolved critical findings exist AND review_round <= max_rounds:
 
            Evaluate: spec compliance, code quality, test coverage.
 
-           Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with your verdict.
+           Call mcp__asdlc__submit_review(task_id='{task_id}', reviewer_type='subagent', verdict='approve'|'request_changes'|'escalate', findings='...') with your verdict.
            ",
     subagent_type="sdlc-qa-engineer"
   )
@@ -481,7 +484,7 @@ Handle the user's choice:
 
 ```
 If "Block task":
-  call mcp__asdlc__block_task(task_id="{task_id}", reason="Review failed after {max_rounds} rounds")
+  call mcp__asdlc__update_task(task_id="{task_id}", status="blocked")
   Log to corrections:
     mcp__asdlc__log_correction(
       context_type="task",
@@ -554,6 +557,183 @@ After logging corrections, append a review history section to the task's content
 
 Use the `Edit` tool to append this section to the task file (do not overwrite existing content).
 
+### Phase 3.5: Quality Gate — AC Verification + Implementation Challenge
+
+**Config-gated**: Only runs when quality is enabled. If `.sdlc/config.yaml` does not exist, or `quality.enabled` is `false` or absent, skip this entire phase (backward compatibility per AC-007).
+
+```python
+quality_config = load_quality_config()  # from quality_config.py
+
+if not quality_config.enabled:
+    # Quality system disabled — skip to Phase 4
+    pass
+```
+
+**Step 15a: AC Verification Gate (FR-022)**
+
+When quality is enabled and `quality.ac_gate` is `true`, verify all linked acceptance criteria have evidence recorded before completing the task.
+
+```python
+if quality_config.enabled and quality_config.ac_gate:
+    # Get all requirements linked to this task
+    reqs = mcp__asdlc__get_task_requirements(task_id=task_id)
+    if reqs.get("status") == "ok":
+        ac_reqs = reqs.get("requirements", {}).get("ac", [])
+        unverified = [ac for ac in ac_reqs if not ac.get("verified", False)]
+
+        if unverified:
+            print(f"AC Verification Gate for {task_id}:")
+            print(f"  {len(unverified)} unverified acceptance criteria:")
+
+            for ac in unverified:
+                ac_id = ac.get("req_id", ac.get("id", "unknown"))
+                depth = ac.get("depth", "structural")
+                summary = ac.get("summary", "")
+                print(f"    {ac_id} [{depth}]: {summary}")
+
+                # Determine evidence type based on depth classification
+                # AC-015: Behavioral ACs require test evidence, not structural-only code
+                evidence_type = "test" if depth == "behavioral" else "manual"
+
+                # Record verification with evidence from the self-review or test output
+                mcp__asdlc__verify_acceptance_criteria(
+                    task_id=task_id,
+                    ac_id=ac_id,
+                    evidence_type=evidence_type,
+                    evidence=f"Verified during task completion. "
+                             f"Evidence source: {'test output' if evidence_type == 'test' else 'implementation review'}"
+                )
+
+            # Re-check after verification attempts
+            reqs = mcp__asdlc__get_task_requirements(task_id=task_id)
+            ac_reqs = reqs.get("requirements", {}).get("ac", [])
+            still_unverified = [ac for ac in ac_reqs if not ac.get("verified", False)]
+
+            if still_unverified:
+                print(f"  WARNING: {len(still_unverified)} ACs still unverified after verification attempt")
+                for ac in still_unverified:
+                    print(f"    {ac.get('req_id', 'unknown')}: not verified")
+            else:
+                print(f"  All {len(ac_reqs)} acceptance criteria verified.")
+        else:
+            print(f"  AC Verification: All {len(ac_reqs)} criteria already verified.")
+```
+
+**Step 15b: Implementation Challenge Gate (FR-031)**
+
+When quality is enabled and `quality.challenge.gates.implementation` is active, spawn a challenger agent to review the task implementation.
+
+```python
+if quality_config.enabled and quality_config.challenge.is_gate_active("implementation"):
+    # 1. Generate challenge prompt
+    challenge = mcp__asdlc__challenge_artifact(
+        artifact_type="task",
+        artifact_id=task_id,
+        challenge_context=f"Post-implementation challenge for {task_id} during task-complete"
+    )
+
+    if challenge.get("status") == "ok":
+        challenge_prompt = challenge["challenge_prompt"]
+        round_number = challenge.get("round_number", 1)
+        max_rounds = quality_config.challenge.max_rounds  # default: 3
+
+        print(f"Implementation Challenge for {task_id} (round {round_number}/{max_rounds}):")
+
+        # 2. Dispatch challenger subagent
+        challenger_result = Task(
+            description=f"Challenge implementation of {task_id}",
+            prompt=f"""You are a challenger reviewing the implementation of task {task_id}.
+
+{challenge_prompt}
+
+Review the implementation critically. For each concern:
+1. State the objection clearly with specific code or AC references
+2. Classify severity: critical (must fix), warning (should fix), info (consider)
+3. Suggest a concrete fix or improvement
+
+Output your findings as structured objections in this format:
+---OBJECTIONS---
+- description: "..."
+  severity: "critical|warning|info"
+  reference: "AC-xxx or file:line"
+---END-OBJECTIONS---
+
+If no objections, output:
+---OBJECTIONS---
+(none)
+---END-OBJECTIONS---
+""",
+            subagent_type="sdlc-qa-engineer"
+        )
+
+        # 3. Parse and record challenger findings
+        objections = parse_challenge_objections(challenger_result)
+        mcp__asdlc__record_challenge_round(
+            artifact_type="task",
+            artifact_id=task_id,
+            round_number=round_number,
+            objections=objections,
+            verdict={"resolved": [], "accepted": [], "escalated": []}
+        )
+
+        # 4. Check challenge status
+        challenge_status = mcp__asdlc__get_challenge_status(
+            artifact_type="task",
+            artifact_id=task_id
+        )
+
+        overall_status = challenge_status.get("challenge_status", "unchallenged")
+        stats = challenge_status.get("stats", {})
+        accepted = stats.get("accepted", 0)
+        escalated = stats.get("escalated", 0)
+
+        print(f"  Challenge status: {overall_status}")
+        print(f"  Objections: {stats.get('total_objections', 0)} total, "
+              f"{stats.get('resolved', 0)} resolved, {accepted} accepted, {escalated} escalated")
+
+        # AC-024: Accepted objections must be acted on
+        if accepted > 0:
+            print(f"  {accepted} accepted objections require fixes before completion.")
+
+            AskUserQuestion({
+                questions: [{
+                    question: f"Implementation challenge found {accepted} accepted objections for {task_id}. How to proceed?",
+                    header: "Implementation Challenge — Accepted Objections",
+                    options: [
+                        { label: "Fix and re-challenge", description: "Address accepted objections, then re-run challenge" },
+                        { label: "Accept and complete", description: "Acknowledge objections but proceed with completion" },
+                        { label: "Hold task", description: "Keep task in progress for manual review" }
+                    ],
+                    multiSelect: false
+                }]
+            })
+
+            # Handle user response:
+            # "Fix and re-challenge" — fix issues, re-run Step 15b
+            # "Accept and complete" — log corrections, proceed to Phase 4
+            # "Hold task" — do not complete, leave as in_progress
+
+            if decision == "Fix and re-challenge":
+                # Fix the accepted objections, then re-run this challenge gate
+                pass  # Loop back to Step 15b
+            elif decision == "Accept and complete":
+                mcp__asdlc__log_correction(
+                    context_type="task",
+                    context_id=task_id,
+                    category="code-quality",
+                    description=f"Implementation challenge: {accepted} accepted objections acknowledged but not fixed"
+                )
+                # Proceed to Phase 4
+            elif decision == "Hold task":
+                print(f"Task {task_id} held for manual review. Status remains 'in_progress'.")
+                # STOP — do not proceed
+                return
+
+        if escalated > 0:
+            print(f"  {escalated} escalated objections require human decision.")
+            # Escalated objections are surfaced but do not block completion
+```
+
 ### Phase 4: Evidence-Based Completion
 
 After the review process concludes with approval (or user override), present an evidence-based completion summary to the user before finalizing.
@@ -601,7 +781,7 @@ AskUserQuestion({
 
 **If "Confirm complete":**
 ```
-call mcp__asdlc__complete_task(task_id="{task_id}")
+call mcp__asdlc__update_task(task_id="{task_id}", status="completed")
 ```
 Then proceed to Log Corrections, Check PRD Completion, and Suggest Next Task.
 

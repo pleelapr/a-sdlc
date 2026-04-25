@@ -31,7 +31,7 @@ Sprint (SPRINT-001)
 2. **Create or get PRD**: `/sdlc:prd-generate "Auth feature"` or use existing
 3. **Assign PRD to sprint**:
    ```
-   mcp__asdlc__add_prd_to_sprint(prd_id="feature-auth", sprint_id="SPRINT-01")
+   mcp__asdlc__manage_sprint_prds(action="add", prd_id="feature-auth", sprint_id="SPRINT-01")
    ```
 4. **Generate tasks from PRD**: `/sdlc:prd-split "feature-auth"`
 5. **View sprint**: `/sdlc:sprint-show SPRINT-01`
@@ -53,10 +53,10 @@ PRDs can be assigned to sprints using the MCP tool:
 
 ```
 # Assign PRD to sprint
-mcp__asdlc__add_prd_to_sprint(prd_id="feature-auth", sprint_id="SPRINT-01")
+mcp__asdlc__manage_sprint_prds(action="add", prd_id="feature-auth", sprint_id="SPRINT-01")
 
 # Remove PRD from sprint (move to backlog)
-mcp__asdlc__remove_prd_from_sprint(prd_id="feature-auth")
+mcp__asdlc__manage_sprint_prds(action="remove", prd_id="feature-auth")
 
 # List PRDs in a sprint
 mcp__asdlc__get_sprint_prds(sprint_id="SPRINT-01")

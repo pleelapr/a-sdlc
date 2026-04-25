@@ -188,18 +188,18 @@ def v7_db():
 
 
 class TestSchemaVersion:
-    """Test that the schema version is correctly set to 8."""
+    """Test that the schema version is at least 8 (reviews table)."""
 
     def test_schema_version_constant(self):
-        """SCHEMA_VERSION constant should be 8."""
-        assert SCHEMA_VERSION == 8
+        """SCHEMA_VERSION constant should be at least 8 (reviews table)."""
+        assert SCHEMA_VERSION >= 8
 
     def test_fresh_db_has_version_8(self, temp_db):
         """A fresh database should have schema version 8."""
         with temp_db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
     def test_fresh_db_has_reviews_table(self, temp_db):
         """A fresh database should have the reviews table."""
@@ -233,7 +233,7 @@ class TestMigrationV7ToV8:
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
     def test_migration_creates_indexes(self, v7_db):
         """Migration should create all expected indexes on reviews table."""
@@ -285,7 +285,7 @@ class TestMigrationV7ToV8:
         with db2.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
 
 # =============================================================================
@@ -683,7 +683,7 @@ class TestChainedMigrationToV8:
         db = Database(db_path=v7_db)
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
-            assert cursor.fetchone()[0] == 8
+            assert cursor.fetchone()[0] == SCHEMA_VERSION
 
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='reviews'"

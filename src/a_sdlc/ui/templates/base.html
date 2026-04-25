@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}a-sdlc Dashboard{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx-ext-ws@2.0.0/ws.js"></script>
+    <script src="https://unpkg.com/idiomorph/dist/idiomorph-ext.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
@@ -133,6 +135,46 @@
         .status-active { color: var(--accent); }
         .status-draft { color: var(--text-muted); }
         .status-ready { color: var(--success); }
+        .status-escalated { color: #f0883e; }
+        .status-awaiting_clarification { color: #bc8cff; }
+        .status-running { color: var(--accent); }
+        .status-failed { color: var(--danger); }
+
+        /* Pipeline Entry Type Colors */
+        .entry-implement { color: var(--accent); }
+        .entry-review { color: #bc8cff; }
+        .entry-qa { color: var(--success); }
+        .entry-design { color: #f0883e; }
+        .entry-pm { color: var(--warning); }
+        .entry-challenge { color: var(--danger); }
+        .entry-split { color: var(--text-muted); }
+        .entry-escalation { color: #f0883e; }
+
+        .entry-bg-implement { background: rgba(88, 166, 255, 0.1); }
+        .entry-bg-review { background: rgba(188, 140, 255, 0.1); }
+        .entry-bg-qa { background: rgba(63, 185, 80, 0.1); }
+        .entry-bg-design { background: rgba(240, 136, 62, 0.1); }
+        .entry-bg-pm { background: rgba(210, 153, 34, 0.1); }
+        .entry-bg-challenge { background: rgba(248, 81, 73, 0.1); }
+        .entry-bg-split { background: rgba(139, 148, 158, 0.1); }
+        .entry-bg-escalation { background: rgba(240, 136, 62, 0.1); }
+
+        /* Nav badge (active run count) */
+        .nav-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 5px;
+            border-radius: 9px;
+            background: var(--accent);
+            color: var(--bg);
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 4px;
+            vertical-align: middle;
+        }
 
         .priority-critical { color: var(--danger); font-weight: 600; }
         .priority-high { color: var(--danger); }
@@ -314,6 +356,7 @@
         .badge-warning { background: rgba(210, 153, 34, 0.2); color: var(--warning); }
         .badge-danger { background: rgba(248, 81, 73, 0.2); color: var(--danger); }
         .badge-info { background: rgba(88, 166, 255, 0.2); color: var(--accent); }
+        .badge-muted { background: rgba(139, 148, 158, 0.2); color: var(--text-muted); }
 
         .empty-state {
             text-align: center;
@@ -518,6 +561,252 @@
         .breadcrumbs a:hover { color: var(--accent); }
         .breadcrumbs .sep { color: var(--border); }
 
+        /* Work Item Cards (FR-016) */
+        .work-item-card {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+        .work-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.25rem;
+        }
+        .work-item-type {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .work-item-status {
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .work-item-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+            word-break: break-all;
+        }
+        .work-item-actions {
+            display: flex;
+            gap: 0.375rem;
+            flex-wrap: wrap;
+            margin-top: 0.5rem;
+        }
+        .btn-action {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text);
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-action:hover { background: var(--border); }
+        .btn-action-primary {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .btn-action-primary:hover {
+            background: rgba(88, 166, 255, 0.15);
+        }
+        .btn-action-warn {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+        .btn-action-warn:hover {
+            background: rgba(248, 81, 73, 0.15);
+        }
+        .btn-action-success {
+            border-color: var(--success);
+            color: var(--success);
+        }
+        .btn-action-success:hover {
+            background: rgba(63, 185, 80, 0.15);
+        }
+        .btn-action-muted {
+            border-color: var(--text-muted);
+            color: var(--text-muted);
+        }
+        .btn-action-muted:hover {
+            background: rgba(139, 148, 158, 0.15);
+        }
+        .btn-action-danger {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+        .btn-action-danger:hover {
+            color: var(--danger);
+            border-color: var(--danger);
+            background: rgba(248, 81, 73, 0.1);
+        }
+
+        /* Kanban Board */
+        .kanban-board {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .kanban-column {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem;
+            min-height: 150px;
+        }
+        .kanban-column-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .kanban-column-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+        .kanban-column-count {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            background: var(--bg);
+            padding: 0.125rem 0.375rem;
+            border-radius: 10px;
+        }
+
+        /* Agent Indicator (FR-022) */
+        .agent-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin: 0.375rem 0;
+            font-size: 0.75rem;
+        }
+        .agent-persona-badge {
+            display: inline-block;
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--accent);
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+        .agent-elapsed {
+            color: var(--text-muted);
+            font-size: 0.7rem;
+        }
+
+        /* Clarification Panel (FR-018) */
+        .clarification-panel {
+            margin: 0.5rem 0;
+            padding: 0.5rem;
+            background: rgba(163, 113, 247, 0.1);
+            border: 1px solid rgba(163, 113, 247, 0.3);
+            border-radius: 6px;
+        }
+        .clarification-question {
+            font-size: 0.8rem;
+            color: var(--text);
+            margin-bottom: 0.375rem;
+        }
+        .clarification-form {
+            display: flex;
+            gap: 0.375rem;
+        }
+        .clarification-input {
+            flex: 1;
+            padding: 0.375rem 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.8rem;
+        }
+        .clarification-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Thread Viewer (FR-009, FR-019) */
+        .thread-entry {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: var(--bg);
+            border-radius: 4px;
+        }
+        .thread-entry-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.375rem;
+            font-size: 0.75rem;
+        }
+        .thread-persona-badge {
+            display: inline-block;
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            background: rgba(88, 166, 255, 0.15);
+            color: var(--accent);
+            font-weight: 500;
+        }
+        .thread-entry-type {
+            font-weight: 500;
+            text-transform: capitalize;
+        }
+        .thread-round {
+            font-size: 0.7rem;
+            padding: 0.1rem 0.3rem;
+            border-radius: 3px;
+            background: var(--border);
+            color: var(--text-muted);
+        }
+        .thread-timestamp {
+            color: var(--text-muted);
+            margin-left: auto;
+        }
+        .thread-entry-content {
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        .entry-creation { border-left: 3px solid var(--accent) !important; }
+        .entry-challenge { border-left: 3px solid var(--warning) !important; }
+        .entry-convergence { border-left: 3px solid var(--success) !important; }
+        .entry-system { border-left: 3px solid var(--border) !important; }
+        .entry-user { border-left: 3px solid #a371f7 !important; }
+
+        .thread-comment-form {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border);
+        }
+        .thread-form {
+            display: flex;
+            gap: 0.375rem;
+        }
+        .thread-comment-input {
+            flex: 1;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.875rem;
+        }
+        .thread-comment-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             nav .nav-content { flex-wrap: wrap; gap: 0.75rem; }
@@ -549,6 +838,14 @@
                 <a href="/sprints?project={{ project.id }}" {% if "/sprints" in request.url.path %}class="active"{% endif %}>Sprints</a>
                 <a href="/prds?project={{ project.id }}" {% if "/prds" in request.url.path %}class="active"{% endif %}>PRDs</a>
                 <a href="/tasks?project={{ project.id }}" {% if "/tasks" in request.url.path %}class="active"{% endif %}>Tasks</a>
+                <a href="/runs?project={{ project.id }}" {% if "/runs" in request.url.path %}class="active"{% endif %}>
+                    Pipeline
+                    {% if active_run_count is defined and active_run_count > 0 %}
+                    <span class="nav-badge">{{ active_run_count }}</span>
+                    {% elif request.state.active_pipeline_count is defined and request.state.active_pipeline_count > 0 %}
+                    <span class="nav-badge">{{ request.state.active_pipeline_count }}</span>
+                    {% endif %}
+                </a>
                 <a href="/analytics?project={{ project.id }}" {% if "/analytics" in request.url.path %}class="active"{% endif %}>Analytics</a>
                 <a href="/settings?project={{ project.id }}" {% if "/settings" in request.url.path %}class="active"{% endif %}>Settings</a>
                 {% endif %}
@@ -684,13 +981,74 @@
             ta.select();
             try {
                 document.execCommand('copy');
-                showToast('Copied: ' + text);
+                showToast('Copied: ' + cmd);
             } catch (e) {
                 showToast('Failed to copy', 'error');
             }
             document.body.removeChild(ta);
         }
-    </script>
+
+        async function postThreadComment() {
+            const container = document.getElementById('thread-viewer-container');
+            if (!container) return;
+
+            const artifactType = container.dataset.artifactType;
+            const artifactId = container.dataset.artifactId;
+            const input = document.getElementById('thread-comment-input');
+            const statusEl = document.getElementById('thread-post-status');
+            const content = input.value.trim();
+
+            if (!content) {
+                statusEl.textContent = 'Comment cannot be empty.';
+                statusEl.style.color = 'var(--danger)';
+                return;
+            }
+
+            statusEl.textContent = 'Posting...';
+            statusEl.style.color = 'var(--text-muted)';
+
+            try {
+                // Use the run_id from the URL if we are on a run detail page
+                let url = `/threads/${artifactType}/${artifactId}/comment`;
+                const params = new URLSearchParams(window.location.search);
+                const runId = params.get('run_id') || window.location.pathname.split('/runs/')[1];
+                if (runId) {
+                    url += `?run_id=${runId}`;
+                }
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: content })
+                });
+
+                if (response.ok) {
+                    const html = await response.text();
+                    // If we have a target div (like in tabs), update it.
+                    // Otherwise update the container itself.
+                    const target = document.getElementById('thread-viewer-target') || container;
+                    target.innerHTML = html;
+
+                    // Re-focus the input if it still exists (it might have been swapped)
+                    const newInput = document.getElementById('thread-comment-input');
+                    if (newInput) {
+                        newInput.value = '';
+                        newInput.focus();
+                    }
+
+                    showToast('Comment posted');
+                } else {
+                    const errorText = await response.text();
+                    statusEl.textContent = 'Failed: ' + errorText;
+                    statusEl.style.color = 'var(--danger)';
+                }
+            } catch (error) {
+                console.error('Post comment error:', error);
+                statusEl.textContent = 'Error posting comment.';
+                statusEl.style.color = 'var(--danger)';
+            }
+        }
+        </script>
 
     <main class="container">
         {% block content %}{% endblock %}

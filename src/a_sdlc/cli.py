@@ -21,9 +21,9 @@ from rich.table import Table
 
 from a_sdlc import __version__
 from a_sdlc.artifacts import get_artifact_plugin_manager
+from a_sdlc.cli_targets import detect_targets, resolve_targets
 from a_sdlc.installer import (
     Installer,
-    check_claude_code_installed,
     check_python_version,
     check_uv_available,
     configure_mcp_server,
@@ -66,22 +66,14 @@ def main() -> None:
 
 @main.command()
 @click.option(
-    "--transport", "-t",
+    "--transport",
+    "-t",
     type=click.Choice(["stdio", "streamable-http"]),
     default="stdio",
-    help="Transport type (default: stdio for Claude Code)"
+    help="Transport type (default: stdio for Claude Code)",
 )
-@click.option(
-    "--host",
-    default="127.0.0.1",
-    help="Host for HTTP transport"
-)
-@click.option(
-    "--port",
-    default=8765,
-    type=int,
-    help="Port for HTTP transport"
-)
+@click.option("--host", default="127.0.0.1", help="Host for HTTP transport")
+@click.option("--port", default=8765, type=int, help="Port for HTTP transport")
 def serve(transport: str, host: str, port: int) -> None:
     """Start the a-sdlc MCP server.
 
@@ -95,42 +87,55 @@ def serve(transport: str, host: str, port: int) -> None:
     """
     from a_sdlc.server import run_server
 
-    if transport == "stdio":
-        # Don't print anything for stdio - it would interfere with MCP protocol
-        run_server(transport="stdio")
-    else:
-        console.print(f"[cyan]Starting a-sdlc MCP server on http://{host}:{port}/mcp[/cyan]")
-        run_server(transport="streamable-http")
+    try:
+        if transport == "stdio":
+            # Don't print anything for stdio - it would interfere with MCP protocol
+            run_server(transport="stdio")
+        else:
+            console.print(f"[cyan]Starting a-sdlc MCP server on http://{host}:{port}/mcp[/cyan]")
+            run_server(transport="streamable-http")
+    except SystemExit:
+        raise  # Let sys.exit() through
+    except Exception as exc:
+        # For stdio, we can't print to stdout; log to stderr
+        import sys as _sys
+
+        print(f"a-sdlc server error: {exc}", file=_sys.stderr)
+        raise SystemExit(1) from exc
 
 
 @main.command()
+@click.option("--list", "list_skills", is_flag=True, help="List all installed skill templates")
+@click.option("--force", "-f", is_flag=True, help="Force reinstall of all templates")
 @click.option(
-    "--list", "list_skills",
-    is_flag=True,
-    help="List all installed skill templates"
-)
-@click.option(
-    "--force", "-f",
-    is_flag=True,
-    help="Force reinstall of all templates"
+    "--target-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Custom target directory (overrides default commands location)",
 )
 @click.option(
     "--target",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Custom target directory (default: ~/.claude/commands/sdlc/)"
+    "cli_target",
+    type=click.Choice(["claude", "gemini", "auto"]),
+    default="auto",
+    help="Target CLI to install for (default: auto-detect)",
 )
 @click.option(
     "--with-playwright",
     is_flag=True,
-    help="Also configure Playwright MCP server for runtime testing"
+    help="Also configure Playwright MCP server for runtime testing",
 )
 @click.option(
-    "--no-agent-teams",
-    is_flag=True,
-    help="Skip enabling Agent Teams experimental feature"
+    "--no-agent-teams", is_flag=True, help="Skip enabling Agent Teams experimental feature"
 )
-def install(list_skills: bool, force: bool, target: Path | None, with_playwright: bool, no_agent_teams: bool) -> None:
+def install(
+    list_skills: bool,
+    force: bool,
+    target_dir: Path | None,
+    cli_target: str,
+    with_playwright: bool,
+    no_agent_teams: bool,
+) -> None:
     """Deploy skill templates to Claude Code (non-interactive).
 
     For interactive setup with optional integrations, use: a-sdlc setup
@@ -140,44 +145,68 @@ def install(list_skills: bool, force: bool, target: Path | None, with_playwright
         a-sdlc install                    # Install all templates
         a-sdlc install --list             # List installed templates
         a-sdlc install --force            # Reinstall all templates
+        a-sdlc install --target claude    # Install for Claude Code only
+        a-sdlc install --target gemini    # Install for Gemini CLI only
     """
-    installer = Installer(target_dir=target)
+    targets = resolve_targets(cli_target)
+    if not targets:
+        console.print(
+            "[red]No supported CLI tools detected. Install Claude Code or Gemini CLI first.[/red]"
+        )
+        sys.exit(1)
 
     if list_skills:
+        installer = Installer(target_dir=target_dir, target=targets[0])
         _list_installed_skills(installer)
         return
 
     try:
-        installed = installer.install(force=force)
-        personas = installer.list_installed_personas()
+        all_installed = []
+        all_personas = []
+        target_names = []
+        for t in targets:
+            installer = Installer(target_dir=target_dir, target=t)
+            installed = installer.install(force=force)
+            all_installed.extend(installed)
+            personas = installer.list_installed_personas()
+            all_personas.extend(personas)
+            target_names.append(t.display_name)
 
-        # Configure Agent Teams env var
+        # Configure Agent Teams env var (Claude only)
         agent_teams_status = ""
-        if not no_agent_teams:
+        if not no_agent_teams and any(t.name == "claude" for t in targets):
             try:
                 from a_sdlc.mcp_setup import load_claude_settings, save_claude_settings
+
                 settings = load_claude_settings()
                 env = settings.setdefault("environment", {})
                 env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
                 save_claude_settings(settings)
                 agent_teams_status = "Agent Teams: [cyan]Enabled[/cyan]\n"
             except Exception:
-                agent_teams_status = "Agent Teams: [yellow]Could not configure (settings.json issue)[/yellow]\n"
-        else:
+                agent_teams_status = (
+                    "Agent Teams: [yellow]Could not configure (settings.json issue)[/yellow]\n"
+                )
+        elif no_agent_teams:
             agent_teams_status = "Agent Teams: [dim]Skipped (--no-agent-teams)[/dim]\n"
 
+        targets_str = ", ".join(target_names)
+        persona_line = ""
+        if all_personas:
+            persona_line = f"Personas deployed: [cyan]{len(all_personas)} agent(s)[/cyan]\n"
+
         console.print()
-        console.print(Panel(
-            f"[green]Successfully installed {len(installed)} skill templates![/green]\n"
-            f"Personas deployed: [cyan]{len(personas)} agent(s) to ~/.claude/agents/[/cyan]\n"
-            f"{agent_teams_status}\n"
-            f"Skills location: [cyan]{installer.target_dir}[/cyan]\n"
-            f"MCP server: [cyan]Configured in ~/.claude.json[/cyan]\n\n"
-            "[dim]For full interactive setup with optional integrations: a-sdlc setup[/dim]\n"
-            "[dim]Run /sdlc:help in Claude Code for the full command reference.[/dim]",
-            title="[bold]Installation Complete[/bold]",
-            border_style="green"
-        ))
+        console.print(
+            Panel(
+                f"[green]Successfully installed {len(all_installed)} skill templates![/green]\n"
+                f"Targets: [cyan]{targets_str}[/cyan]\n"
+                f"{persona_line}"
+                f"{agent_teams_status}\n"
+                "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
+                title="[bold]Installation Complete[/bold]",
+                border_style="green",
+            )
+        )
 
         if with_playwright:
             _setup_playwright_mcp(force=force)
@@ -197,27 +226,30 @@ def _setup_playwright_mcp(force: bool = False) -> None:
     success, message, verification = setup_playwright(force=force)
 
     if success:
-        console.print(Panel(
-            f"[green]{message}[/green]\n\n"
-            "[bold]Playwright MCP is ready![/bold]\n\n"
-            "Restart Claude Code to activate runtime testing.",
-            title="[bold green]Playwright Setup Complete[/bold green]",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                f"[green]{message}[/green]\n\n"
+                "[bold]Playwright MCP is ready![/bold]\n\n"
+                "Restart Claude Code to activate runtime testing.",
+                title="[bold green]Playwright Setup Complete[/bold green]",
+                border_style="green",
+            )
+        )
     else:
-        console.print(Panel(
-            f"[red]{message}[/red]\n\n"
-            "[dim]Fix: Ensure Node.js and npx are installed[/dim]",
-            title="[bold red]Playwright Setup Failed[/bold red]",
-            border_style="red",
-        ))
+        console.print(
+            Panel(
+                f"[red]{message}[/red]\n\n[dim]Fix: Ensure Node.js and npx are installed[/dim]",
+                title="[bold red]Playwright Setup Failed[/bold red]",
+                border_style="red",
+            )
+        )
 
 
 @main.command()
 @click.option(
     "--upgrade",
     is_flag=True,
-    help="Force-refresh templates, migrate DB, update MCP config, then offer new integrations"
+    help="Force-refresh templates, migrate DB, update MCP config, then offer new integrations",
 )
 def setup(upgrade: bool):
     """Interactive setup wizard.
@@ -235,29 +267,33 @@ def setup(upgrade: bool):
     # Step 1: Welcome banner
     console.print()
     if upgrade:
-        console.print(Panel(
-            "[bold]Upgrading a-sdlc[/bold]\n\n"
-            "This will:\n"
-            "  1. Check prerequisites\n"
-            "  2. Force-refresh all skill templates\n"
-            "  3. Run database migration (with backup)\n"
-            "  4. Update MCP server configuration\n"
-            "  5. Offer new optional integrations",
-            title="[bold cyan]a-sdlc Upgrade[/bold cyan]",
-            border_style="cyan"
-        ))
+        console.print(
+            Panel(
+                "[bold]Upgrading a-sdlc[/bold]\n\n"
+                "This will:\n"
+                "  1. Check prerequisites\n"
+                "  2. Force-refresh all skill templates\n"
+                "  3. Run database migration (with backup)\n"
+                "  4. Update MCP server configuration\n"
+                "  5. Offer new optional integrations",
+                title="[bold cyan]a-sdlc Upgrade[/bold cyan]",
+                border_style="cyan",
+            )
+        )
     else:
-        console.print(Panel(
-            "[bold]Welcome to a-sdlc Setup Wizard[/bold]\n\n"
-            "This wizard will:\n"
-            "  1. Check prerequisites (Python, uv, Claude Code)\n"
-            "  2. Install skill templates\n"
-            "  3. Configure the asdlc MCP server\n"
-            "  4. Offer optional integrations (Serena, monitoring, etc.)\n"
-            "  5. Validate the installation",
-            title="[bold cyan]a-sdlc[/bold cyan]",
-            border_style="cyan"
-        ))
+        console.print(
+            Panel(
+                "[bold]Welcome to a-sdlc Setup Wizard[/bold]\n\n"
+                "This wizard will:\n"
+                "  1. Check prerequisites (Python, uv, Claude Code)\n"
+                "  2. Install skill templates\n"
+                "  3. Configure the asdlc MCP server\n"
+                "  4. Offer optional integrations (Serena, monitoring, etc.)\n"
+                "  5. Validate the installation",
+                title="[bold cyan]a-sdlc[/bold cyan]",
+                border_style="cyan",
+            )
+        )
     console.print()
 
     # Step 2: Prerequisite checks
@@ -275,9 +311,11 @@ def setup(upgrade: bool):
     uv_ok, uv_msg = check_uv_available()
     checks.append(("uv / uvx", uv_ok, uv_msg, False))
 
-    claude_ok, claude_msg = check_claude_code_installed()
-    checks.append(("Claude Code", claude_ok, claude_msg, True))
-    if not claude_ok:
+    detected = detect_targets()
+    cli_ok = len(detected) > 0
+    cli_msg = ", ".join(t.display_name for t in detected) if detected else "None found"
+    checks.append(("CLI Targets", cli_ok, cli_msg, True))
+    if not cli_ok:
         has_critical_failure = True
 
     table = Table(show_header=True, header_style="bold")
@@ -304,14 +342,20 @@ def setup(upgrade: bool):
             if not passed and critical:
                 console.print(f"  [red]{name}[/red]: {detail}")
                 if "Python" in name:
-                    console.print("  [dim]Fix: Install Python 3.10+ from https://www.python.org/downloads/[/dim]")
-                elif "Claude" in name:
-                    console.print("  [dim]Fix: Install Claude Code from https://docs.anthropic.com/en/docs/claude-code[/dim]")
+                    console.print(
+                        "  [dim]Fix: Install Python 3.10+ from https://www.python.org/downloads/[/dim]"
+                    )
+                elif "CLI" in name:
+                    console.print(
+                        "  [dim]Fix: Install Claude Code from https://claude.ai/code or Gemini CLI[/dim]"
+                    )
         console.print()
         sys.exit(1)
 
     if not uv_ok:
-        console.print("[yellow]Warning: uv/uvx not found. MCP server may not work without it.[/yellow]")
+        console.print(
+            "[yellow]Warning: uv/uvx not found. MCP server may not work without it.[/yellow]"
+        )
         console.print("[dim]Fix: curl -LsSf https://astral.sh/uv/install.sh | sh[/dim]")
         console.print()
 
@@ -331,14 +375,18 @@ def setup(upgrade: bool):
         force = False
         installed_skills = installer.list_installed()
         if installed_skills:
-            console.print(f"[yellow]Found {len(installed_skills)} existing skill templates.[/yellow]")
+            console.print(
+                f"[yellow]Found {len(installed_skills)} existing skill templates.[/yellow]"
+            )
             if click.confirm("  Overwrite with latest templates?", default=False):
                 force = True
             console.print()
 
     try:
         installed = installer.install(force=force)
-        console.print(f"  Installed [green]{len(installed)}[/green] skill templates to [cyan]{installer.target_dir}[/cyan]")
+        console.print(
+            f"  Installed [green]{len(installed)}[/green] skill templates to [cyan]{installer.target_dir}[/cyan]"
+        )
     except Exception as e:
         console.print(f"[red]Error during installation: {e}[/red]")
         sys.exit(1)
@@ -398,7 +446,9 @@ def setup(upgrade: bool):
 
     if installer.target_dir.exists():
         template_count = len(list(installer.target_dir.glob("*.md")))
-        console.print(f"  [green]PASS[/green] {template_count} skill templates in {installer.target_dir}")
+        console.print(
+            f"  [green]PASS[/green] {template_count} skill templates in {installer.target_dir}"
+        )
     else:
         console.print(f"  [red]FAIL[/red] Templates directory missing: {installer.target_dir}")
         validation_ok = False
@@ -421,7 +471,10 @@ def setup(upgrade: bool):
         _setup_serena_mcp(force=force)
     console.print()
 
-    monitoring_installed = "langfuse" in mcp_servers or (Path.home() / ".a-sdlc" / "docker-compose.monitoring.yml").exists()
+    monitoring_installed = (
+        "langfuse" in mcp_servers
+        or (Path.home() / ".a-sdlc" / "docker-compose.monitoring.yml").exists()
+    )
     if monitoring_installed:
         console.print("  [green]Monitoring[/green] (already configured)")
     elif click.confirm("  Set up monitoring? (Langfuse + SigNoz)", default=False):
@@ -447,29 +500,33 @@ def setup(upgrade: bool):
 
     # Step 6: Success summary
     if upgrade:
-        console.print(Panel(
-            "[green]Upgrade complete![/green]\n\n"
-            "[dim]Run 'a-sdlc doctor' to verify system health.[/dim]",
-            title="[bold green]Upgrade Complete[/bold green]",
-            border_style="green"
-        ))
+        console.print(
+            Panel(
+                "[green]Upgrade complete![/green]\n\n"
+                "[dim]Run 'a-sdlc doctor' to verify system health.[/dim]",
+                title="[bold green]Upgrade Complete[/bold green]",
+                border_style="green",
+            )
+        )
     else:
-        console.print(Panel(
-            "[green]Setup complete![/green]\n\n"
-            "[bold]Next Steps[/bold]\n"
-            "  1. Open a project in Claude Code\n"
-            "  2. Run [cyan]/sdlc:init[/cyan] to initialize SDLC tracking\n"
-            "  3. Run [cyan]/sdlc:help[/cyan] for all available commands\n\n"
-            "[bold]Quick Start[/bold]\n"
-            "  /sdlc:init                  Initialize project\n"
-            "  /sdlc:scan                  Analyze codebase\n"
-            "  /sdlc:prd-generate          Create a PRD\n"
-            "  /sdlc:prd-split             Decompose PRD into tasks\n"
-            "  /sdlc:sprint-run            Execute sprint tasks\n\n"
-            "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
-            title="[bold green]Setup Complete[/bold green]",
-            border_style="green"
-        ))
+        console.print(
+            Panel(
+                "[green]Setup complete![/green]\n\n"
+                "[bold]Next Steps[/bold]\n"
+                "  1. Open a project in Claude Code\n"
+                "  2. Run [cyan]/sdlc:init[/cyan] to initialize SDLC tracking\n"
+                "  3. Run [cyan]/sdlc:help[/cyan] for all available commands\n\n"
+                "[bold]Quick Start[/bold]\n"
+                "  /sdlc:init                  Initialize project\n"
+                "  /sdlc:scan                  Analyze codebase\n"
+                "  /sdlc:prd-generate          Create a PRD\n"
+                "  /sdlc:prd-split             Decompose PRD into tasks\n"
+                "  /sdlc:sprint-run            Execute sprint tasks\n\n"
+                "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
+                title="[bold green]Setup Complete[/bold green]",
+                border_style="green",
+            )
+        )
 
 
 def _list_installed_skills(installer: Installer) -> None:
@@ -487,11 +544,7 @@ def _list_installed_skills(installer: Installer) -> None:
     table.add_column("Status", style="green")
 
     for skill in skills:
-        table.add_row(
-            f"/sdlc:{skill['name']}",
-            skill['file'],
-            "Installed"
-        )
+        table.add_row(f"/sdlc:{skill['name']}", skill["file"], "Installed")
 
     console.print(table)
 
@@ -505,11 +558,7 @@ def _list_installed_skills(installer: Installer) -> None:
         persona_table.add_column("Status", style="green")
 
         for p in personas:
-            persona_table.add_row(
-                p['name'],
-                p['file'],
-                "Installed"
-            )
+            persona_table.add_row(p["name"], p["file"], "Installed")
 
         console.print(persona_table)
 
@@ -520,12 +569,14 @@ def _setup_serena_mcp(force: bool = False) -> bool:
     Returns:
         True if setup succeeded, False otherwise.
     """
-    console.print(Panel(
-        "[bold]Setting up Serena MCP Server[/bold]\n\n"
-        "Serena provides semantic code analysis capabilities\n"
-        "that power the /sdlc:scan and /sdlc:update commands.",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            "[bold]Setting up Serena MCP Server[/bold]\n\n"
+            "Serena provides semantic code analysis capabilities\n"
+            "that power the /sdlc:scan and /sdlc:update commands.",
+            border_style="blue",
+        )
+    )
 
     success, message, verification = setup_serena(force=force)
 
@@ -539,17 +590,15 @@ def _setup_serena_mcp(force: bool = False) -> bool:
             table.add_column("Status")
 
             table.add_row(
-                "Package Installer",
-                f"[green]{verification.get('installer_method', 'N/A')}[/green]"
+                "Package Installer", f"[green]{verification.get('installer_method', 'N/A')}[/green]"
             )
             table.add_row(
                 "Claude Settings",
-                "[green]Configured[/green]" if verification.get("configured_in_settings") else "[yellow]Not configured[/yellow]"
+                "[green]Configured[/green]"
+                if verification.get("configured_in_settings")
+                else "[yellow]Not configured[/yellow]",
             )
-            table.add_row(
-                "Settings File",
-                f"[dim]{verification.get('settings_file', 'N/A')}[/dim]"
-            )
+            table.add_row("Settings File", f"[dim]{verification.get('settings_file', 'N/A')}[/dim]")
 
             console.print(table)
 
@@ -565,14 +614,16 @@ def _setup_monitoring(force: bool = False) -> bool:
     Returns:
         True if setup succeeded, False otherwise.
     """
-    console.print(Panel(
-        "[bold]Setting up Monitoring Stack[/bold]\n\n"
-        "This will install:\n"
-        "  - Langfuse (conversation tracing)\n"
-        "  - SigNoz (OTEL metrics & logs)\n\n"
-        f"Files: [cyan]{MONITORING_DIR}[/cyan]",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            "[bold]Setting up Monitoring Stack[/bold]\n\n"
+            "This will install:\n"
+            "  - Langfuse (conversation tracing)\n"
+            "  - SigNoz (OTEL metrics & logs)\n\n"
+            f"Files: [cyan]{MONITORING_DIR}[/cyan]",
+            border_style="blue",
+        )
+    )
 
     success, message, verification = setup_monitoring(force=force)
 
@@ -587,23 +638,33 @@ def _setup_monitoring(force: bool = False) -> bool:
 
             table.add_row(
                 "Monitoring Files",
-                "[green]Installed[/green]" if verification.get("files_ready") else "[red]Missing[/red]"
+                "[green]Installed[/green]"
+                if verification.get("files_ready")
+                else "[red]Missing[/red]",
             )
             table.add_row(
                 "SigNoz",
-                "[green]Cloned[/green]" if verification.get("signoz_cloned") else "[red]Not cloned[/red]"
+                "[green]Cloned[/green]"
+                if verification.get("signoz_cloned")
+                else "[red]Not cloned[/red]",
             )
             table.add_row(
                 "Stop Hook",
-                "[green]Registered[/green]" if verification.get("hook_registered") else "[yellow]Not registered[/yellow]"
+                "[green]Registered[/green]"
+                if verification.get("hook_registered")
+                else "[yellow]Not registered[/yellow]",
             )
             table.add_row(
                 "OTEL Environment",
-                "[green]Configured[/green]" if verification.get("otel_configured") else "[yellow]Not configured[/yellow]"
+                "[green]Configured[/green]"
+                if verification.get("otel_configured")
+                else "[yellow]Not configured[/yellow]",
             )
             table.add_row(
                 "Langfuse API Keys",
-                "[green]Configured[/green]" if verification.get("langfuse_keys_configured") else "[yellow]Not yet (run: a-sdlc monitoring configure)[/yellow]"
+                "[green]Configured[/green]"
+                if verification.get("langfuse_keys_configured")
+                else "[yellow]Not yet (run: a-sdlc monitoring configure)[/yellow]",
             )
 
             console.print(table)
@@ -632,19 +693,20 @@ def _setup_monitoring(force: bool = False) -> bool:
 @click.option(
     "--include-data",
     is_flag=True,
-    help="Also remove project data (~/.a-sdlc/ including PRDs, tasks, database)"
+    help="Also remove project data (~/.a-sdlc/ including PRDs, tasks, database)",
 )
 @click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Preview what would be removed without making changes"
+    "--dry-run", is_flag=True, help="Preview what would be removed without making changes"
 )
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 @click.option(
-    "-y", "--yes",
-    is_flag=True,
-    help="Skip confirmation prompt"
+    "--target",
+    "cli_target",
+    type=click.Choice(["claude", "gemini", "auto"]),
+    default="auto",
+    help="Target CLI to uninstall from (default: auto-detect)",
 )
-def uninstall(include_data: bool, dry_run: bool, yes: bool) -> None:
+def uninstall(include_data: bool, dry_run: bool, yes: bool, cli_target: str) -> None:
     """Remove all a-sdlc components from the system.
 
     By default, preserves project data (PRDs, tasks, database).
@@ -662,7 +724,8 @@ def uninstall(include_data: bool, dry_run: bool, yes: bool) -> None:
     """
     from a_sdlc.uninstall import build_uninstall_plan, execute_uninstall
 
-    plan = build_uninstall_plan(include_data=include_data)
+    targets = resolve_targets(cli_target)
+    plan = build_uninstall_plan(include_data=include_data, targets=targets if targets else None)
 
     # Ask about optional MCP servers (they may have been installed independently)
     if not dry_run and not yes:
@@ -714,11 +777,13 @@ def uninstall(include_data: bool, dry_run: bool, yes: bool) -> None:
     # Display results
     console.print()
     if result.actions:
-        console.print(Panel(
-            "\n".join(f"[green]  {a}[/green]" for a in result.actions),
-            title="[bold]Actions Taken[/bold]",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "\n".join(f"[green]  {a}[/green]" for a in result.actions),
+                title="[bold]Actions Taken[/bold]",
+                border_style="green",
+            )
+        )
 
     if result.warnings:
         for w in result.warnings:
@@ -734,7 +799,9 @@ def uninstall(include_data: bool, dry_run: bool, yes: bool) -> None:
     console.print()
     console.print("[dim]Notes:[/dim]")
     console.print("  - To remove the Python package: [cyan]uv tool uninstall a-sdlc[/cyan]")
-    console.print("  - Per-project [cyan].sdlc/[/cyan] directories must be removed manually from each repo.")
+    console.print(
+        "  - Per-project [cyan].sdlc/[/cyan] directories must be removed manually from each repo."
+    )
 
 
 def _display_uninstall_plan(plan) -> None:
@@ -752,20 +819,26 @@ def _display_uninstall_plan(plan) -> None:
     table.add_row(
         "serena MCP server",
         "[green]Found[/green]" if plan.has_serena_mcp else "[dim]Not found[/dim]",
-        "Remove from settings.json" if plan.remove_serena
-        else "[dim]Keep (user choice)[/dim]" if plan.has_serena_mcp
+        "Remove from settings.json"
+        if plan.remove_serena
+        else "[dim]Keep (user choice)[/dim]"
+        if plan.has_serena_mcp
         else "Skip",
     )
     table.add_row(
         "playwright MCP server",
         "[green]Found[/green]" if plan.has_playwright_mcp else "[dim]Not found[/dim]",
-        "Remove from settings.json" if plan.remove_playwright
-        else "[dim]Keep (user choice)[/dim]" if plan.has_playwright_mcp
+        "Remove from settings.json"
+        if plan.remove_playwright
+        else "[dim]Keep (user choice)[/dim]"
+        if plan.has_playwright_mcp
         else "Skip",
     )
     table.add_row(
         "Skill templates",
-        f"[green]{plan.skill_template_count} files[/green]" if plan.skill_template_count else "[dim]None[/dim]",
+        f"[green]{plan.skill_template_count} files[/green]"
+        if plan.skill_template_count
+        else "[dim]None[/dim]",
         f"Delete {plan.skill_template_count} templates" if plan.skill_template_count else "Skip",
     )
     table.add_row(
@@ -780,19 +853,25 @@ def _display_uninstall_plan(plan) -> None:
     )
     table.add_row(
         "OTEL/Langfuse env vars",
-        f"[green]{len(plan.managed_env_keys)} keys[/green]" if plan.managed_env_keys else "[dim]None[/dim]",
+        f"[green]{len(plan.managed_env_keys)} keys[/green]"
+        if plan.managed_env_keys
+        else "[dim]None[/dim]",
         f"Remove {len(plan.managed_env_keys)} key(s)" if plan.managed_env_keys else "Skip",
     )
     table.add_row(
         "Monitoring files",
-        f"[green]{plan.monitoring_dir}[/green]" if plan.has_monitoring_dir else "[dim]Not found[/dim]",
+        f"[green]{plan.monitoring_dir}[/green]"
+        if plan.has_monitoring_dir
+        else "[dim]Not found[/dim]",
         "Delete directory" if plan.has_monitoring_dir else "Skip",
     )
     table.add_row(
         "Project data",
         f"[green]{plan.data_dir}[/green]" if plan.has_data_dir else "[dim]Not found[/dim]",
-        "[red]Delete directory[/red]" if plan.include_data and plan.has_data_dir
-        else "[dim]Preserved (use --include-data)[/dim]" if plan.has_data_dir
+        "[red]Delete directory[/red]"
+        if plan.include_data and plan.has_data_dir
+        else "[dim]Preserved (use --include-data)[/dim]"
+        if plan.has_data_dir
         else "Skip",
     )
 
@@ -801,24 +880,22 @@ def _display_uninstall_plan(plan) -> None:
 
 def _plan_has_work(plan) -> bool:
     """Check if the plan has anything to do."""
-    return any([
-        plan.has_asdlc_mcp,
-        plan.has_serena_mcp,
-        plan.skill_template_count > 0,
-        plan.persona_count > 0,
-        plan.has_monitoring_hook,
-        plan.managed_env_keys,
-        plan.has_monitoring_dir,
-        plan.include_data and plan.has_data_dir,
-    ])
+    return any(
+        [
+            plan.has_asdlc_mcp,
+            plan.has_serena_mcp,
+            plan.skill_template_count > 0,
+            plan.persona_count > 0,
+            plan.has_monitoring_hook,
+            plan.managed_env_keys,
+            plan.has_monitoring_dir,
+            plan.include_data and plan.has_data_dir,
+        ]
+    )
 
 
 @main.command("setup-mcp")
-@click.option(
-    "--force", "-f",
-    is_flag=True,
-    help="Force reconfigure even if already set up"
-)
+@click.option("--force", "-f", is_flag=True, help="Force reconfigure even if already set up")
 def setup_mcp(force: bool) -> None:
     """Install and configure Serena MCP for Claude Code.
 
@@ -879,13 +956,15 @@ def monitoring_configure() -> None:
 
         a-sdlc monitoring configure
     """
-    console.print(Panel(
-        "[bold]Langfuse API Key Configuration[/bold]\n\n"
-        "Get your keys from http://localhost:13000\n"
-        "  Login: admin@langfuse.local / changeme123\n"
-        "  Go to: Settings > API Keys > Create",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            "[bold]Langfuse API Key Configuration[/bold]\n\n"
+            "Get your keys from http://localhost:13000\n"
+            "  Login: admin@langfuse.local / changeme123\n"
+            "  Go to: Settings > API Keys > Create",
+            border_style="blue",
+        )
+    )
 
     secret_key = click.prompt("Langfuse Secret Key (sk-lf-...)", hide_input=True)
     public_key = click.prompt("Langfuse Public Key (pk-lf-...)")
@@ -988,10 +1067,7 @@ def monitoring_status() -> None:
 
         a-sdlc monitoring status
     """
-    console.print(Panel(
-        "[bold]Monitoring Status[/bold]",
-        border_style="blue"
-    ))
+    console.print(Panel("[bold]Monitoring Status[/bold]", border_style="blue"))
 
     # Setup verification
     verification = verify_monitoring_setup()
@@ -1027,14 +1103,14 @@ def monitoring_status() -> None:
     health_table.add_row(
         "Langfuse",
         "[green]Running[/green]" if langfuse_ok else "[red]Not reachable[/red]",
-        "http://localhost:13000"
+        "http://localhost:13000",
     )
 
     signoz_ok = health.get("signoz_reachable", False)
     health_table.add_row(
         "SigNoz",
         "[green]Running[/green]" if signoz_ok else "[red]Not reachable[/red]",
-        "http://localhost:8080"
+        "http://localhost:8080",
     )
 
     console.print(health_table)
@@ -1059,6 +1135,7 @@ def _setup_sonarqube_interactive(force: bool = False) -> bool:
     scanner_ok, _ = check_scanner_available()
     if not scanner_ok:
         import subprocess
+
         console.print("[cyan]Installing pysonar scanner...[/cyan]")
         result = subprocess.run(
             ["uv", "tool", "install", "pysonar"],
@@ -1071,15 +1148,17 @@ def _setup_sonarqube_interactive(force: bool = False) -> bool:
         console.print("[green]pysonar installed successfully.[/green]")
         console.print()
 
-    console.print(Panel(
-        "[bold]Setting up SonarQube Integration[/bold]\n\n"
-        "This will configure code analysis with your SonarQube instance.\n"
-        "You'll need:\n"
-        "  - SonarQube host URL\n"
-        "  - Authentication token\n"
-        "  - Project key",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            "[bold]Setting up SonarQube Integration[/bold]\n\n"
+            "This will configure code analysis with your SonarQube instance.\n"
+            "You'll need:\n"
+            "  - SonarQube host URL\n"
+            "  - Authentication token\n"
+            "  - Project key",
+            border_style="blue",
+        )
+    )
 
     host_url = click.prompt("SonarQube host URL", default="http://localhost:9000")
     token = click.prompt("Authentication token", hide_input=True)
@@ -1114,19 +1193,19 @@ def _setup_sonarqube_interactive(force: bool = False) -> bool:
                 "Scanner",
                 "[green]Available[/green]"
                 if verification.get("scanner_available")
-                else "[yellow]Not found[/yellow]"
+                else "[yellow]Not found[/yellow]",
             )
             table.add_row(
                 "Connection",
                 "[green]Connected[/green]"
                 if verification.get("sonarqube_reachable")
-                else "[yellow]Not reachable[/yellow]"
+                else "[yellow]Not reachable[/yellow]",
             )
             table.add_row(
                 "Project Key",
                 f"[green]{project_key}[/green]"
                 if verification.get("project_key_configured")
-                else "[yellow]Not set[/yellow]"
+                else "[yellow]Not set[/yellow]",
             )
 
             console.print(table)
@@ -1221,10 +1300,7 @@ def sonarqube_status() -> None:
 
         a-sdlc sonarqube status
     """
-    console.print(Panel(
-        "[bold]SonarQube Integration Status[/bold]",
-        border_style="blue"
-    ))
+    console.print(Panel("[bold]SonarQube Integration Status[/bold]", border_style="blue"))
 
     verification = verify_sonarqube_setup()
 
@@ -1237,40 +1313,42 @@ def sonarqube_status() -> None:
     table.add_row(
         "Scanner",
         "[green]Available[/green]" if scanner_ok else "[yellow]Not found[/yellow]",
-        "pysonar" if scanner_ok else "Install with: uv tool install pysonar"
+        "pysonar" if scanner_ok else "Install with: uv tool install pysonar",
     )
 
     table.add_row(
         "Host URL",
-        "[green]Configured[/green]" if verification.get("host_url_configured") else "[yellow]Not set[/yellow]",
-        ""
+        "[green]Configured[/green]"
+        if verification.get("host_url_configured")
+        else "[yellow]Not set[/yellow]",
+        "",
     )
 
     table.add_row(
         "Token",
-        "[green]Configured[/green]" if verification.get("token_configured") else "[yellow]Not set[/yellow]",
-        ""
+        "[green]Configured[/green]"
+        if verification.get("token_configured")
+        else "[yellow]Not set[/yellow]",
+        "",
     )
 
     table.add_row(
         "Project Key",
-        "[green]Configured[/green]" if verification.get("project_key_configured") else "[yellow]Not set[/yellow]",
-        ""
+        "[green]Configured[/green]"
+        if verification.get("project_key_configured")
+        else "[yellow]Not set[/yellow]",
+        "",
     )
 
     reachable = verification.get("sonarqube_reachable", False)
     table.add_row(
         "Connection",
         "[green]Connected[/green]" if reachable else "[yellow]Not reachable[/yellow]",
-        str(verification.get("connection_message", ""))
+        str(verification.get("connection_message", "")),
     )
 
     ready = verification.get("ready", False)
-    table.add_row(
-        "Overall",
-        "[green]Ready[/green]" if ready else "[yellow]Not ready[/yellow]",
-        ""
-    )
+    table.add_row("Overall", "[green]Ready[/green]" if ready else "[yellow]Not ready[/yellow]", "")
 
     console.print(table)
 
@@ -1295,41 +1373,76 @@ def doctor() -> None:
     - SonarQube configuration
     - Database accessibility and schema version
     """
-    console.print(Panel(
-        "[bold]a-sdlc System Diagnostics[/bold]",
-        border_style="blue"
-    ))
+    console.print(Panel("[bold]a-sdlc System Diagnostics[/bold]", border_style="blue"))
 
     checks = []
 
     # Python version check
     py_version = sys.version_info
     py_ok = py_version >= (3, 10)
-    checks.append({
-        "name": "Python Version",
-        "status": "pass" if py_ok else "fail",
-        "detail": f"{py_version.major}.{py_version.minor}.{py_version.micro}"
-                 if py_ok else f"{py_version.major}.{py_version.minor}.{py_version.micro} (requires >= 3.10). Fix: install Python 3.10+"
-    })
+    checks.append(
+        {
+            "name": "Python Version",
+            "status": "pass" if py_ok else "fail",
+            "detail": f"{py_version.major}.{py_version.minor}.{py_version.micro}"
+            if py_ok
+            else f"{py_version.major}.{py_version.minor}.{py_version.micro} (requires >= 3.10). Fix: install Python 3.10+",
+        }
+    )
 
     # uv/uvx availability check
     uv_ok, uv_msg = check_uv_available()
-    checks.append({
-        "name": "uv/uvx",
-        "status": "pass" if uv_ok else "fail",
-        "detail": uv_msg if uv_ok else "Not found. Fix: install from https://docs.astral.sh/uv/"
-    })
+    checks.append(
+        {
+            "name": "uv/uvx",
+            "status": "pass" if uv_ok else "fail",
+            "detail": uv_msg
+            if uv_ok
+            else "Not found. Fix: install from https://docs.astral.sh/uv/",
+        }
+    )
 
-    # Claude Code config directory
-    claude_dir = Path.home() / ".claude"
-    claude_ok = claude_dir.exists()
-    checks.append({
-        "name": "Claude Code Config",
-        "status": "pass" if claude_ok else "warn",
-        "detail": str(claude_dir) if claude_ok else "Not found. Fix: install Claude Code from https://claude.ai/code"
-    })
+    # CLI targets detection
+    detected = detect_targets()
+    if detected:
+        checks.append(
+            {
+                "name": "CLI Targets",
+                "status": "pass",
+                "detail": ", ".join(t.display_name for t in detected),
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "CLI Targets",
+                "status": "warn",
+                "detail": "No supported CLI found. Install Claude Code or Gemini CLI.",
+            }
+        )
 
-    # asdlc MCP server in ~/.claude.json
+    # Per-target MCP config checks
+    for t in detected:
+        try:
+            if t.mcp_config_path.exists():
+                with open(t.mcp_config_path) as f:
+                    target_settings = json.load(f)
+                has_mcp = "asdlc" in target_settings.get("mcpServers", {})
+            else:
+                has_mcp = False
+        except (json.JSONDecodeError, OSError):
+            has_mcp = False
+        checks.append(
+            {
+                "name": f"{t.display_name} MCP",
+                "status": "pass" if has_mcp else "warn",
+                "detail": f"asdlc configured in {t.mcp_config_path}"
+                if has_mcp
+                else f"Not found. Fix: run a-sdlc install --target {t.name}",
+            }
+        )
+
+    # Legacy asdlc MCP server check (for backward compatibility)
     settings_path = get_claude_settings_path()
     try:
         if settings_path.exists():
@@ -1340,20 +1453,29 @@ def doctor() -> None:
             mcp_ok = False
     except (json.JSONDecodeError, OSError):
         mcp_ok = False
-    checks.append({
-        "name": "asdlc MCP Server",
-        "status": "pass" if mcp_ok else "warn",
-        "detail": "Configured in ~/.claude.json" if mcp_ok else "Not found. Fix: run a-sdlc install"
-    })
+    checks.append(
+        {
+            "name": "asdlc MCP Server",
+            "status": "pass" if mcp_ok else "warn",
+            "detail": "Configured in ~/.claude.json"
+            if mcp_ok
+            else "Not found. Fix: run a-sdlc install",
+        }
+    )
 
-    # Commands directory
+    # Commands directory (use Claude's default path for backward compatibility)
+    claude_dir = Path.home() / ".claude"
     commands_dir = claude_dir / "commands" / "sdlc"
     commands_ok = commands_dir.exists()
-    checks.append({
-        "name": "Skill Templates",
-        "status": "pass" if commands_ok else "warn",
-        "detail": f"{len(list(commands_dir.glob('*.md')))} installed" if commands_ok else "Not installed. Fix: run a-sdlc install"
-    })
+    checks.append(
+        {
+            "name": "Skill Templates",
+            "status": "pass" if commands_ok else "warn",
+            "detail": f"{len(list(commands_dir.glob('*.md')))} installed"
+            if commands_ok
+            else "Not installed. Fix: run a-sdlc install",
+        }
+    )
 
     # Template version check
     try:
@@ -1362,14 +1484,13 @@ def doctor() -> None:
         if tpl_up_to_date:
             tpl_status, tpl_detail = "pass", f"v{tpl_installed} (current)"
         else:
-            tpl_status, tpl_detail = "warn", f"v{tpl_installed} installed, v{tpl_current} available. Fix: run a-sdlc install --force"
+            tpl_status, tpl_detail = (
+                "warn",
+                f"v{tpl_installed} installed, v{tpl_current} available. Fix: run a-sdlc install --force",
+            )
     except Exception:
         tpl_status, tpl_detail = "warn", "Cannot check. Fix: run a-sdlc install"
-    checks.append({
-        "name": "Template Version",
-        "status": tpl_status,
-        "detail": tpl_detail
-    })
+    checks.append({"name": "Template Version", "status": tpl_status, "detail": tpl_detail})
 
     # Serena MCP check
     serena_verification = verify_setup()
@@ -1387,64 +1508,86 @@ def doctor() -> None:
         serena_detail = "Not configured. Fix: run a-sdlc setup-mcp"
         serena_status = "warn"
 
-    checks.append({
-        "name": "Serena MCP",
-        "status": serena_status,
-        "detail": serena_detail
-    })
+    checks.append({"name": "Serena MCP", "status": serena_status, "detail": serena_detail})
 
     # Plugin manager
     pm = get_plugin_manager()
     plugins = pm.list_plugins()
-    checks.append({
-        "name": "Plugins Available",
-        "status": "pass",
-        "detail": ", ".join(plugins) if plugins else "None"
-    })
+    checks.append(
+        {
+            "name": "Plugins Available",
+            "status": "pass",
+            "detail": ", ".join(plugins) if plugins else "None",
+        }
+    )
 
     # Monitoring checks
     docker_ok = check_docker_available()
-    checks.append({
-        "name": "Docker",
-        "status": "pass" if docker_ok else "warn",
-        "detail": "Available" if docker_ok else "Not found. Fix: install Docker from https://docs.docker.com/get-docker/"
-    })
+    checks.append(
+        {
+            "name": "Docker",
+            "status": "pass" if docker_ok else "warn",
+            "detail": "Available"
+            if docker_ok
+            else "Not found. Fix: install Docker from https://docs.docker.com/get-docker/",
+        }
+    )
 
     mon_verification = verify_monitoring_setup()
 
-    checks.append({
-        "name": "Monitoring Files",
-        "status": "pass" if mon_verification.get("files_ready") else "warn",
-        "detail": "Installed" if mon_verification.get("files_ready") else "Not installed. Fix: run a-sdlc install --with-monitoring"
-    })
+    checks.append(
+        {
+            "name": "Monitoring Files",
+            "status": "pass" if mon_verification.get("files_ready") else "warn",
+            "detail": "Installed"
+            if mon_verification.get("files_ready")
+            else "Not installed. Fix: run a-sdlc install --with-monitoring",
+        }
+    )
 
-    checks.append({
-        "name": "Langfuse Hook",
-        "status": "pass" if mon_verification.get("hook_registered") else "warn",
-        "detail": "Registered" if mon_verification.get("hook_registered") else "Not registered. Fix: run a-sdlc install --with-monitoring"
-    })
+    checks.append(
+        {
+            "name": "Langfuse Hook",
+            "status": "pass" if mon_verification.get("hook_registered") else "warn",
+            "detail": "Registered"
+            if mon_verification.get("hook_registered")
+            else "Not registered. Fix: run a-sdlc install --with-monitoring",
+        }
+    )
 
-    checks.append({
-        "name": "OTEL Environment",
-        "status": "pass" if mon_verification.get("otel_configured") else "warn",
-        "detail": "Configured" if mon_verification.get("otel_configured") else "Not configured. Fix: run a-sdlc install --with-monitoring"
-    })
+    checks.append(
+        {
+            "name": "OTEL Environment",
+            "status": "pass" if mon_verification.get("otel_configured") else "warn",
+            "detail": "Configured"
+            if mon_verification.get("otel_configured")
+            else "Not configured. Fix: run a-sdlc install --with-monitoring",
+        }
+    )
 
     if mon_verification.get("files_ready"):
         health = check_services_health()
         langfuse_ok = health.get("langfuse_reachable", False)
         signoz_ok = health.get("signoz_reachable", False)
 
-        checks.append({
-            "name": "Langfuse Service",
-            "status": "pass" if langfuse_ok else "warn",
-            "detail": "http://localhost:13000" if langfuse_ok else "Not reachable. Fix: run a-sdlc monitoring start"
-        })
-        checks.append({
-            "name": "SigNoz Service",
-            "status": "pass" if signoz_ok else "warn",
-            "detail": "http://localhost:8080" if signoz_ok else "Not reachable. Fix: run a-sdlc monitoring start"
-        })
+        checks.append(
+            {
+                "name": "Langfuse Service",
+                "status": "pass" if langfuse_ok else "warn",
+                "detail": "http://localhost:13000"
+                if langfuse_ok
+                else "Not reachable. Fix: run a-sdlc monitoring start",
+            }
+        )
+        checks.append(
+            {
+                "name": "SigNoz Service",
+                "status": "pass" if signoz_ok else "warn",
+                "detail": "http://localhost:8080"
+                if signoz_ok
+                else "Not reachable. Fix: run a-sdlc monitoring start",
+            }
+        )
 
     # SonarQube checks
     sq_verification = verify_sonarqube_setup()
@@ -1460,11 +1603,7 @@ def doctor() -> None:
         sq_detail = "Not configured. Fix: run a-sdlc sonarqube configure"
         sq_status = "warn"
 
-    checks.append({
-        "name": "SonarQube",
-        "status": sq_status,
-        "detail": sq_detail
-    })
+    checks.append({"name": "SonarQube", "status": sq_status, "detail": sq_detail})
 
     # Playwright MCP check
     from a_sdlc.playwright_setup import verify_setup as verify_playwright_setup
@@ -1483,11 +1622,13 @@ def doctor() -> None:
         pw_detail = "Not configured. Fix: run a-sdlc install --with-playwright"
         pw_status = "warn"
 
-    checks.append({
-        "name": "Playwright MCP",
-        "status": pw_status,
-        "detail": pw_detail,
-    })
+    checks.append(
+        {
+            "name": "Playwright MCP",
+            "status": pw_status,
+            "detail": pw_detail,
+        }
+    )
 
     # Persona agents check
     try:
@@ -1495,50 +1636,65 @@ def doctor() -> None:
         personas = persona_installer.list_installed_personas()
         persona_count = len(personas)
         if persona_count >= 7:
-            checks.append({
-                "name": "Persona Agents",
-                "status": "pass",
-                "detail": f"{persona_count} personas deployed to ~/.claude/agents/"
-            })
+            checks.append(
+                {
+                    "name": "Persona Agents",
+                    "status": "pass",
+                    "detail": f"{persona_count} personas deployed to ~/.claude/agents/",
+                }
+            )
         elif persona_count > 0:
-            checks.append({
-                "name": "Persona Agents",
-                "status": "warn",
-                "detail": f"Only {persona_count}/7 personas deployed. Fix: a-sdlc install --force"
-            })
+            checks.append(
+                {
+                    "name": "Persona Agents",
+                    "status": "warn",
+                    "detail": f"Only {persona_count}/7 personas deployed. Fix: a-sdlc install --force",
+                }
+            )
         else:
-            checks.append({
+            checks.append(
+                {
+                    "name": "Persona Agents",
+                    "status": "warn",
+                    "detail": "No personas found. Fix: a-sdlc install",
+                }
+            )
+    except Exception:
+        checks.append(
+            {
                 "name": "Persona Agents",
                 "status": "warn",
-                "detail": "No personas found. Fix: a-sdlc install"
-            })
-    except Exception:
-        checks.append({
-            "name": "Persona Agents",
-            "status": "warn",
-            "detail": "Could not check personas. Fix: a-sdlc install"
-        })
+                "detail": "Could not check personas. Fix: a-sdlc install",
+            }
+        )
 
     # Database accessibility check
     import sqlite3
 
     from a_sdlc.core.database import SCHEMA_VERSION, Database
+
     db = None  # type: ignore[assignment]
     try:
         db = Database()
         db_path = db.db_path
         db_accessible = Path(db_path).exists() if str(db_path) != ":memory:" else True
-        checks.append({
-            "name": "Database Accessible",
-            "status": "pass" if db_accessible else "fail",
-            "detail": str(db_path) if db_accessible else f"Database file not found at {db_path}. Fix: run a-sdlc install"
-        })
+        checks.append(
+            {
+                "name": "Database Accessible",
+                "status": "pass" if db_accessible else "fail",
+                "detail": str(db_path)
+                if db_accessible
+                else f"Database file not found at {db_path}. Fix: run a-sdlc install",
+            }
+        )
     except Exception as e:
-        checks.append({
-            "name": "Database Accessible",
-            "status": "fail",
-            "detail": f"Cannot open database: {e}. Fix: check ~/.a-sdlc/ permissions or run a-sdlc install"
-        })
+        checks.append(
+            {
+                "name": "Database Accessible",
+                "status": "fail",
+                "detail": f"Cannot open database: {e}. Fix: check ~/.a-sdlc/ permissions or run a-sdlc install",
+            }
+        )
 
     # Database schema version check
     try:
@@ -1548,17 +1704,24 @@ def doctor() -> None:
             if actual == SCHEMA_VERSION:
                 schema_status, schema_detail = "pass", f"v{actual} (current)"
             else:
-                schema_status, schema_detail = "warn", f"v{actual} (expected v{SCHEMA_VERSION}). Fix: run a-sdlc install --upgrade"
+                schema_status, schema_detail = (
+                    "warn",
+                    f"v{actual} (expected v{SCHEMA_VERSION}). Fix: run a-sdlc install --upgrade",
+                )
         else:
-            schema_status, schema_detail = "fail", "Skipped (database not accessible). Fix: resolve database issue above"
+            schema_status, schema_detail = (
+                "fail",
+                "Skipped (database not accessible). Fix: resolve database issue above",
+            )
     except Exception as e:
-        schema_status, schema_detail = "fail", f"Cannot check: {e}. Fix: run a-sdlc install --upgrade"
+        schema_status, schema_detail = (
+            "fail",
+            f"Cannot check: {e}. Fix: run a-sdlc install --upgrade",
+        )
 
-    checks.append({
-        "name": "Database schema version",
-        "status": schema_status,
-        "detail": schema_detail
-    })
+    checks.append(
+        {"name": "Database schema version", "status": schema_status, "detail": schema_detail}
+    )
 
     # Display results
     table = Table(show_header=True, header_style="bold")
@@ -1590,6 +1753,54 @@ def doctor() -> None:
         console.print("[yellow]Passed with warnings. Some features may be limited.[/yellow]")
     else:
         console.print("[red]Some checks failed. Please address the issues above.[/red]")
+        sys.exit(1)
+
+
+@main.command("build-extension")
+@click.option(
+    "--output",
+    "-o",
+    default="./dist/gemini-extension/",
+    type=click.Path(path_type=Path),
+    help="Output directory for the extension (default: ./dist/gemini-extension/)",
+)
+def build_extension(output: Path) -> None:
+    """Build a Gemini CLI extension package for distribution.
+
+    Generates a complete Gemini CLI extension directory containing
+    transpiled TOML commands, MCP server manifest, and context file.
+
+    Examples:
+
+        a-sdlc build-extension                      # Build in ./dist/gemini-extension/
+        a-sdlc build-extension -o /tmp/my-ext       # Build in custom directory
+    """
+    from a_sdlc.gemini_extension import build_extension_dir
+
+    try:
+        output = output.resolve()
+        ext_dir = build_extension_dir(output)
+
+        # Count transpiled commands
+        commands_dir = ext_dir / "commands" / "sdlc"
+        toml_count = len(list(commands_dir.glob("*.toml"))) if commands_dir.exists() else 0
+        manifest_path = ext_dir / "gemini-extension.json"
+
+        console.print()
+        console.print(
+            Panel(
+                f"[green]Extension built successfully![/green]\n\n"
+                f"Directory: [cyan]{ext_dir}[/cyan]\n"
+                f"Commands:  [cyan]{toml_count} TOML files[/cyan]\n"
+                f"Manifest:  [cyan]{manifest_path}[/cyan]\n\n"
+                f"[bold]Install with:[/bold]\n"
+                f"  gemini extensions install --path={ext_dir}",
+                title="[bold]Gemini CLI Extension[/bold]",
+                border_style="green",
+            )
+        )
+    except Exception as e:
+        console.print(f"[red]Error building extension: {e}[/red]")
         sys.exit(1)
 
 
@@ -1656,17 +1867,19 @@ def plugins_list() -> None:
 @plugins.command("enable")
 @click.argument("plugin_name")
 @click.option(
-    "--type", "-t",
+    "--type",
+    "-t",
     "plugin_type",
     type=click.Choice(["task", "artifact"]),
     default=None,
-    help="Plugin type (task or artifact). Auto-detected if not specified."
+    help="Plugin type (task or artifact). Auto-detected if not specified.",
 )
 @click.option(
-    "--global", "-g",
+    "--global",
+    "-g",
     "save_global",
     is_flag=True,
-    help="Save to global config (~/.config/a-sdlc/) instead of project config (.sdlc/)"
+    help="Save to global config (~/.config/a-sdlc/) instead of project config (.sdlc/)",
 )
 def plugins_enable(plugin_name: str, plugin_type: str | None, save_global: bool) -> None:
     """Enable a specific plugin.
@@ -1727,10 +1940,11 @@ def plugins_enable(plugin_name: str, plugin_type: str | None, save_global: bool)
 @plugins.command("configure")
 @click.argument("plugin_name")
 @click.option(
-    "--global", "-g",
+    "--global",
+    "-g",
     "save_global",
     is_flag=True,
-    help="Save to global config (~/.config/a-sdlc/) instead of project config (.sdlc/)"
+    help="Save to global config (~/.config/a-sdlc/) instead of project config (.sdlc/)",
 )
 def plugins_configure(plugin_name: str, save_global: bool) -> None:
     """Configure a plugin interactively.
@@ -1777,14 +1991,16 @@ def plugins_configure(plugin_name: str, save_global: bool) -> None:
 def _configure_linear_plugin(pm: object, target: str = "project") -> None:
     """Interactive configuration for Linear plugin."""
     location = "global config" if target == "global" else "project config"
-    console.print(Panel(
-        f"[bold]Linear Plugin Configuration[/bold]\n\n"
-        f"Saving to: {location}\n\n"
-        "You'll need:\n"
-        "  - Linear API key (from Settings > API)\n"
-        "  - Team ID (visible in team URL)",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            f"[bold]Linear Plugin Configuration[/bold]\n\n"
+            f"Saving to: {location}\n\n"
+            "You'll need:\n"
+            "  - Linear API key (from Settings > API)\n"
+            "  - Team ID (visible in team URL)",
+            border_style="blue",
+        )
+    )
 
     api_key = click.prompt("Linear API Key", hide_input=True)
     team_id = click.prompt("Team ID (e.g., 'ENG')")
@@ -1805,16 +2021,18 @@ def _configure_linear_plugin(pm: object, target: str = "project") -> None:
 def _configure_jira_plugin(pm: object, target: str = "project") -> None:
     """Interactive configuration for Jira plugin."""
     location = "global config" if target == "global" else "project config"
-    console.print(Panel(
-        f"[bold]Jira Cloud Plugin Configuration[/bold]\n\n"
-        f"Saving to: {location}\n\n"
-        "You'll need:\n"
-        "  - Atlassian site URL (e.g., https://company.atlassian.net)\n"
-        "  - Atlassian account email\n"
-        "  - API token (from https://id.atlassian.com/manage-profile/security/api-tokens)\n"
-        "  - Jira project key (e.g., 'PROJ')",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            f"[bold]Jira Cloud Plugin Configuration[/bold]\n\n"
+            f"Saving to: {location}\n\n"
+            "You'll need:\n"
+            "  - Atlassian site URL (e.g., https://company.atlassian.net)\n"
+            "  - Atlassian account email\n"
+            "  - API token (from https://id.atlassian.com/manage-profile/security/api-tokens)\n"
+            "  - Jira project key (e.g., 'PROJ')",
+            border_style="blue",
+        )
+    )
 
     base_url = click.prompt("Atlassian Site URL (e.g., https://company.atlassian.net)")
     email = click.prompt("Atlassian Email")
@@ -1839,17 +2057,19 @@ def _configure_jira_plugin(pm: object, target: str = "project") -> None:
 def _configure_confluence_plugin(apm: object, target: str = "project") -> None:
     """Interactive configuration for Confluence plugin."""
     location = "global config" if target == "global" else "project config"
-    console.print(Panel(
-        f"[bold]Confluence Cloud Plugin Configuration[/bold]\n\n"
-        f"Saving to: {location}\n\n"
-        "You'll need:\n"
-        "  - Atlassian site URL (e.g., https://company.atlassian.net)\n"
-        "  - Atlassian account email\n"
-        "  - API token (from https://id.atlassian.com/manage-profile/security/api-tokens)\n"
-        "  - Confluence space key (e.g., 'PROJ')\n"
-        "  - Optional: Parent page ID for SDLC documentation",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            f"[bold]Confluence Cloud Plugin Configuration[/bold]\n\n"
+            f"Saving to: {location}\n\n"
+            "You'll need:\n"
+            "  - Atlassian site URL (e.g., https://company.atlassian.net)\n"
+            "  - Atlassian account email\n"
+            "  - API token (from https://id.atlassian.com/manage-profile/security/api-tokens)\n"
+            "  - Confluence space key (e.g., 'PROJ')\n"
+            "  - Optional: Parent page ID for SDLC documentation",
+            border_style="blue",
+        )
+    )
 
     base_url = click.prompt("Atlassian Site URL (e.g., https://company.atlassian.net)")
     email = click.prompt("Atlassian Email")
@@ -1958,7 +2178,9 @@ def artifacts_status() -> None:
         elif remote:
             remote_time = remote.updated_at.strftime("%Y-%m-%d %H:%M")
             # Compare timestamps (with 60-second tolerance)
-            time_diff = (_to_naive_utc(artifact.updated_at) - _to_naive_utc(remote.updated_at)).total_seconds()
+            time_diff = (
+                _to_naive_utc(artifact.updated_at) - _to_naive_utc(remote.updated_at)
+            ).total_seconds()
 
             if abs(time_diff) < 60:
                 status = "[green]✓ In sync[/green]"
@@ -2000,23 +2222,36 @@ def artifacts_status() -> None:
             1
             for a in local_artifacts
             if a.id in remote_artifacts_map
-            and abs((_to_naive_utc(a.updated_at) - _to_naive_utc(remote_artifacts_map[a.id].updated_at)).total_seconds()) < 60
+            and abs(
+                (
+                    _to_naive_utc(a.updated_at)
+                    - _to_naive_utc(remote_artifacts_map[a.id].updated_at)
+                ).total_seconds()
+            )
+            < 60
         )
         local_newer = sum(
             1
             for a in local_artifacts
             if a.id in remote_artifacts_map
-            and (_to_naive_utc(a.updated_at) - _to_naive_utc(remote_artifacts_map[a.id].updated_at)).total_seconds() >= 60
+            and (
+                _to_naive_utc(a.updated_at) - _to_naive_utc(remote_artifacts_map[a.id].updated_at)
+            ).total_seconds()
+            >= 60
         )
         not_published = sum(
             1 for a in local_artifacts if a.id not in remote_artifacts_map and not a.external_id
         )
 
-        console.print(f"In sync: {in_sync} | Local newer: {local_newer} | Not published: {not_published}")
+        console.print(
+            f"In sync: {in_sync} | Local newer: {local_newer} | Not published: {not_published}"
+        )
 
         if local_newer > 0:
             console.print()
-            console.print("Run [cyan]a-sdlc artifacts push[/cyan] to sync local changes to Confluence.")
+            console.print(
+                "Run [cyan]a-sdlc artifacts push[/cyan] to sync local changes to Confluence."
+            )
     else:
         published = sum(1 for a in local_artifacts if a.external_id)
         console.print(f"Published: {published}/{len(local_artifacts)} artifacts")
@@ -2026,7 +2261,9 @@ def artifacts_status() -> None:
 @artifacts.command("push")
 @click.argument("artifact_name", required=False)
 @click.option("--force", "-f", is_flag=True, help="Force republish all artifacts")
-@click.option("--dry-run", is_flag=True, help="Show what would be published without actually publishing")
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be published without actually publishing"
+)
 def artifacts_push(artifact_name: str | None, force: bool, dry_run: bool) -> None:
     """Push local artifacts to Confluence.
 
@@ -2057,7 +2294,11 @@ def artifacts_push(artifact_name: str | None, force: bool, dry_run: bool) -> Non
 
     # Filter by name if specified
     if artifact_name:
-        local_artifacts = [a for a in local_artifacts if a.id == artifact_name or a.id == artifact_name.replace(".md", "")]
+        local_artifacts = [
+            a
+            for a in local_artifacts
+            if a.id == artifact_name or a.id == artifact_name.replace(".md", "")
+        ]
         if not local_artifacts:
             console.print(f"[red]Artifact not found: {artifact_name}[/red]")
             sys.exit(1)
@@ -2169,7 +2410,11 @@ def artifacts_pull(artifact_name: str | None, force: bool, dry_run: bool) -> Non
 
     # Filter by name if specified
     if artifact_name:
-        remote_artifacts = [a for a in remote_artifacts if a.id == artifact_name or a.id == artifact_name.replace(".md", "")]
+        remote_artifacts = [
+            a
+            for a in remote_artifacts
+            if a.id == artifact_name or a.id == artifact_name.replace(".md", "")
+        ]
         if not remote_artifacts:
             console.print(f"[red]Artifact not found in Confluence: {artifact_name}[/red]")
             sys.exit(1)
@@ -2189,7 +2434,9 @@ def artifacts_pull(artifact_name: str | None, force: bool, dry_run: bool) -> Non
     if not force:
         conflicts = [a for a in remote_artifacts if a.id in local_artifacts]
         if conflicts:
-            console.print("[yellow]Warning: The following local artifacts will be overwritten:[/yellow]")
+            console.print(
+                "[yellow]Warning: The following local artifacts will be overwritten:[/yellow]"
+            )
             for artifact in conflicts:
                 console.print(f"  - {artifact.id}")
             console.print()
@@ -2348,15 +2595,17 @@ def prd_show(prd_id: str) -> None:
         sys.exit(1)
 
     # Display PRD info
-    console.print(Panel(
-        f"[bold]{prd_obj.title}[/bold]\n\n"
-        f"ID: {prd_obj.id}\n"
-        f"Version: {prd_obj.version}\n"
-        f"Updated: {prd_obj.updated_at.strftime('%Y-%m-%d %H:%M')}\n"
-        f"Confluence: {prd_obj.external_url or 'Not synced'}",
-        title="PRD Info",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]{prd_obj.title}[/bold]\n\n"
+            f"ID: {prd_obj.id}\n"
+            f"Version: {prd_obj.version}\n"
+            f"Updated: {prd_obj.updated_at.strftime('%Y-%m-%d %H:%M')}\n"
+            f"Confluence: {prd_obj.external_url or 'Not synced'}",
+            title="PRD Info",
+            border_style="blue",
+        )
+    )
 
     console.print()
     console.print(prd_obj.content)
@@ -2687,9 +2936,7 @@ def prd_update(
             )
 
             if action == "edit":
-                console.print(
-                    "\n[dim]Enter new content (press Ctrl+D or Ctrl+Z when done):[/dim]"
-                )
+                console.print("\n[dim]Enter new content (press Ctrl+D or Ctrl+Z when done):[/dim]")
                 try:
                     new_content = click.edit(content)
                     if new_content and new_content.strip() != content.strip():
@@ -2869,9 +3116,7 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
             context[artifact_name] = artifact_path.read_text(encoding="utf-8")
             console.print(f"   [green]✓[/green] {artifact_name}")
         else:
-            console.print(
-                f"   [yellow]⚠[/yellow] {artifact_name} not found (run /sdlc:scan)"
-            )
+            console.print(f"   [yellow]⚠[/yellow] {artifact_name} not found (run /sdlc:scan)")
 
     console.print()
 
@@ -2931,9 +3176,7 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
         task_id = local.create_task(task)
         saved_ids.append(task_id)
 
-    console.print(
-        f"\n[green]✓ Saved {len(saved_ids)} tasks to .sdlc/tasks/active/[/green]"
-    )
+    console.print(f"\n[green]✓ Saved {len(saved_ids)} tasks to .sdlc/tasks/active/[/green]")
 
     # Optional sync
     provider = pm.get_enabled_plugin()
@@ -3001,9 +3244,7 @@ def _generate_tasks_from_prd(prd_obj, context, requirements, answers):
             priority = TaskPriority.MEDIUM
         elif answers.get("priority_strategy") == "dependency":
             # Earlier tasks get higher priority
-            priority = (
-                TaskPriority.HIGH if task_counter <= 3 else TaskPriority.MEDIUM
-            )
+            priority = TaskPriority.HIGH if task_counter <= 3 else TaskPriority.MEDIUM
         else:
             priority = TaskPriority.MEDIUM
 
@@ -3064,7 +3305,6 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
 
     try:
         if provider == "jira":
-
             plugin = pm.get_plugin("jira")
 
             console.print(f"\n[cyan]Syncing {len(tasks)} tasks to Jira...[/cyan]")
@@ -3091,7 +3331,12 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
 
 
 @main.command("tasks")
-@click.option("--status", "-s", type=click.Choice(["pending", "in_progress", "completed", "blocked"]), help="Filter by status")
+@click.option(
+    "--status",
+    "-s",
+    type=click.Choice(["pending", "in_progress", "completed", "blocked"]),
+    help="Filter by status",
+)
 @click.option("--sprint", help="Filter by sprint ID")
 def tasks_list(status: str | None, sprint: str | None) -> None:
     """List tasks for the current project.
@@ -3192,18 +3437,20 @@ def show_task(task_id: str) -> None:
         "blocked": "🚫 Blocked",
     }
 
-    console.print(Panel(
-        f"[bold]{task['title']}[/bold]\n\n"
-        f"Status: {status_icons.get(task['status'], task['status'])}\n"
-        f"Priority: {task.get('priority', 'medium').title()}\n"
-        f"Component: {task.get('component') or 'N/A'}\n"
-        f"Sprint: {task.get('sprint_id') or 'None'}\n"
-        f"PRD: {task.get('prd_id') or 'None'}\n"
-        f"Created: {task['created_at']}\n"
-        f"Updated: {task['updated_at']}",
-        title=f"[cyan]{task['id']}[/cyan]",
-        border_style="blue"
-    ))
+    console.print(
+        Panel(
+            f"[bold]{task['title']}[/bold]\n\n"
+            f"Status: {status_icons.get(task['status'], task['status'])}\n"
+            f"Priority: {task.get('priority', 'medium').title()}\n"
+            f"Component: {task.get('component') or 'N/A'}\n"
+            f"Sprint: {task.get('sprint_id') or 'None'}\n"
+            f"PRD: {task.get('prd_id') or 'None'}\n"
+            f"Created: {task['created_at']}\n"
+            f"Updated: {task['updated_at']}",
+            title=f"[cyan]{task['id']}[/cyan]",
+            border_style="blue",
+        )
+    )
 
     if task.get("description"):
         console.print("\n[bold]Description:[/bold]")
@@ -3212,6 +3459,7 @@ def show_task(task_id: str) -> None:
     if task.get("data"):
         console.print("\n[bold]Additional Data:[/bold]")
         import json
+
         console.print(json.dumps(task["data"], indent=2))
 
 
@@ -3291,6 +3539,1782 @@ def ui_stop() -> None:
             console.print(f"[dim]Cleaned up stale PID file: {PID_FILE}[/dim]")
 
 
+# =============================================================================
+# Run Commands (Background Execution)
+# =============================================================================
+
+
+def _load_project_config() -> dict:
+    """Load ``.sdlc/config.yaml`` from the current directory.
+
+    Returns:
+        Parsed YAML config dict, or empty dict if the file is missing
+        or unparseable.
+    """
+    import yaml
+
+    config_path = Path.cwd() / ".sdlc" / "config.yaml"
+    if not config_path.exists():
+        return {}
+    try:
+        with open(config_path) as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
+@main.group()
+def run() -> None:
+    """Background execution of sprints, tasks, and goals.
+
+    Fire-and-forget commands that spawn headless Claude Code sessions
+    to execute work in background processes. Progress is tracked via
+    run state files in ~/.a-sdlc/runs/.
+
+    \b
+      a-sdlc run goal "<desc>"   Execute a natural language goal
+      a-sdlc run sprint <id>     Execute a sprint in background
+      a-sdlc run task <id>       Execute a single task in background
+      a-sdlc run status          Show status of all runs
+      a-sdlc run status <id>     Show detail for a specific run
+      a-sdlc run answer <id>     Provide answer to a paused run
+      a-sdlc run control <id>    Per-item intervention (pause/cancel/skip/retry/force-approve)
+      a-sdlc run comment <id>    Post a user comment to an artifact thread
+      a-sdlc run cancel <id>     Cancel a running execution
+    """
+    pass
+
+
+@run.command("goal")
+@click.argument("description")
+@click.option(
+    "--goal-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to a file containing a detailed objective specification.",
+)
+@click.option(
+    "--max-turns",
+    type=int,
+    default=None,
+    help="Max agentic turns for the orchestrator session (default: from config or 500).",
+)
+@click.option(
+    "--max-iterations",
+    type=int,
+    default=None,
+    help="Max SDLC iterations before stopping (default: from config or 5).",
+)
+@click.option(
+    "--max-concurrency",
+    type=int,
+    default=None,
+    help="Max concurrent agent sessions (default: from config or 3).",
+)
+@click.option(
+    "--adapter",
+    type=click.Choice(["claude", "gemini", "mock"]),
+    default=None,
+    help="Execution adapter (default: from config or 'claude').",
+)
+@click.option(
+    "--no-interactive",
+    is_flag=True,
+    default=False,
+    help="Fully autonomous mode -- skip all clarification pauses.",
+)
+def run_goal(
+    description: str,
+    goal_file: str | None,
+    max_turns: int | None,
+    max_iterations: int | None,
+    max_concurrency: int | None,
+    adapter: str | None,
+    no_interactive: bool,
+) -> None:
+    """Start an autonomous goal execution. Returns immediately.
+
+    Accepts a natural language goal description and spawns a detached
+    orchestrator process that drives the full SDLC cycle: analyse the
+    goal, create PRDs, split tasks, run sprints, and evaluate results.
+
+    The first agent interprets the goal, discovers any existing PRDs,
+    tasks, or sprints that match, and decides which phase to start from.
+
+    Examples:
+
+        a-sdlc run goal "Add JWT authentication"
+        a-sdlc run goal "pick up PROJ-P0001 from where I left off"
+        a-sdlc run goal "Refactor DB layer" --goal-file spec.md
+        a-sdlc run goal "Build REST API" --max-iterations 3 --no-interactive
+    """
+    import os
+    import shutil
+    import subprocess
+    import uuid
+
+    from a_sdlc.executor import _ensure_runs_dir, _update_run, _write_run
+
+    # --- Load config defaults ---
+    config = _load_project_config()
+    obj_config = config.get("objective", {})
+    if not isinstance(obj_config, dict):
+        obj_config = {}
+    daemon_config = config.get("daemon", {})
+    if not isinstance(daemon_config, dict):
+        daemon_config = {}
+    orch_config = config.get("orchestrator", {})
+    if not isinstance(orch_config, dict):
+        orch_config = {}
+
+    # Apply config defaults when CLI flags are not provided
+    if max_turns is None:
+        max_turns = orch_config.get(
+            "max_turns_per_phase",
+            obj_config.get("max_turns", 500),
+        )
+    if max_iterations is None:
+        max_iterations = orch_config.get(
+            "max_iterations",
+            obj_config.get("max_iterations", 5),
+        )
+    if max_concurrency is None:
+        max_concurrency = orch_config.get(
+            "max_concurrent",  # Map config field to CLI flag
+            config.get("execution", {}).get("max_concurrency", 3),
+        )
+    if adapter is None:
+        adapter = orch_config.get("adapter", daemon_config.get("adapter", "claude"))
+
+    # --- Check adapter CLI is available ---
+    adapter_cmd = adapter if adapter != "mock" else None
+    if adapter_cmd:
+        adapter_path = shutil.which(adapter_cmd)
+        if not adapter_path:
+            console.print(
+                f"[red]{adapter_cmd} CLI not found on PATH.[/red]\n"
+                "Install from: [cyan]https://claude.ai/code[/cyan]"
+            )
+            sys.exit(1)
+
+    # --- Generate run_id ---
+    run_id = f"R-{uuid.uuid4().hex[:8]}"
+
+    # --- Create run state file ---
+    runs_dir = _ensure_runs_dir()
+    _write_run(
+        run_id,
+        {
+            "run_id": run_id,
+            "type": "pipeline",
+            "entity_id": description[:80],
+            "status": "running",
+            "description": description,
+            "goal": description,  # Sync with orchestrator field name
+            "goal_file": goal_file,
+            "max_turns": max_turns,
+            "max_iterations": max_iterations,
+            "max_concurrency": max_concurrency,
+            "adapter": adapter,
+            "no_interactive": no_interactive,
+            "project_dir": str(Path.cwd()),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pid": None,
+        },
+    )
+
+    # --- Build orchestrator command ---
+    log_file = runs_dir / f"{run_id}.log"
+    cmd = [
+        sys.executable,
+        "-m",
+        "a_sdlc.orchestrator",
+        "--run-id",
+        run_id,
+        "--max-turns",
+        str(max_turns),
+        "--max-iterations",
+        str(max_iterations),
+        "--max-concurrency",
+        str(max_concurrency),
+        "--polling-interval",
+        str(orch_config.get("polling_interval", 30)),
+    ]
+    if goal_file:
+        cmd.extend(["--goal-file", goal_file])
+    if no_interactive:
+        cmd.append("--no-interactive")
+    if adapter:
+        cmd.extend(["--adapter", adapter])
+
+    # --- Spawn detached subprocess ---
+    with open(log_file, "w") as lf:
+        proc = subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            cwd=os.getcwd(),
+        )
+
+    # Store PID in run state
+    _update_run(run_id, pid=proc.pid)
+
+    # --- Report to user and exit immediately ---
+    interactive_label = "no (autonomous)" if no_interactive else "yes"
+    console.print(
+        Panel(
+            f"[green]Goal execution started![/green]\n\n"
+            f"Run ID:        [bold]{run_id}[/bold]\n"
+            f"Goal:          {description[:60]}{'...' if len(description) > 60 else ''}\n"
+            f"Adapter:       {adapter}\n"
+            f"Max turns:     {max_turns}\n"
+            f"Max iterations: {max_iterations}\n"
+            f"Concurrency:    {max_concurrency}\n"
+            f"Interactive:   {interactive_label}\n"
+            f"PID:           {proc.pid}\n"
+            f"Log:           {log_file}\n\n"
+            f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
+            f"Detailed view:   [cyan]a-sdlc run status {run_id}[/cyan]\n"
+            f"Answer:          [cyan]a-sdlc run answer {run_id} -m \"...\"[/cyan]\n"
+            f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
+            title="[bold]Goal Execution[/bold]",
+            border_style="green",
+        )
+    )
+
+
+@run.command("sprint")
+@click.argument("sprint_id")
+@click.option(
+    "--max-turns",
+    type=int,
+    default=None,
+    help="Max agentic turns per Claude Code session (default: from config or 200).",
+)
+@click.option(
+    "--max-concurrency",
+    type=int,
+    default=None,
+    help="Override execution.max_concurrency from config.",
+)
+@click.option(
+    "--supervised",
+    is_flag=True,
+    default=None,
+    help="Pause between batches for user approval.",
+)
+def run_sprint(
+    sprint_id: str,
+    max_turns: int | None,
+    max_concurrency: int | None,
+    supervised: bool | None,
+) -> None:
+    """Start a background sprint execution. Returns immediately.
+
+    Spawns a headless Claude Code session that executes the sprint-run
+    workflow. The session has full access to MCP tools, file operations,
+    and the /sdlc:sprint-run skill template.
+
+    Use --supervised to pause between batches for manual review. The run
+    will show as "awaiting_confirmation" in `a-sdlc run status`. Use
+    `a-sdlc run approve <run_id>` to continue to the next batch.
+
+    Examples:
+
+        a-sdlc run sprint PROJ-S0001
+        a-sdlc run sprint PROJ-S0001 --supervised
+        a-sdlc run sprint PROJ-S0001 --max-turns 500
+    """
+    import os
+    import shutil
+    import subprocess
+    import uuid
+
+    from a_sdlc.executor import _ensure_runs_dir, _write_run
+    from a_sdlc.storage import get_storage
+
+    storage = get_storage()
+
+    # --- Validate sprint exists ---
+    sprint = storage.get_sprint(sprint_id)
+    if not sprint:
+        console.print(f"[red]Sprint not found: {sprint_id}[/red]")
+        sys.exit(1)
+
+    # --- Check claude CLI is available ---
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        console.print(
+            "[red]Claude Code CLI not found on PATH.[/red]\n"
+            "Install from: [cyan]https://claude.ai/code[/cyan]"
+        )
+        sys.exit(1)
+
+    # --- Load config defaults for daemon and execution settings ---
+    config = _load_project_config()
+    daemon_config = config.get("daemon", {})
+
+    # Apply config defaults when CLI flags are not provided
+    if max_turns is None:
+        max_turns = daemon_config.get("max_turns", 200)
+
+    if supervised is None:
+        supervised = daemon_config.get("supervised", False)
+
+    if max_concurrency is None:
+        max_concurrency = config.get("execution", {}).get("max_concurrency", 3)
+
+    # --- Generate run_id ---
+    run_id = f"R-{uuid.uuid4().hex[:8]}"
+
+    # --- Create run state file ---
+    runs_dir = _ensure_runs_dir()
+    _write_run(
+        run_id,
+        {
+            "run_id": run_id,
+            "type": "sprint",
+            "entity_id": sprint_id,
+            "status": "running",
+            "max_turns": max_turns,
+            "max_concurrency": max_concurrency,
+            "supervised": supervised,
+            "project_dir": str(Path.cwd()),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pid": None,
+        },
+    )
+
+    # --- Build executor command ---
+    log_file = runs_dir / f"{run_id}.log"
+    cmd = [
+        sys.executable,
+        "-m",
+        "a_sdlc.executor",
+        "--mode",
+        "sprint",
+        "--sprint-id",
+        sprint_id,
+        "--run-id",
+        run_id,
+        "--max-turns",
+        str(max_turns),
+        "--max-concurrency",
+        str(max_concurrency),
+    ]
+    if supervised:
+        cmd.append("--supervised")
+
+    # --- Spawn detached subprocess ---
+    with open(log_file, "w") as lf:
+        proc = subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            cwd=os.getcwd(),
+        )
+
+    # Store PID in run state
+    from a_sdlc.executor import _update_run
+
+    _update_run(run_id, pid=proc.pid)
+
+    # --- Report to user and exit immediately ---
+    console.print(
+        Panel(
+            f"[green]Sprint execution started![/green]\n\n"
+            f"Run ID:    [bold]{run_id}[/bold]\n"
+            f"Sprint:    {sprint_id}\n"
+            f"PID:       {proc.pid}\n"
+            f"Log:       {log_file}\n"
+            f"Supervised: {'yes' if supervised else 'no'}\n\n"
+            f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
+            f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
+            title="[bold]Background Run[/bold]",
+            border_style="green",
+        )
+    )
+
+
+@run.command("task")
+@click.argument("task_id")
+@click.option(
+    "--max-turns",
+    type=int,
+    default=None,
+    help="Max agentic turns for the Claude Code session (default: from config, capped at 50).",
+)
+def run_task(task_id: str, max_turns: int | None) -> None:
+    """Start a background single-task execution. Returns immediately.
+
+    Spawns a headless Claude Code session that executes the task-start
+    workflow for the given task.
+
+    Examples:
+
+        a-sdlc run task PROJ-T00001
+        a-sdlc run task PROJ-T00001 --max-turns 100
+    """
+    import os
+    import shutil
+    import subprocess
+    import uuid
+
+    from a_sdlc.executor import _ensure_runs_dir, _update_run, _write_run
+    from a_sdlc.storage import get_storage
+
+    storage = get_storage()
+
+    # --- Load config defaults for daemon settings ---
+    config = _load_project_config()
+    daemon_config = config.get("daemon", {})
+
+    # Apply config default when CLI flag is not provided (capped at 50 for tasks)
+    if max_turns is None:
+        max_turns = min(daemon_config.get("max_turns", 200), 50)
+
+    # --- Validate task exists ---
+    task = storage.get_task(task_id)
+    if not task:
+        console.print(f"[red]Task not found: {task_id}[/red]")
+        sys.exit(1)
+
+    # --- Check claude CLI is available ---
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        console.print(
+            "[red]Claude Code CLI not found on PATH.[/red]\n"
+            "Install from: [cyan]https://claude.ai/code[/cyan]"
+        )
+        sys.exit(1)
+
+    # --- Generate run_id ---
+    run_id = f"R-{uuid.uuid4().hex[:8]}"
+
+    # --- Create run state file ---
+    runs_dir = _ensure_runs_dir()
+    _write_run(
+        run_id,
+        {
+            "run_id": run_id,
+            "type": "task",
+            "entity_id": task_id,
+            "status": "running",
+            "max_turns": max_turns,
+            "project_dir": str(Path.cwd()),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pid": None,
+        },
+    )
+
+    # --- Build executor command ---
+    log_file = runs_dir / f"{run_id}.log"
+    cmd = [
+        sys.executable,
+        "-m",
+        "a_sdlc.executor",
+        "--mode",
+        "task",
+        "--task-id",
+        task_id,
+        "--run-id",
+        run_id,
+        "--max-turns",
+        str(max_turns),
+    ]
+
+    # --- Spawn detached subprocess ---
+    with open(log_file, "w") as lf:
+        proc = subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            cwd=os.getcwd(),
+        )
+
+    # Store PID in run state
+    _update_run(run_id, pid=proc.pid)
+
+    # --- Report to user and exit immediately ---
+    console.print(
+        Panel(
+            f"[green]Task execution started![/green]\n\n"
+            f"Run ID:  [bold]{run_id}[/bold]\n"
+            f"Task:    {task_id}\n"
+            f"PID:     {proc.pid}\n"
+            f"Log:     {log_file}\n\n"
+            f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
+            f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
+            title="[bold]Background Run[/bold]",
+            border_style="green",
+        )
+    )
+
+
+def _extract_run_metrics(data: dict) -> dict:
+    """Extract queue depth, agent count, and failure count from run state data.
+
+    Parses ``progress_*`` and ``agent_*`` keys written by the executor
+    during parallel sprint execution.  For pipeline runs that use a
+    ``work_queue`` array, counts are derived from item statuses instead.
+
+    Args:
+        data: Run state dictionary loaded from the JSON state file.
+
+    Returns:
+        Dictionary with ``pending``, ``active``, ``completed``, ``failed``,
+        ``agent_count``, ``phase``, and ``thread_count`` fields.
+    """
+    pending = 0
+    active = 0
+    completed = 0
+    failed = 0
+    agent_count = 0
+    thread_count = 0
+    challenge_rounds = 0
+
+    run_type = data.get("type", "")
+
+    # Pipeline runs use work_queue and thread_entries arrays
+    work_queue = data.get("work_queue")
+    if isinstance(work_queue, list) and work_queue:
+        for item in work_queue:
+            s = item.get("status", "pending")
+            if s == "completed":
+                completed += 1
+            elif s == "failed":
+                failed += 1
+            elif s == "active":
+                active += 1
+            else:
+                pending += 1
+    else:
+        # Fall back to progress_*/agent_* keys for sprint/task/goal runs
+        for key, value in data.items():
+            if key.startswith("progress_") and isinstance(value, dict):
+                task_status = value.get("status", "")
+                if task_status == "completed":
+                    completed += 1
+                elif task_status == "failed":
+                    failed += 1
+                elif task_status in ("assigned", "in_progress"):
+                    active += 1
+                else:
+                    pending += 1
+            elif key.startswith("agent_") and isinstance(value, dict):
+                agent_count += 1
+
+    thread_entries = data.get("thread_entries")
+    if isinstance(thread_entries, list):
+        thread_count = len(thread_entries)
+
+    # Pipeline metrics may include agent_session_count and challenge_rounds
+    pipeline_metrics = data.get("metrics")
+    if isinstance(pipeline_metrics, dict):
+        if pipeline_metrics.get("agent_session_count"):
+            agent_count = pipeline_metrics["agent_session_count"]
+        if pipeline_metrics.get("challenge_rounds") is not None:
+            challenge_rounds = pipeline_metrics["challenge_rounds"]
+
+    # Determine phase: pipeline runs store it directly, others derive it
+    phase = ""
+    if run_type == "pipeline" and data.get("phase"):
+        phase = data["phase"]
+    else:
+        outcome = data.get("outcome")
+        if isinstance(outcome, dict):
+            phase = outcome.get("status", "")
+        elif data.get("status") == "running":
+            phase = "executing" if completed > 0 or active > 0 else "starting"
+        elif data.get("status") == "completed":
+            phase = "done"
+        elif data.get("status") == "failed":
+            phase = "failed"
+        elif data.get("status") == "awaiting_confirmation":
+            phase = "paused"
+        elif data.get("status") == "awaiting_clarification":
+            phase = "waiting"
+
+    return {
+        "pending": pending,
+        "active": active,
+        "completed": completed,
+        "failed": failed,
+        "agent_count": agent_count,
+        "phase": phase,
+        "thread_count": thread_count,
+        "challenge_rounds": challenge_rounds,
+    }
+
+
+def _resolve_run_status(data: dict) -> tuple[str, bool]:
+    """Determine the effective run status, checking PID liveness.
+
+    Args:
+        data: Run state dictionary.
+
+    Returns:
+        Tuple of ``(effective_status, pid_alive)``.
+    """
+    import os as _os
+
+    pid = data.get("pid")
+    pid_alive = False
+    if pid:
+        try:
+            _os.kill(pid, 0)
+            pid_alive = True
+        except (OSError, ProcessLookupError):
+            pid_alive = False
+
+    status = data.get("status", "unknown")
+    if status == "running" and pid and not pid_alive:
+        status = "crashed"
+
+    return status, pid_alive
+
+
+def _style_status(status: str) -> str:
+    """Return Rich-markup styled status string."""
+    return {
+        "running": "[green]running[/green]",
+        "completed": "[blue]completed[/blue]",
+        "failed": "[red]failed[/red]",
+        "cancelled": "[yellow]cancelled[/yellow]",
+        "crashed": "[red]crashed[/red]",
+        "awaiting_confirmation": "[magenta]awaiting approval[/magenta]",
+        "awaiting_clarification": "[magenta]awaiting input[/magenta]",
+    }.get(status, status)
+
+
+def _compute_duration(data: dict) -> str:
+    """Compute human-readable duration from started_at to now or completion.
+
+    Args:
+        data: Run state dictionary.
+
+    Returns:
+        Duration string like ``"5m 32s"`` or ``"-"`` if unavailable.
+    """
+    started_at = data.get("started_at", "")
+    if not started_at:
+        return "-"
+
+    try:
+        start = datetime.fromisoformat(started_at)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return "-"
+
+    # Use current time for active runs, or fall back to now
+    end = datetime.now(timezone.utc)
+
+    # If completed/failed, try to use outcome timestamp
+    status = data.get("status", "")
+    if status in ("completed", "failed", "cancelled"):
+        outcome = data.get("outcome")
+        if isinstance(outcome, dict) and outcome.get("completed_at"):
+            try:
+                end = datetime.fromisoformat(outcome["completed_at"])
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                pass
+
+    delta = end - start
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 0:
+        return "-"
+
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    if minutes > 0:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _show_run_detail(run_id_arg: str) -> None:
+    """Display detailed information for a single run (FR-010, FR-010a).
+
+    Shows operational metrics, queue state, agent sessions, task progress,
+    controls, answers, and comments in a Rich panel layout.
+
+    Args:
+        run_id_arg: The run identifier to display.
+    """
+    from a_sdlc.executor import _RUNS_DIR, _read_run
+
+    data = _read_run(run_id_arg)
+    if not data:
+        console.print(f"[red]Run not found: {run_id_arg}[/red]")
+        sys.exit(1)
+
+    status, pid_alive = _resolve_run_status(data)
+    metrics = _extract_run_metrics(data)
+    duration = _compute_duration(data)
+
+    # --- Header panel ---
+    started = data.get("started_at", "")
+    if started:
+        started = started[:19].replace("T", " ")
+
+    run_type = data.get("type", "?")
+    header_lines = [
+        f"[bold]Run ID:[/bold]     {run_id_arg}",
+        f"[bold]Type:[/bold]       {run_type}",
+        f"[bold]Entity:[/bold]     {data.get('entity_id', '?')}",
+        f"[bold]Status:[/bold]     {_style_status(status)}",
+        f"[bold]Phase:[/bold]      {metrics['phase'] or '-'}",
+        f"[bold]PID:[/bold]        {data.get('pid') or '-'}"
+        + (
+            " [green](alive)[/green]"
+            if pid_alive
+            else (" [red](dead)[/red]" if data.get("pid") else "")
+        ),
+        f"[bold]Started:[/bold]    {started or '-'}",
+        f"[bold]Duration:[/bold]   {duration}",
+    ]
+
+    # Pipeline-specific fields
+    if run_type == "pipeline":
+        goal = data.get("goal", "")
+        if goal:
+            header_lines.append(f"[bold]Goal:[/bold]       {goal[:80]}")
+
+    # Goal-specific fields
+    elif run_type == "goal":
+        desc = data.get("description", "")
+        if desc:
+            header_lines.append(f"[bold]Goal:[/bold]       {desc[:80]}")
+        header_lines.append(f"[bold]Adapter:[/bold]    {data.get('adapter', '?')}")
+        header_lines.append(f"[bold]Max Iter:[/bold]   {data.get('max_iterations', '?')}")
+
+    if data.get("supervised"):
+        header_lines.append("[bold]Mode:[/bold]      supervised")
+    if data.get("max_turns"):
+        header_lines.append(f"[bold]Max Turns:[/bold]  {data['max_turns']}")
+
+    console.print(
+        Panel(
+            "\n".join(header_lines),
+            title=f"[bold]Run Detail: {run_id_arg}[/bold]",
+            border_style="cyan",
+        )
+    )
+
+    # --- Queue State table ---
+    total_tasks = (
+        metrics["pending"] + metrics["active"] + metrics["completed"] + metrics["failed"]
+    )
+    if total_tasks > 0:
+        queue_table = Table(title="Queue State")
+        queue_table.add_column("Metric", style="bold")
+        queue_table.add_column("Count", justify="right")
+        queue_table.add_row("Pending", str(metrics["pending"]))
+        queue_table.add_row("Active", f"[green]{metrics['active']}[/green]")
+        queue_table.add_row("Completed", f"[blue]{metrics['completed']}[/blue]")
+        queue_table.add_row(
+            "Failed",
+            f"[red]{metrics['failed']}[/red]" if metrics["failed"] > 0 else "0",
+        )
+        queue_table.add_row("Total", str(total_tasks))
+        console.print(queue_table)
+
+    # --- Work Queue detail table (pipeline runs) ---
+    work_queue = data.get("work_queue")
+    if isinstance(work_queue, list) and work_queue:
+        wq_table = Table(title="Work Queue")
+        wq_table.add_column("ID", style="bold")
+        wq_table.add_column("Type")
+        wq_table.add_column("Artifact")
+        wq_table.add_column("Status")
+        wq_table.add_column("Persona")
+        wq_table.add_column("Started")
+        wq_table.add_column("Duration")
+
+        for item in work_queue:
+            item_started = item.get("started_at", "")
+            item_completed = item.get("completed_at")
+            item_duration = "-"
+            if item_started and item_completed:
+                try:
+                    s_dt = datetime.fromisoformat(item_started)
+                    e_dt = datetime.fromisoformat(item_completed)
+                    dur_sec = int((e_dt - s_dt).total_seconds())
+                    item_duration = f"{dur_sec}s"
+                except (ValueError, TypeError):
+                    item_duration = "?"
+            elif item_started and item.get("status") == "active":
+                item_duration = "running"
+
+            item_status = item.get("status", "?")
+            status_styled = {
+                "pending": "[dim]pending[/dim]",
+                "active": "[green]active[/green]",
+                "completed": "[blue]completed[/blue]",
+                "failed": "[red]failed[/red]",
+            }.get(item_status, item_status)
+
+            wq_table.add_row(
+                item.get("id", "?"),
+                item.get("type", "?"),
+                item.get("artifact_id", "-"),
+                status_styled,
+                item.get("persona", "-"),
+                item_started[:19].replace("T", " ") if item_started else "-",
+                item_duration,
+            )
+
+        console.print(wq_table)
+
+    # --- Operational Metrics ---
+    metrics_table = Table(title="Operational Metrics")
+    metrics_table.add_column("Metric", style="bold")
+    metrics_table.add_column("Value")
+    metrics_table.add_row("Total Duration", duration)
+    metrics_table.add_row("Agent Sessions", str(metrics["agent_count"]))
+    metrics_table.add_row("Threads", str(metrics["thread_count"]))
+    if metrics["challenge_rounds"] > 0:
+        metrics_table.add_row("Challenge Rounds", str(metrics["challenge_rounds"]))
+    metrics_table.add_row("Failures", str(metrics["failed"]))
+    if data.get("max_concurrency"):
+        metrics_table.add_row("Max Concurrency", str(data["max_concurrency"]))
+    console.print(metrics_table)
+
+    # --- Task Progress entries ---
+    progress_entries = []
+    for key, value in sorted(data.items()):
+        if key.startswith("progress_") and isinstance(value, dict):
+            task_id = value.get("task_id", key.removeprefix("progress_"))
+            task_status = value.get("status", "unknown")
+            agent_id = value.get("agent_id", "-")
+            progress_entries.append((task_id, task_status, agent_id))
+
+    if progress_entries:
+        progress_table = Table(title="Task Progress")
+        progress_table.add_column("Task ID", style="bold")
+        progress_table.add_column("Status")
+        progress_table.add_column("Agent")
+        for task_id, task_status, agent_id in progress_entries:
+            styled = {
+                "completed": "[blue]completed[/blue]",
+                "failed": "[red]failed[/red]",
+                "assigned": "[green]assigned[/green]",
+                "in_progress": "[green]in_progress[/green]",
+            }.get(task_status, task_status)
+            progress_table.add_row(task_id, styled, agent_id)
+        console.print(progress_table)
+
+    # --- Recent thread entries (pipeline runs) ---
+    thread_entries = data.get("thread_entries")
+    if isinstance(thread_entries, list) and thread_entries:
+        recent = thread_entries[-10:]
+        entry_lines = []
+        for entry in recent:
+            ts = entry.get("timestamp", "")[:19].replace("T", " ")
+            phase_label = entry.get("phase", "")
+            agent = entry.get("agent", "")
+            action = entry.get("action", "")
+            entry_lines.append(f"[dim]{ts}[/dim]  [{phase_label}] {agent}: {action}")
+        console.print(
+            Panel(
+                "\n".join(entry_lines),
+                title=f"[bold]Recent Activity ({len(thread_entries)} total)[/bold]",
+                border_style="cyan",
+            )
+        )
+
+    # --- Pipeline metrics panel ---
+    pipeline_metrics = data.get("metrics")
+    if isinstance(pipeline_metrics, dict) and pipeline_metrics:
+        metric_lines = []
+        if pipeline_metrics.get("total_duration_sec"):
+            mins, secs = divmod(pipeline_metrics["total_duration_sec"], 60)
+            metric_lines.append(f"Total duration:    {int(mins)}m {int(secs)}s")
+        if pipeline_metrics.get("phase_durations"):
+            phases = pipeline_metrics["phase_durations"]
+            phase_strs = [f"{k}: {v}s" for k, v in phases.items()]
+            metric_lines.append(f"Phase durations:   {', '.join(phase_strs)}")
+        if pipeline_metrics.get("agent_session_count") is not None:
+            metric_lines.append(
+                f"Agent sessions:    {pipeline_metrics['agent_session_count']}"
+            )
+        if pipeline_metrics.get("challenge_rounds") is not None:
+            metric_lines.append(
+                f"Challenge rounds:  {pipeline_metrics['challenge_rounds']}"
+            )
+        if pipeline_metrics.get("failure_count") is not None:
+            metric_lines.append(f"Failures:          {pipeline_metrics['failure_count']}")
+        if pipeline_metrics.get("total_cost_cents") is not None:
+            cost = pipeline_metrics["total_cost_cents"] / 100
+            metric_lines.append(f"Total cost:        ${cost:.2f}")
+        if pipeline_metrics.get("total_turns") is not None:
+            metric_lines.append(f"Total turns:       {pipeline_metrics['total_turns']}")
+
+        if metric_lines:
+            console.print(
+                Panel(
+                    "\n".join(metric_lines),
+                    title="[bold]Metrics[/bold]",
+                    border_style="green",
+                )
+            )
+
+    # --- Controls issued ---
+    controls = data.get("controls", [])
+    if controls:
+        ctrl_table = Table(title="Control Actions")
+        ctrl_table.add_column("Item", style="bold")
+        ctrl_table.add_column("Action")
+        ctrl_table.add_column("Issued At")
+        for ctrl in controls:
+            ctrl_table.add_row(
+                ctrl.get("item_id", "?"),
+                ctrl.get("action", "?"),
+                ctrl.get("issued_at", "")[:19],
+            )
+        console.print(ctrl_table)
+
+    # --- Answers provided ---
+    answers = data.get("answers", [])
+    if answers:
+        ans_table = Table(title="Answers")
+        ans_table.add_column("Item", style="bold")
+        ans_table.add_column("Message")
+        ans_table.add_column("Answered At")
+        for ans in answers:
+            ans_table.add_row(
+                ans.get("item_id", "-"),
+                ans.get("message", ""),
+                ans.get("answered_at", "")[:19],
+            )
+        console.print(ans_table)
+
+    # --- Comments ---
+    comments = data.get("comments", [])
+    if comments:
+        cmt_table = Table(title="Comments")
+        cmt_table.add_column("Artifact", style="bold")
+        cmt_table.add_column("Message")
+        cmt_table.add_column("Posted At")
+        for cmt in comments:
+            cmt_table.add_row(
+                cmt.get("artifact_id", "?"),
+                cmt.get("message", ""),
+                cmt.get("posted_at", "")[:19],
+            )
+        console.print(cmt_table)
+
+    # --- Error info ---
+    error = data.get("error")
+    if error:
+        console.print(
+            Panel(
+                f"[red]{error}[/red]",
+                title="[bold red]Error[/bold red]",
+                border_style="red",
+            )
+        )
+
+    # --- Outcome info ---
+    outcome = data.get("outcome")
+    if isinstance(outcome, dict):
+        outcome_lines = []
+        for k, v in outcome.items():
+            if k == "raw":
+                continue
+            outcome_lines.append(f"[bold]{k}:[/bold] {v}")
+        if outcome_lines:
+            console.print(
+                Panel(
+                    "\n".join(outcome_lines),
+                    title="[bold]Outcome[/bold]",
+                    border_style="blue",
+                )
+            )
+
+    # --- Clarification question panel ---
+    clarification = data.get("clarification_question")
+    if clarification:
+        console.print(
+            Panel(
+                f"[yellow]{clarification}[/yellow]\n\n"
+                f"Respond: [cyan]a-sdlc run answer {run_id_arg} -m 'your answer'[/cyan]",
+                title="[bold yellow]Clarification Needed[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+
+    # --- Log file location ---
+    log_file = _RUNS_DIR / f"{run_id_arg}.log"
+    if log_file.exists():
+        console.print(f"\n[dim]Log file: {log_file}[/dim]")
+        console.print(f"[dim]View full log: tail -f {log_file}[/dim]")
+
+    # --- Approval / answer instructions ---
+    if status == "awaiting_confirmation":
+        console.print()
+        config_data = data.get("config", {})
+        if config_data.get("message"):
+            console.print(f"[bold magenta]{config_data['message']}[/bold magenta]")
+        console.print(f"  Approve: [cyan]a-sdlc run approve {run_id_arg}[/cyan]")
+        console.print(f"  Reject:  [cyan]a-sdlc run reject {run_id_arg} -m 'reason'[/cyan]")
+    elif status == "awaiting_clarification":
+        console.print()
+        config_data = data.get("config", {})
+        if config_data.get("message"):
+            console.print(f"[bold magenta]{config_data['message']}[/bold magenta]")
+        console.print(
+            f"  Answer: [cyan]a-sdlc run answer {run_id_arg} -m 'your answer'[/cyan]"
+        )
+
+
+@run.command("status")
+@click.argument("run_id", required=False, default=None)
+def run_status(run_id: str | None) -> None:
+    """Show status of background runs.
+
+    Without arguments, displays a summary table of all active and recent
+    runs with phase, queue depth (pending/active/completed/failed),
+    active agent count, and duration.
+
+    With a RUN_ID argument, displays detailed information for that specific
+    run including operational metrics, task progress, and outcome data.
+
+    \b
+    Examples:
+        a-sdlc run status               # Summary of all runs
+        a-sdlc run status R-abc12345    # Detailed view of one run
+    """
+    from a_sdlc.executor import _RUNS_DIR, _read_run
+
+    # --- Per-run detail view ---
+    if run_id is not None:
+        _show_run_detail(run_id)
+        return
+
+    # --- Summary table view ---
+    runs_dir = _RUNS_DIR
+    if not runs_dir.exists():
+        console.print("[yellow]No runs found.[/yellow]")
+        return
+
+    # Collect all run state files
+    run_files = sorted(
+        runs_dir.glob("R-*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    if not run_files:
+        console.print("[yellow]No runs found.[/yellow]")
+        return
+
+    table = Table(title="Background Runs")
+    table.add_column("Run ID", style="bold")
+    table.add_column("Type")
+    table.add_column("Entity")
+    table.add_column("Status")
+    table.add_column("Phase")
+    table.add_column("Queue (P/A/C/F)", justify="center")
+    table.add_column("Threads", justify="right")
+    table.add_column("Agents", justify="right")
+    table.add_column("Duration")
+    table.add_column("Started")
+
+    for run_file in run_files:
+        rid = run_file.stem
+        data = _read_run(rid)
+        if not data:
+            continue
+
+        status, _pid_alive = _resolve_run_status(data)
+        metrics = _extract_run_metrics(data)
+        duration = _compute_duration(data)
+
+        run_type = data.get("type", "?")
+
+        # Phase: derived from metrics for all run types (FR-009)
+        phase = metrics["phase"] or "-"
+
+        # Queue depth: Pending/Active/Completed/Failed for all run types
+        total_items = (
+            metrics["pending"]
+            + metrics["active"]
+            + metrics["completed"]
+            + metrics["failed"]
+        )
+        if total_items > 0:
+            queue_str = (
+                f"{metrics['pending']}/"
+                f"{metrics['active']}/"
+                f"{metrics['completed']}/"
+                f"{metrics['failed']}"
+            )
+        else:
+            queue_str = "-"
+
+        # Threads: total thread entries (FR-009)
+        thread_str = (
+            str(metrics["thread_count"]) if metrics["thread_count"] > 0 else "-"
+        )
+
+        # Agent count: from agent_* keys or pipeline metrics
+        agent_str = (
+            str(metrics["agent_count"]) if metrics["agent_count"] > 0 else "-"
+        )
+
+        started = data.get("started_at", "")
+        if started:
+            started = started[:19].replace("T", " ")
+
+        table.add_row(
+            rid,
+            run_type,
+            data.get("entity_id", "?")[:20],
+            _style_status(status),
+            phase,
+            queue_str,
+            thread_str,
+            agent_str,
+            duration,
+            started,
+        )
+
+    console.print(table)
+
+    # Show approval/answer instructions for any awaiting runs
+    for run_file in run_files:
+        rid = run_file.stem
+        data = _read_run(rid)
+        if not data:
+            continue
+        if data.get("status") == "awaiting_confirmation":
+            console.print()
+            console.print(f"[bold magenta]Run {rid} is awaiting approval:[/bold magenta]")
+            config_data = data.get("config", {})
+            if config_data.get("message"):
+                console.print(f"  {config_data['message']}")
+            console.print(f"  Approve: [cyan]a-sdlc run approve {rid}[/cyan]")
+            console.print(f"  Reject:  [cyan]a-sdlc run reject {rid} -m 'reason'[/cyan]")
+        elif data.get("status") == "awaiting_clarification":
+            console.print()
+            console.print(
+                f"[bold magenta]Run {rid} is awaiting an answer:[/bold magenta]"
+            )
+            # Show clarification_question (pipeline) or config.message (legacy)
+            clar_q = data.get("clarification_question", "")
+            if clar_q:
+                truncated = (clar_q[:80] + "...") if len(clar_q) > 80 else clar_q
+                console.print(f"  {truncated}")
+            else:
+                config_data = data.get("config", {})
+                if config_data.get("message"):
+                    console.print(f"  {config_data['message']}")
+            console.print(
+                f"  Answer: [cyan]a-sdlc run answer {rid} -m 'your answer'[/cyan]"
+            )
+
+
+@run.command("cancel")
+@click.argument("run_id")
+def run_cancel(run_id: str) -> None:
+    """Cancel an in-progress background run.
+
+    Sends SIGTERM to the executor process and updates the run status
+    to cancelled.
+
+    Examples:
+
+        a-sdlc run cancel R-abc12345
+    """
+    import os
+    import signal as signal_mod
+
+    from a_sdlc.executor import _read_run, _update_run
+
+    data = _read_run(run_id)
+    if not data:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
+
+    status = data.get("status")
+    if status in ("completed", "cancelled", "failed"):
+        console.print(f"[yellow]Run {run_id} is already {status}. Nothing to cancel.[/yellow]")
+        return
+
+    pid = data.get("pid")
+    if not pid:
+        console.print(f"[red]No PID recorded for run {run_id}.[/red]")
+        _update_run(run_id, status="cancelled")
+        return
+
+    # Check if process is alive and send SIGTERM
+    try:
+        os.kill(pid, 0)  # Check if alive
+    except (OSError, ProcessLookupError):
+        console.print(
+            f"[yellow]Process {pid} is no longer running. Marking run as cancelled.[/yellow]"
+        )
+        _update_run(run_id, status="cancelled")
+        return
+
+    try:
+        os.kill(pid, signal_mod.SIGTERM)
+        console.print(f"[green]Sent SIGTERM to process {pid}.[/green]")
+    except OSError as exc:
+        console.print(f"[red]Failed to send SIGTERM to process {pid}: {exc}[/red]")
+        sys.exit(1)
+
+    _update_run(run_id, status="cancelled")
+    console.print(f"[green]Run {run_id} cancelled.[/green]")
+
+
+@run.command("approve")
+@click.argument("run_id")
+@click.option("--message", "-m", default="", help="Optional message to the agent.")
+def run_approve(run_id: str, message: str) -> None:
+    """Approve a supervised run to continue to the next batch.
+
+    When a run is in --supervised mode, it pauses between batches
+    and shows status 'awaiting_confirmation'. This command resumes it.
+
+    Examples:
+
+        a-sdlc run approve R-abc12345
+        a-sdlc run approve R-abc12345 -m "Skip task T00003, it's handled"
+    """
+    from a_sdlc.executor import _read_run, _update_run
+
+    data = _read_run(run_id)
+    if not data:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
+
+    if data.get("status") != "awaiting_confirmation":
+        console.print(
+            f"[yellow]Run {run_id} is not awaiting approval "
+            f"(status: {data.get('status', 'unknown')}).[/yellow]"
+        )
+        return
+
+    # Update state to running with approval message
+    config = data.get("config", {})
+    config["approval_message"] = message
+    _update_run(run_id, status="running", config=config)
+
+    console.print(f"[green]Run {run_id} approved. Executor will continue.[/green]")
+    if message:
+        console.print(f"[dim]Message: {message}[/dim]")
+
+
+@run.command("reject")
+@click.argument("run_id")
+@click.option(
+    "--message",
+    "-m",
+    required=True,
+    help="Reason for rejection.",
+)
+def run_reject(run_id: str, message: str) -> None:
+    """Reject a supervised batch and stop the run.
+
+    Marks remaining tasks as pending and stops the run gracefully.
+
+    Examples:
+
+        a-sdlc run reject R-abc12345 -m "Tests failing, need manual fix first"
+    """
+    import os
+    import signal as signal_mod
+
+    from a_sdlc.executor import _read_run, _update_run
+
+    data = _read_run(run_id)
+    if not data:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
+
+    if data.get("status") != "awaiting_confirmation":
+        console.print(
+            f"[yellow]Run {run_id} is not awaiting approval "
+            f"(status: {data.get('status', 'unknown')}). Cannot reject.[/yellow]"
+        )
+        return
+
+    # Update state to cancelled with rejection reason
+    config = data.get("config", {})
+    config["rejection_reason"] = message
+    _update_run(run_id, status="cancelled", config=config)
+
+    # Also send SIGTERM if process is still alive
+    pid = data.get("pid")
+    if pid:
+        try:
+            os.kill(pid, 0)
+            os.kill(pid, signal_mod.SIGTERM)
+            console.print(f"[dim]Sent SIGTERM to process {pid}.[/dim]")
+        except (OSError, ProcessLookupError):
+            pass
+
+    console.print(f"[green]Run {run_id} rejected and cancelled.[/green]")
+    console.print(f"[dim]Reason: {message}[/dim]")
+
+
+@run.command("answer")
+@click.argument("run_id")
+@click.option(
+    "--message",
+    "-m",
+    required=True,
+    help="Answer to the clarification question.",
+)
+@click.option(
+    "--item",
+    default=None,
+    help="Specific work item ID to answer (for per-item clarification).",
+)
+def run_answer(run_id: str, message: str, item: str | None) -> None:
+    """Provide an answer to a paused pipeline clarification.
+
+    When a pipeline run or specific work item is in
+    'awaiting_clarification' status, this command supplies the answer
+    and resumes execution.
+
+    Examples:
+
+        a-sdlc run answer R-abc12345 -m "use RS256 algorithm"
+        a-sdlc run answer R-abc12345 --item PROJ-T00001 -m "skip auth for now"
+    """
+    from a_sdlc.executor import _read_run, _update_run
+
+    data = _read_run(run_id)
+    if not data:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
+
+    status = data.get("status")
+    valid_statuses = ("awaiting_clarification", "awaiting_confirmation")
+    if status not in valid_statuses:
+        console.print(
+            f"[yellow]Run {run_id} is not awaiting an answer "
+            f"(status: {status}). Cannot answer.[/yellow]"
+        )
+        return
+
+    # Store the answer in the run state
+    answers = data.get("answers", [])
+    answer_entry = {
+        "message": message,
+        "answered_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if item:
+        answer_entry["item_id"] = item
+    answers.append(answer_entry)
+
+    _update_run(run_id, status="running", answers=answers)
+
+    target = f" for item {item}" if item else ""
+    console.print(f"[green]Answer provided{target}. Run {run_id} resumed.[/green]")
+    console.print(f"[dim]Answer: {message}[/dim]")
+
+
+@run.command("control")
+@click.argument("item_id")
+@click.option(
+    "--action",
+    "-a",
+    required=True,
+    type=click.Choice(["pause", "cancel", "skip", "retry", "force-approve"]),
+    help="Intervention action to apply to the work item.",
+)
+@click.option(
+    "--run-id",
+    default=None,
+    help="Run ID (auto-detected from active runs if not specified).",
+)
+def run_control(item_id: str, action: str, run_id: str | None) -> None:
+    """Per-item intervention for a running pipeline.
+
+    Apply an action to a specific work item within an active pipeline
+    run. If --run-id is not specified, the most recent active run is
+    used.
+
+    Examples:
+
+        a-sdlc run control PROJ-T00001 --action pause
+        a-sdlc run control PROJ-T00001 --action skip --run-id R-abc12345
+        a-sdlc run control PROJ-T00001 -a retry
+        a-sdlc run control PROJ-T00001 -a force-approve
+    """
+    from a_sdlc.executor import _RUNS_DIR, _read_run, _update_run
+
+    # Auto-detect run_id if not provided
+    if not run_id:
+        runs_dir = _RUNS_DIR
+        if runs_dir.exists():
+            run_files = sorted(
+                runs_dir.glob("R-*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for rf in run_files:
+                candidate = _read_run(rf.stem)
+                if candidate and candidate.get("status") == "running":
+                    run_id = rf.stem
+                    break
+
+    if not run_id:
+        console.print("[red]No active run found. Specify --run-id explicitly.[/red]")
+        sys.exit(1)
+
+    data = _read_run(run_id)
+    if not data:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
+
+    # Record the control action in the run state
+    controls = data.get("controls", [])
+    controls.append(
+        {
+            "item_id": item_id,
+            "action": action,
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _update_run(run_id, controls=controls)
+
+    console.print(
+        f"[green]Control action '{action}' issued for {item_id} "
+        f"in run {run_id}.[/green]"
+    )
+
+
+@run.command("comment")
+@click.argument("artifact_id")
+@click.option(
+    "--message",
+    "-m",
+    required=True,
+    help="Comment message to post to the artifact thread.",
+)
+@click.option(
+    "--run-id",
+    default=None,
+    help="Run ID (auto-detected from active runs if not specified).",
+)
+def run_comment(artifact_id: str, message: str, run_id: str | None) -> None:
+    """Post a user comment to an artifact's thread.
+
+    Adds a user_intervention entry to the thread associated with the
+    given artifact (PRD, design, or task) within an active run.
+
+    Examples:
+
+        a-sdlc run comment PROJ-P0001 -m "Focus on the REST endpoints first"
+        a-sdlc run comment PROJ-T00003 -m "Use PostgreSQL, not SQLite"
+    """
+    from a_sdlc.executor import _RUNS_DIR, _read_run, _update_run
+
+    # Auto-detect run_id if not provided
+    if not run_id:
+        runs_dir = _RUNS_DIR
+        if runs_dir.exists():
+            run_files = sorted(
+                runs_dir.glob("R-*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for rf in run_files:
+                candidate = _read_run(rf.stem)
+                if candidate and candidate.get("status") == "running":
+                    run_id = rf.stem
+                    break
+
+    if not run_id:
+        console.print("[red]No active run found. Specify --run-id explicitly.[/red]")
+        sys.exit(1)
+
+    data = _read_run(run_id)
+    if not data:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
+
+    # Record the comment in the run state
+    comments = data.get("comments", [])
+    comments.append(
+        {
+            "artifact_id": artifact_id,
+            "message": message,
+            "type": "user_intervention",
+            "posted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _update_run(run_id, comments=comments)
+
+    console.print(
+        f"[green]Comment posted to {artifact_id} in run {run_id}.[/green]"
+    )
+    console.print(f"[dim]{message}[/dim]")
+
+
+# =============================================================================
+# Daemon Commands (Background Daemon Lifecycle)
+# =============================================================================
+
+
+def _run_daemon_foreground() -> None:
+    """Run daemon in foreground (blocking).
+
+    Loads ``.sdlc/config.yaml`` and starts the daemon event loop.
+    Blocks until the user presses Ctrl+C or a signal is received.
+    """
+    from a_sdlc.daemon import (
+        _cleanup_stale_pid,
+        _get_pid,
+        _is_process_running,
+        run_daemon,
+    )
+
+    # Cleanup stale PID file if exists
+    if _cleanup_stale_pid():
+        click.echo("Cleaned up stale daemon PID file")
+
+    # Check if already running
+    pid = _get_pid()
+    if pid and _is_process_running(pid):
+        click.echo(f"Daemon already running (PID: {pid})", err=True)
+        sys.exit(1)
+
+    # Load config
+    config = _load_project_config()
+    if not config:
+        config_path = Path.cwd() / ".sdlc" / "config.yaml"
+        click.echo(f"Warning: No config loaded from {config_path}", err=True)
+
+    # Run daemon (blocking)
+    click.echo("Starting daemon in foreground (Ctrl+C to stop)...")
+    run_daemon(config)
+
+
+@main.group(invoke_without_command=True)
+@click.pass_context
+def daemon(ctx: click.Context) -> None:
+    """Long-running background daemon for scheduled execution.
+
+    The daemon monitors .sdlc/config.yaml schedules and automatically
+    triggers sprint execution, sync operations, etc. at configured times.
+
+    Examples:
+
+        a-sdlc daemon              # Start daemon (foreground)
+        a-sdlc daemon start        # Start daemon (background)
+        a-sdlc daemon stop         # Stop daemon
+        a-sdlc daemon status       # Show daemon health
+    """
+    if ctx.invoked_subcommand is None:
+        # Default: run daemon in foreground
+        _run_daemon_foreground()
+
+
+@daemon.command("start")
+def daemon_start() -> None:
+    """Start the daemon as a background process.
+
+    Spawns the daemon in a detached subprocess that survives terminal
+    close.  Writes PID to ~/.a-sdlc/daemon.pid.
+
+    Examples:
+
+        a-sdlc daemon start
+    """
+    import subprocess
+    import time
+
+    from a_sdlc.daemon import (
+        _cleanup_stale_pid,
+        _get_pid,
+        _is_process_running,
+    )
+
+    # Cleanup stale PID
+    if _cleanup_stale_pid():
+        click.echo("Cleaned up stale daemon PID file")
+
+    # Check if already running
+    pid = _get_pid()
+    if pid and _is_process_running(pid):
+        click.echo(f"Daemon already running (PID: {pid})", err=True)
+        sys.exit(1)
+
+    # Validate config exists
+    config_path = Path.cwd() / ".sdlc" / "config.yaml"
+    if not config_path.exists():
+        click.echo("Error: .sdlc/config.yaml not found", err=True)
+        click.echo("Initialize a project first with: a-sdlc init", err=True)
+        sys.exit(1)
+
+    # Daemonize via subprocess
+    import os
+
+    log_file = Path.home() / ".a-sdlc" / "daemon.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(log_file, "a") as lf:
+        subprocess.Popen(
+            [sys.executable, "-m", "a_sdlc.daemon"],
+            start_new_session=True,
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            cwd=os.getcwd(),
+        )
+
+    # Give it a moment to start and write PID
+    time.sleep(1)
+
+    # Verify it started
+    pid = _get_pid()
+    if pid and _is_process_running(pid):
+        click.echo(f"Daemon started (PID: {pid})")
+        click.echo(f"Logs: {log_file}")
+    else:
+        click.echo(
+            f"Error: Daemon failed to start. Check logs at: {log_file}",
+            err=True,
+        )
+        sys.exit(1)
+
+
+@daemon.command("stop")
+def daemon_stop() -> None:
+    """Gracefully stop the daemon.
+
+    Sends SIGTERM to the daemon process and waits for graceful
+    shutdown.  If the process does not stop within 10 seconds,
+    it is force-killed.
+
+    Examples:
+
+        a-sdlc daemon stop
+    """
+    from a_sdlc.daemon import (
+        _cleanup_stale_pid,
+        _get_pid,
+        _is_process_running,
+        stop_daemon,
+    )
+
+    pid = _get_pid()
+
+    if not pid:
+        click.echo("Daemon is not running")
+        return
+
+    if not _is_process_running(pid):
+        click.echo("Daemon PID file exists but process not running (cleaning up)")
+        _cleanup_stale_pid()
+        return
+
+    click.echo(f"Stopping daemon (PID: {pid})...")
+
+    if stop_daemon():
+        click.echo("Daemon stopped successfully")
+    else:
+        click.echo("Failed to stop daemon", err=True)
+        sys.exit(1)
+
+
+@daemon.command("status")
+def daemon_status() -> None:
+    """Show daemon health and active runs.
+
+    Displays whether the daemon is running, recent log lines from
+    ~/.a-sdlc/daemon.log, and any active execution runs.
+
+    Examples:
+
+        a-sdlc daemon status
+    """
+    from a_sdlc.daemon import (
+        LOG_FILE,
+        _get_pid,
+        _is_process_running,
+    )
+
+    pid = _get_pid()
+
+    if not pid:
+        click.echo("Daemon: not running")
+        return
+
+    if not _is_process_running(pid):
+        click.echo("Daemon: stale PID file (process not running)")
+        click.echo("Run 'a-sdlc daemon stop' to clean up")
+        return
+
+    # Daemon is running
+    click.echo(f"Daemon: running (PID: {pid})")
+
+    # Show log tail
+    log_file = LOG_FILE
+    if log_file.exists():
+        click.echo(f"\nRecent logs ({log_file}):")
+        with open(log_file) as f:
+            lines = f.readlines()
+            for line in lines[-10:]:  # Last 10 lines
+                click.echo(f"  {line.rstrip()}")
+    else:
+        click.echo(f"\nNo log file found at {log_file}")
+
+    # Show active runs from ~/.a-sdlc/runs/
+    from a_sdlc.executor import _RUNS_DIR
+
+    runs_dir = _RUNS_DIR
+    if runs_dir.exists():
+        import json as json_mod
+        import os
+
+        run_files = sorted(
+            runs_dir.glob("R-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        active_runs = []
+        for run_file in run_files:
+            try:
+                data = json_mod.loads(run_file.read_text())
+                status = data.get("status", "")
+                if status in ("running", "awaiting_confirmation"):
+                    # Verify the process is actually alive
+                    run_pid = data.get("pid")
+                    if run_pid:
+                        try:
+                            os.kill(run_pid, 0)
+                            active_runs.append(data)
+                        except (OSError, ProcessLookupError):
+                            pass
+            except (json_mod.JSONDecodeError, OSError):
+                continue
+
+        if active_runs:
+            click.echo(f"\nActive runs: {len(active_runs)}")
+            for ar in active_runs:
+                click.echo(
+                    f"  {ar.get('run_id', '?')}: "
+                    f"{ar.get('type', '?')} "
+                    f"{ar.get('entity_id', '?')} "
+                    f"[{ar.get('status', '?')}]"
+                )
+        else:
+            click.echo("\nNo active runs")
+    else:
+        click.echo("\nNo active runs")
+
+
 @main.command("complete")
 @click.argument("task_id")
 def complete_task_cmd(task_id: str) -> None:
@@ -3336,7 +5360,12 @@ def connect() -> None:
 
 
 @connect.command("linear")
-@click.option("--api-key", prompt="Linear API Key (from Settings > API)", hide_input=True, help="Linear API key")
+@click.option(
+    "--api-key",
+    prompt="Linear API Key (from Settings > API)",
+    hide_input=True,
+    help="Linear API key",
+)
 @click.option("--team-id", prompt="Team ID (e.g., ENG, PROD)", help="Team identifier (e.g., 'ENG')")
 @click.option("--default-project", default=None, help="Optional default project name")
 def connect_linear(api_key: str, team_id: str, default_project: str | None) -> None:
@@ -3373,14 +5402,33 @@ def connect_linear(api_key: str, team_id: str, default_project: str | None) -> N
     console.print()
     console.print("Next steps:")
     console.print("  - Import a cycle: [cyan]/sdlc:sprint-import linear[/cyan]")
-    console.print("  - Or link a sprint: [cyan]/sdlc:sprint-link SPRINT-01 linear <cycle-id>[/cyan]")
+    console.print(
+        "  - Or link a sprint: [cyan]/sdlc:sprint-link SPRINT-01 linear <cycle-id>[/cyan]"
+    )
 
 
 @connect.command("jira")
-@click.option("--url", prompt="Atlassian Site URL (e.g., https://company.atlassian.net)", help="e.g., https://company.atlassian.net")
-@click.option("--email", prompt="Atlassian Email (e.g., user@company.com)", help="Your Atlassian account email")
-@click.option("--api-token", prompt="API Token (from id.atlassian.com/manage-profile/security/api-tokens)", hide_input=True, help="Atlassian API token")
-@click.option("--project-key", prompt="Jira Project Key (e.g., PROJ, ENG)", help="Jira project key (e.g., 'PROJ')")
+@click.option(
+    "--url",
+    prompt="Atlassian Site URL (e.g., https://company.atlassian.net)",
+    help="e.g., https://company.atlassian.net",
+)
+@click.option(
+    "--email",
+    prompt="Atlassian Email (e.g., user@company.com)",
+    help="Your Atlassian account email",
+)
+@click.option(
+    "--api-token",
+    prompt="API Token (from id.atlassian.com/manage-profile/security/api-tokens)",
+    hide_input=True,
+    help="Atlassian API token",
+)
+@click.option(
+    "--project-key",
+    prompt="Jira Project Key (e.g., PROJ, ENG)",
+    help="Jira project key (e.g., 'PROJ')",
+)
 @click.option("--issue-type", default="Task", help="Default issue type")
 def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_type: str) -> None:
     """Configure Jira integration for the current project.
@@ -3422,13 +5470,37 @@ def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_t
 
 
 @connect.command("confluence")
-@click.option("--url", prompt="Atlassian Site URL (e.g., https://company.atlassian.net)", help="e.g., https://company.atlassian.net")
-@click.option("--email", prompt="Atlassian Email (e.g., user@company.com)", help="Your Atlassian account email")
-@click.option("--api-token", prompt="API Token (from id.atlassian.com/manage-profile/security/api-tokens)", hide_input=True, help="Atlassian API token")
-@click.option("--space-key", prompt="Confluence Space Key (e.g., PROJ, DOCS, ENG)", help="Space key (e.g., 'PROJ')")
+@click.option(
+    "--url",
+    prompt="Atlassian Site URL (e.g., https://company.atlassian.net)",
+    help="e.g., https://company.atlassian.net",
+)
+@click.option(
+    "--email",
+    prompt="Atlassian Email (e.g., user@company.com)",
+    help="Your Atlassian account email",
+)
+@click.option(
+    "--api-token",
+    prompt="API Token (from id.atlassian.com/manage-profile/security/api-tokens)",
+    hide_input=True,
+    help="Atlassian API token",
+)
+@click.option(
+    "--space-key",
+    prompt="Confluence Space Key (e.g., PROJ, DOCS, ENG)",
+    help="Space key (e.g., 'PROJ')",
+)
 @click.option("--parent-page-id", default=None, help="Optional parent page ID for SDLC docs")
 @click.option("--page-prefix", default="[SDLC]", help="Page title prefix (default: '[SDLC]')")
-def connect_confluence(url: str, email: str, api_token: str, space_key: str, parent_page_id: str | None, page_prefix: str) -> None:
+def connect_confluence(
+    url: str,
+    email: str,
+    api_token: str,
+    space_key: str,
+    parent_page_id: str | None,
+    page_prefix: str,
+) -> None:
     """Configure Confluence integration for the current project.
 
     API token can be generated from https://id.atlassian.com/manage-profile/security/api-tokens
@@ -3469,8 +5541,19 @@ def connect_confluence(url: str, email: str, api_token: str, space_key: str, par
 
 
 @connect.command("github")
-@click.option("--token", prompt="GitHub Personal Access Token", hide_input=True, help="GitHub PAT with 'repo' scope")
-@click.option("--global", "-g", "save_global", is_flag=True, help="Save globally (~/.config/a-sdlc/) instead of project-level")
+@click.option(
+    "--token",
+    prompt="GitHub Personal Access Token",
+    hide_input=True,
+    help="GitHub PAT with 'repo' scope",
+)
+@click.option(
+    "--global",
+    "-g",
+    "save_global",
+    is_flag=True,
+    help="Save globally (~/.config/a-sdlc/) instead of project-level",
+)
 def connect_github(token: str, save_global: bool) -> None:
     """Configure GitHub integration for PR feedback retrieval.
 
@@ -3498,7 +5581,9 @@ def connect_github(token: str, save_global: bool) -> None:
 
     if save_global:
         save_global_github_config({"token": token})
-        console.print(f"[green]✓ GitHub integration configured globally (authenticated as @{user['login']})[/green]")
+        console.print(
+            f"[green]✓ GitHub integration configured globally (authenticated as @{user['login']})[/green]"
+        )
         console.print("[dim]Token saved to ~/.config/a-sdlc/config.yaml[/dim]")
     else:
         from a_sdlc.storage import get_storage
@@ -3509,11 +5594,15 @@ def connect_github(token: str, save_global: bool) -> None:
 
         if not project:
             console.print("[yellow]No project found for current directory.[/yellow]")
-            console.print("Run [cyan]/sdlc:init[/cyan] first, or use [cyan]--global[/cyan] for cross-project config.")
+            console.print(
+                "Run [cyan]/sdlc:init[/cyan] first, or use [cyan]--global[/cyan] for cross-project config."
+            )
             sys.exit(1)
 
         storage.set_external_config(project["id"], "github", {"token": token})
-        console.print(f"[green]✓ GitHub integration configured for {project['name']} (authenticated as @{user['login']})[/green]")
+        console.print(
+            f"[green]✓ GitHub integration configured for {project['name']} (authenticated as @{user['login']})[/green]"
+        )
 
     console.print()
     console.print("Next steps:")
@@ -3523,7 +5612,13 @@ def connect_github(token: str, save_global: bool) -> None:
 @main.command("disconnect")
 @click.argument("system", type=click.Choice(["linear", "jira", "confluence", "github"]))
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-@click.option("--global", "-g", "remove_global", is_flag=True, help="Remove global config (~/.config/a-sdlc/) instead of project-level (github only)")
+@click.option(
+    "--global",
+    "-g",
+    "remove_global",
+    is_flag=True,
+    help="Remove global config (~/.config/a-sdlc/) instead of project-level (github only)",
+)
 def disconnect(system: str, yes: bool, remove_global: bool) -> None:
     """Remove an external system integration.
 
@@ -3570,7 +5665,9 @@ def disconnect(system: str, yes: bool, remove_global: bool) -> None:
         console.print(f"[yellow]{system.title()} integration not configured.[/yellow]")
         return
 
-    if not yes and not click.confirm(f"Remove {system.title()} integration from {project['name']}?"):
+    if not yes and not click.confirm(
+        f"Remove {system.title()} integration from {project['name']}?"
+    ):
         console.print("Aborted.")
         return
 
@@ -3630,7 +5727,9 @@ def integrations() -> None:
             masked = f"***{token_val[-4:]}" if len(token_val) >= 4 else "***"
             config_display = f"Token: {masked}"
         else:  # jira
-            config_display = f"Project: {cfg.get('project_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
+            config_display = (
+                f"Project: {cfg.get('project_key', 'N/A')} at {cfg.get('base_url', 'N/A')}"
+            )
 
         table.add_row(
             config["system"].title(),
@@ -3643,11 +5742,14 @@ def integrations() -> None:
 
     # Show global GitHub config if configured
     from a_sdlc.server.github import load_global_github_config
+
     global_gh = load_global_github_config()
     if global_gh:
         token_val = global_gh.get("token", "")
         masked = f"***{token_val[-4:]}" if len(token_val) >= 4 else "***"
-        console.print(f"[dim]Global GitHub config: Token: {masked} (~/.config/a-sdlc/config.yaml)[/dim]")
+        console.print(
+            f"[dim]Global GitHub config: Token: {masked} (~/.config/a-sdlc/config.yaml)[/dim]"
+        )
         console.print()
 
     # Show sync mappings summary
@@ -3655,7 +5757,9 @@ def integrations() -> None:
     if mappings:
         sprint_mappings = [m for m in mappings if m["entity_type"] == "sprint"]
         task_mappings = [m for m in mappings if m["entity_type"] == "task"]
-        console.print(f"[dim]Linked: {len(sprint_mappings)} sprint(s), {len(task_mappings)} task(s)[/dim]")
+        console.print(
+            f"[dim]Linked: {len(sprint_mappings)} sprint(s), {len(task_mappings)} task(s)[/dim]"
+        )
 
 
 # =============================================================================
@@ -3772,7 +5876,9 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
             console.print(f"[cyan]Dry run:[/cyan] Would import active sprint from board {board_id}")
             active_sprint = client.get_active_sprint(board_id)
             if active_sprint:
-                console.print(f"  Sprint: {active_sprint.get('name', 'Unknown')} (ID: {active_sprint['id']})")
+                console.print(
+                    f"  Sprint: {active_sprint.get('name', 'Unknown')} (ID: {active_sprint['id']})"
+                )
                 issues = client.get_sprint_issues(str(active_sprint["id"]))
                 console.print(f"  Issues: {len(issues)}")
             else:
@@ -3791,12 +5897,18 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
 
     # Otherwise, list available sprints
     if not board_id:
-        console.print("[yellow]Provide --board to list sprints, or --sprint to import directly.[/yellow]")
+        console.print(
+            "[yellow]Provide --board to list sprints, or --sprint to import directly.[/yellow]"
+        )
         console.print()
         console.print("Examples:")
-        console.print("  [cyan]a-sdlc sync jira pull --board 123[/cyan]              # List sprints")
+        console.print(
+            "  [cyan]a-sdlc sync jira pull --board 123[/cyan]              # List sprints"
+        )
         console.print("  [cyan]a-sdlc sync jira pull --board 123 --active[/cyan]     # Pull active")
-        console.print("  [cyan]a-sdlc sync jira pull --sprint 456[/cyan]             # Pull specific")
+        console.print(
+            "  [cyan]a-sdlc sync jira pull --sprint 456[/cyan]             # Pull specific"
+        )
         return
 
     # List sprints from board
@@ -3826,8 +5938,12 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
         console.print(table)
         console.print()
         console.print("To import:")
-        console.print(f"  [cyan]a-sdlc sync jira pull --board {board_id} --active[/cyan]  # Active sprint")
-        console.print("  [cyan]a-sdlc sync jira pull --sprint <ID>[/cyan]               # Specific sprint")
+        console.print(
+            f"  [cyan]a-sdlc sync jira pull --board {board_id} --active[/cyan]  # Active sprint"
+        )
+        console.print(
+            "  [cyan]a-sdlc sync jira pull --sprint <ID>[/cyan]               # Specific sprint"
+        )
 
     except Exception as e:
         console.print(f"[red]Failed to list sprints: {e}[/red]")
@@ -3874,7 +5990,9 @@ def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
 
     if dry_run:
         prds = storage.get_sprint_prds(sprint_id)
-        console.print(f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Jira sprint {mapping['external_id']}")
+        console.print(
+            f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Jira sprint {mapping['external_id']}"
+        )
         for prd in prds:
             prd_mapping = storage.get_sync_mapping("prd", prd["id"], "jira")
             action = "Update" if prd_mapping else "Create"
@@ -3947,7 +6065,9 @@ def jira_status(sprint_id: str | None) -> None:
             for prd in prds:
                 prd_mapping = storage.get_sync_mapping("prd", prd["id"], "jira")
                 if prd_mapping:
-                    console.print(f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id']}")
+                    console.print(
+                        f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id']}"
+                    )
                 else:
                     console.print(f"  [dim]-[/dim] {prd['title']} (not linked)")
     else:
@@ -4071,7 +6191,9 @@ def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run
             console.print("[cyan]Dry run:[/cyan] Would import active cycle")
             active_cycle = client.get_active_cycle()
             if active_cycle:
-                console.print(f"  Cycle: {active_cycle.get('name', 'Unknown')} (ID: {active_cycle['id']})")
+                console.print(
+                    f"  Cycle: {active_cycle.get('name', 'Unknown')} (ID: {active_cycle['id']})"
+                )
                 issues = active_cycle.get("issues", {}).get("nodes", [])
                 console.print(f"  Issues: {len(issues)}")
             else:
@@ -4163,7 +6285,9 @@ def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
 
     if dry_run:
         prds = storage.get_sprint_prds(sprint_id)
-        console.print(f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Linear cycle {mapping['external_id'][:12]}...")
+        console.print(
+            f"[cyan]Dry run:[/cyan] Would push {len(prds)} PRD(s) to Linear cycle {mapping['external_id'][:12]}..."
+        )
         for prd in prds:
             prd_mapping = storage.get_sync_mapping("prd", prd["id"], "linear")
             action = "Update" if prd_mapping else "Create"
@@ -4236,7 +6360,9 @@ def linear_status(sprint_id: str | None) -> None:
             for prd in prds:
                 prd_mapping = storage.get_sync_mapping("prd", prd["id"], "linear")
                 if prd_mapping:
-                    console.print(f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id'][:12]}...")
+                    console.print(
+                        f"  [green]✓[/green] {prd['title']} → {prd_mapping['external_id'][:12]}..."
+                    )
                 else:
                     console.print(f"  [dim]-[/dim] {prd['title']} (not linked)")
     else:
@@ -4307,22 +6433,709 @@ def init_project_cmd(name: str | None) -> None:
     init_results = generate_init_files(Path(cwd), project_name)
     init_files_status = []
     for result in init_results["results"]:
-        status_icon = "[green]created[/green]" if result["status"] == "created" else "[yellow]exists[/yellow]"
+        status_icon = (
+            "[green]created[/green]" if result["status"] == "created" else "[yellow]exists[/yellow]"
+        )
         init_files_status.append(f"  {status_icon}: {result['path']}")
     init_files_display = "\n".join(init_files_status)
 
-    console.print(Panel(
-        f"[green]Project '{project_name}' initialized![/green]\n\n"
-        f"ID: {project['id']}\n"
-        f"Path: {project['path']}\n\n"
-        f"Generated files:\n{init_files_display}\n\n"
-        "Next steps:\n"
-        "  [cyan]/sdlc:scan[/cyan]     - Generate documentation artifacts\n"
-        "  [cyan]/sdlc:prd[/cyan]      - Create a PRD\n"
-        "  [cyan]/sdlc:task[/cyan]     - Create tasks",
-        title="[bold]a-sdlc Initialized[/bold]",
-        border_style="green"
-    ))
+    console.print(
+        Panel(
+            f"[green]Project '{project_name}' initialized![/green]\n\n"
+            f"ID: {project['id']}\n"
+            f"Path: {project['path']}\n\n"
+            f"Generated files:\n{init_files_display}\n\n"
+            "Next steps:\n"
+            "  [cyan]/sdlc:scan[/cyan]     - Generate documentation artifacts\n"
+            "  [cyan]/sdlc:prd[/cyan]      - Create a PRD\n"
+            "  [cyan]/sdlc:task[/cyan]     - Create tasks",
+            title="[bold]a-sdlc Initialized[/bold]",
+            border_style="green",
+        )
+    )
+
+
+@main.command("projects")
+def project_list() -> None:
+    """List all registered projects."""
+    from a_sdlc.core.database import Database
+
+    db = Database()
+    projects = db.get_all_projects_with_stats()
+    if not projects:
+        console.print("[yellow]No projects found.[/yellow]")
+        return
+
+    table = Table(title="Projects")
+    table.add_column("Shortname", style="cyan")
+    table.add_column("Name")
+    table.add_column("Path", style="dim")
+    table.add_column("PRDs", justify="right")
+    table.add_column("Tasks", justify="right")
+    table.add_column("Sprints", justify="right")
+    table.add_column("Active Sprint")
+
+    for p in projects:
+        table.add_row(
+            p["shortname"],
+            p["name"],
+            p.get("path", ""),
+            str(p.get("total_prds", 0)),
+            str(p.get("total_tasks", 0)),
+            str(p.get("total_sprints", 0)),
+            p.get("active_sprint_title") or "-",
+        )
+    console.print(table)
+
+
+@main.group()
+def agent() -> None:
+    """Manage agent governance and lifecycle.
+
+    \b
+      a-sdlc agent list              List all registered agents
+      a-sdlc agent approve <id>      Approve a proposed agent
+      a-sdlc agent inspect <id>      Show detailed agent info
+      a-sdlc agent budget <id>       View/set agent budget
+      a-sdlc agent suspend <id>      Suspend an agent
+      a-sdlc agent performance       Show performance metrics
+      a-sdlc agent team              Show team composition
+    """
+    pass
+
+
+@agent.command("list")
+@click.option(
+    "--status",
+    type=click.Choice(["active", "proposed", "suspended", "retired"]),
+    default=None,
+    help="Filter by agent status",
+)
+def agent_list(status: str | None) -> None:
+    """List all registered agents."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    agents = storage.list_agents(project["id"], status=status)
+    if not agents:
+        console.print("[yellow]No agents found.[/yellow]")
+        return
+
+    table = Table(title="Agents")
+    table.add_column("ID", style="cyan")
+    table.add_column("Display Name")
+    table.add_column("Persona", style="blue")
+    table.add_column("Status", style="green")
+    table.add_column("Score")
+    for a in agents:
+        score = (
+            f"{a.get('performance_score', 50.0):.0f}"
+            if a.get("performance_score") is not None
+            else "-"
+        )
+        table.add_row(a["id"], a["display_name"], a["persona_type"], a["status"], score)
+    console.print(table)
+
+
+@agent.command("approve")
+@click.argument("agent_id")
+def agent_approve(agent_id: str) -> None:
+    """Approve a proposed agent."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    agent_obj = storage.get_agent(agent_id)
+    if not agent_obj:
+        console.print(f"[red]Agent not found: {agent_id}[/red]")
+        return
+
+    if agent_obj["status"] != "proposed":
+        console.print(
+            f"[yellow]Agent {agent_id} is not in 'proposed' status "
+            f"(current: {agent_obj['status']})[/yellow]"
+        )
+        return
+
+    storage.update_agent_status(agent_id, "active")
+    storage.append_audit_log(
+        agent_obj["project_id"], "agent_approved", "success", agent_id=agent_id
+    )
+    console.print(f"[green]Agent {agent_id} approved and activated.[/green]")
+
+
+@agent.command("inspect")
+@click.argument("agent_id")
+def agent_inspect(agent_id: str) -> None:
+    """Show detailed agent information."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    agent_obj = storage.get_agent(agent_id)
+    if not agent_obj:
+        console.print(f"[red]Agent not found: {agent_id}[/red]")
+        return
+
+    info = f"[bold]{agent_obj['display_name']}[/bold] ({agent_obj['persona_type']})\n"
+    info += f"Status: {agent_obj['status']}\n"
+    info += f"Score: {agent_obj.get('performance_score', 'N/A')}\n"
+    info += f"Team: {agent_obj.get('team_id', 'None')}\n"
+    info += f"Created: {agent_obj['created_at']}"
+    console.print(Panel(info, title=f"Agent {agent_id}", border_style="cyan"))
+
+    # Recent audit entries
+    audit = storage.get_audit_log(agent_obj["project_id"], agent_id=agent_id, limit=10)
+    if audit:
+        table = Table(title="Recent Audit Entries")
+        table.add_column("Time", style="dim")
+        table.add_column("Action")
+        table.add_column("Outcome")
+        table.add_column("Details")
+        for entry in audit:
+            table.add_row(
+                str(entry["created_at"]),
+                entry["action_type"],
+                entry["outcome"],
+                entry.get("details", ""),
+            )
+        console.print(table)
+
+
+@agent.command("budget")
+@click.argument("agent_id")
+@click.option("--token-limit", type=int, default=None, help="Set token limit")
+@click.option("--cost-limit", type=int, default=None, help="Set cost limit in cents")
+def agent_budget(agent_id: str, token_limit: int | None, cost_limit: int | None) -> None:
+    """View or set agent budget."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+
+    if token_limit is not None or cost_limit is not None:
+        storage.create_agent_budget(
+            agent_id, token_limit=token_limit, cost_limit_cents=cost_limit
+        )
+        console.print(f"[green]Budget updated for {agent_id}.[/green]")
+
+    budget = storage.get_agent_budget(agent_id)
+    if not budget:
+        console.print(f"[yellow]No budget set for {agent_id}.[/yellow]")
+        return
+
+    info = f"Token Limit: {budget.get('token_limit', 'unlimited')}\n"
+    info += f"Token Used: {budget.get('token_used', 0)}\n"
+    info += f"Cost Limit: {budget.get('cost_limit_cents', 'unlimited')}\u00a2\n"
+    info += f"Cost Used: {budget.get('cost_used_cents', 0)}\u00a2"
+    console.print(Panel(info, title=f"Budget: {agent_id}", border_style="green"))
+
+
+@agent.command("suspend")
+@click.argument("agent_id")
+@click.option("--reason", default="manual", help="Reason for suspension")
+def agent_suspend(agent_id: str, reason: str) -> None:
+    """Suspend an active agent."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    agent_obj = storage.get_agent(agent_id)
+    if not agent_obj:
+        console.print(f"[red]Agent not found: {agent_id}[/red]")
+        return
+
+    storage.suspend_agent(agent_id)
+    storage.append_audit_log(
+        agent_obj["project_id"],
+        "agent_suspended",
+        "success",
+        agent_id=agent_id,
+        details=reason,
+    )
+    console.print(f"[yellow]Agent {agent_id} suspended. Reason: {reason}[/yellow]")
+
+
+@agent.command("performance")
+@click.argument("agent_id", required=False)
+def agent_performance(agent_id: str | None) -> None:
+    """Show agent performance metrics."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    if agent_id:
+        perf = storage.compute_agent_performance(agent_id)
+        console.print(f"Agent: {agent_id}")
+        console.print(f"  Completed: {perf.get('total_completed', 0)}")
+        console.print(f"  Failed: {perf.get('total_failed', 0)}")
+        console.print(f"  Quality: {perf.get('overall_quality', 'N/A')}")
+        console.print(f"  Sprints: {perf.get('sprint_count', 0)}")
+    else:
+        agents = storage.list_agents(project["id"])
+        table = Table(title="Agent Performance")
+        table.add_column("Agent", style="cyan")
+        table.add_column("Score")
+        table.add_column("Status")
+        for a in agents:
+            score = (
+                f"{a.get('performance_score', 50.0):.0f}"
+                if a.get("performance_score") is not None
+                else "-"
+            )
+            table.add_row(a["id"], score, a["status"])
+        console.print(table)
+
+
+@agent.command("team")
+@click.argument("team_id", required=False, type=int)
+def agent_team(team_id: int | None) -> None:
+    """Show team composition."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    if team_id:
+        try:
+            team = storage.get_team_composition(team_id)
+            console.print(f"[bold]Team: {team['name']}[/bold]")
+            console.print(f"Lead: {team.get('lead_agent_id', 'None')}")
+            table = Table(title="Members")
+            table.add_column("Agent ID", style="cyan")
+            table.add_column("Name")
+            table.add_column("Persona")
+            table.add_column("Status")
+            for m in team.get("members", []):
+                table.add_row(m["id"], m["display_name"], m["persona_type"], m["status"])
+            console.print(table)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+    else:
+        teams = storage.list_agent_teams(project["id"])
+        if not teams:
+            console.print("[yellow]No teams found.[/yellow]")
+            return
+        table = Table(title="Agent Teams")
+        table.add_column("ID")
+        table.add_column("Name")
+        table.add_column("Lead")
+        for t in teams:
+            table.add_row(str(t["id"]), t["name"], t.get("lead_agent_id", ""))
+        console.print(table)
+
+
+@main.group()
+def quality() -> None:
+    """Quality tracking and verification commands.
+
+    \b
+      a-sdlc quality coverage [PRD_ID]           Show requirement coverage
+      a-sdlc quality verify [PRD_ID]             Show AC verification status
+      a-sdlc quality gaps [SPRINT_ID]            Full gap analysis (PASS/FAIL)
+      a-sdlc quality reclassify REQ_ID           Update requirement depth
+      a-sdlc quality skip-challenge CHALLENGE_ID  Skip a challenge round
+      a-sdlc quality resolve-escalation OBJ_ID   Resolve escalated objection
+      a-sdlc quality waive REQ_ID                Waive a requirement
+    """
+    pass
+
+
+@quality.command("coverage")
+@click.argument("prd_id", required=False)
+def quality_coverage(prd_id: str | None) -> None:
+    """Show requirement coverage for a PRD or all PRDs."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    # Determine which PRDs to report on
+    if prd_id:
+        prd_ids = [prd_id]
+    else:
+        prds = storage.list_prds(project["id"])
+        prd_ids = [p["id"] for p in prds]
+
+    if not prd_ids:
+        console.print("[yellow]No PRDs found.[/yellow]")
+        return
+
+    table = Table(title="Requirement Coverage")
+    table.add_column("PRD", style="cyan")
+    table.add_column("Total", justify="right")
+    table.add_column("Linked", justify="right")
+    table.add_column("Orphaned", justify="right")
+    table.add_column("Coverage %", justify="right")
+
+    for pid in prd_ids:
+        try:
+            stats = storage.get_coverage_stats(pid)
+            total = stats["total"]
+            linked = stats["linked"]
+            orphaned = stats.get("orphaned", total - linked)
+            pct = round((linked / total) * 100, 1) if total > 0 else 100.0
+            style = "green" if pct >= 100 else "yellow" if pct >= 80 else "red"
+            table.add_row(
+                pid,
+                str(total),
+                str(linked),
+                str(orphaned),
+                f"[{style}]{pct}%[/{style}]",
+            )
+        except Exception as exc:
+            table.add_row(pid, "-", "-", "-", f"[red]Error: {exc}[/red]")
+
+    console.print(table)
+
+
+@quality.command("verify")
+@click.argument("prd_id", required=False)
+def quality_verify(prd_id: str | None) -> None:
+    """Show acceptance criteria verification status."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    if prd_id:
+        prd_ids = [prd_id]
+    else:
+        prds = storage.list_prds(project["id"])
+        prd_ids = [p["id"] for p in prds]
+
+    if not prd_ids:
+        console.print("[yellow]No PRDs found.[/yellow]")
+        return
+
+    table = Table(title="AC Verification Status")
+    table.add_column("Req ID", style="cyan")
+    table.add_column("Summary")
+    table.add_column("Depth")
+    table.add_column("Verified", justify="center")
+
+    total_acs = 0
+    verified_count = 0
+
+    for pid in prd_ids:
+        try:
+            ac_reqs = storage.get_requirements(pid, req_type="AC")
+            for req in ac_reqs:
+                total_acs += 1
+                tasks = storage.get_requirement_tasks(req["id"])
+                verified = False
+                for t in tasks:
+                    verifications = storage.get_ac_verifications(t["id"])
+                    for v in verifications:
+                        if v.get("requirement_id") == req["id"]:
+                            verified = True
+                            break
+                    if verified:
+                        break
+                if verified:
+                    verified_count += 1
+                status_str = "[green]Yes[/green]" if verified else "[red]No[/red]"
+                table.add_row(
+                    req["id"],
+                    req.get("summary", ""),
+                    req.get("depth", "structural"),
+                    status_str,
+                )
+        except Exception as exc:
+            console.print(f"[red]Error reading PRD {pid}: {exc}[/red]")
+
+    console.print(table)
+    pct = round((verified_count / total_acs) * 100, 1) if total_acs > 0 else 100.0
+    console.print(f"\nVerified: {verified_count}/{total_acs} ({pct}%)")
+
+
+@quality.command("gaps")
+@click.argument("sprint_id", required=False)
+def quality_gaps(sprint_id: str | None) -> None:
+    """Run full gap analysis for a sprint. Shows PASS/FAIL verdict."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    if not sprint_id:
+        # Find active sprint
+        sprints = storage.list_sprints(project["id"])
+        active = [s for s in sprints if s.get("status") == "active"]
+        if active:
+            sprint_id = active[0]["id"]
+        elif sprints:
+            sprint_id = sprints[-1]["id"]
+        else:
+            console.print("[yellow]No sprints found.[/yellow]")
+            return
+
+    prds = storage.get_sprint_prds(sprint_id)
+    if not prds:
+        console.print(f"[yellow]No PRDs in sprint {sprint_id}.[/yellow]")
+        return
+
+    # Aggregate stats
+    total_reqs = 0
+    linked_reqs = 0
+    orphaned_list: list[dict] = []
+    unverified_list: list[dict] = []
+    total_acs = 0
+    verified_acs = 0
+
+    for prd in prds:
+        pid = prd["id"]
+        try:
+            stats = storage.get_coverage_stats(pid)
+            total_reqs += stats["total"]
+            linked_reqs += stats["linked"]
+
+            orphaned = storage.get_orphaned_requirements(pid)
+            for r in orphaned:
+                orphaned_list.append({"prd_id": pid, **r})
+
+            ac_reqs = storage.get_requirements(pid, req_type="AC")
+            for req in ac_reqs:
+                total_acs += 1
+                tasks = storage.get_requirement_tasks(req["id"])
+                verified = False
+                for t in tasks:
+                    verifications = storage.get_ac_verifications(t["id"])
+                    for v in verifications:
+                        if v.get("requirement_id") == req["id"]:
+                            verified = True
+                            break
+                    if verified:
+                        break
+                if verified:
+                    verified_acs += 1
+                else:
+                    unverified_list.append({"prd_id": pid, **req})
+        except Exception as exc:
+            console.print(f"[red]Error analysing PRD {pid}: {exc}[/red]")
+
+    coverage_pct = (
+        round((linked_reqs / total_reqs) * 100, 1) if total_reqs > 0 else 100.0
+    )
+    verification_pct = (
+        round((verified_acs / total_acs) * 100, 1) if total_acs > 0 else 100.0
+    )
+    quality_pass = coverage_pct >= 100.0 and verification_pct >= 100.0
+
+    verdict = "[green]PASS[/green]" if quality_pass else "[red]FAIL[/red]"
+    console.print(Panel(f"Sprint {sprint_id} Quality: {verdict}", expand=False))
+
+    console.print(f"\nCoverage: {linked_reqs}/{total_reqs} ({coverage_pct}%)")
+    console.print(f"Verification: {verified_acs}/{total_acs} ({verification_pct}%)")
+
+    if orphaned_list:
+        console.print("\n[bold]Orphaned Requirements:[/bold]")
+        for r in orphaned_list:
+            console.print(
+                f"  - {r.get('req_number', r.get('id', '?'))}: "
+                f"{r.get('summary', '')} (PRD: {r['prd_id']})"
+            )
+
+    if unverified_list:
+        console.print("\n[bold]Unverified ACs:[/bold]")
+        for r in unverified_list:
+            console.print(
+                f"  - {r.get('req_number', r.get('id', '?'))}: "
+                f"{r.get('summary', '')} (PRD: {r['prd_id']})"
+            )
+
+
+@quality.command("reclassify")
+@click.argument("req_id")
+@click.option(
+    "--depth",
+    type=click.Choice(["structural", "behavioral", "negative"]),
+    required=True,
+    help="New depth classification",
+)
+def quality_reclassify(req_id: str, depth: str) -> None:
+    """Update the depth classification of a requirement."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    req = storage.get_requirement(req_id)
+    if not req:
+        console.print(f"[red]Requirement not found: {req_id}[/red]")
+        return
+
+    old_depth = req.get("depth", "structural")
+    storage.upsert_requirement(
+        id=req["id"],
+        prd_id=req["prd_id"],
+        req_type=req["req_type"],
+        req_number=req["req_number"],
+        summary=req.get("summary", ""),
+        depth=depth,
+    )
+    console.print(
+        f"[green]Reclassified {req_id}: {old_depth} -> {depth}[/green]"
+    )
+
+
+@quality.command("skip-challenge")
+@click.argument("challenge_id")
+@click.option("--reason", required=True, help="Reason for skipping the challenge")
+def quality_skip_challenge(challenge_id: str, reason: str) -> None:
+    """Skip a challenge round and record in audit log."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    # Parse challenge_id as "artifact_type:artifact_id:round_number"
+    parts = challenge_id.split(":")
+    if len(parts) != 3:
+        console.print(
+            "[red]Invalid challenge ID format. "
+            "Expected: artifact_type:artifact_id:round_number[/red]"
+        )
+        return
+
+    artifact_type, artifact_id, round_str = parts
+    try:
+        round_number = int(round_str)
+    except ValueError:
+        console.print(f"[red]Invalid round number: {round_str}[/red]")
+        return
+
+    try:
+        result = storage.update_challenge_round(
+            artifact_type, artifact_id, round_number,
+            verdict="skipped", status="skipped",
+        )
+        if not result:
+            console.print(
+                f"[red]Challenge round not found: {challenge_id}[/red]"
+            )
+            return
+    except Exception as exc:
+        console.print(f"[red]Failed to skip challenge: {exc}[/red]")
+        return
+
+    storage.append_audit_log(
+        project["id"],
+        "challenge_skipped",
+        "success",
+        target_entity=challenge_id,
+        details={"reason": reason},
+    )
+    console.print(f"[green]Challenge {challenge_id} skipped. Reason: {reason}[/green]")
+
+
+@quality.command("resolve-escalation")
+@click.argument("objection_id")
+@click.option(
+    "--resolution", required=True, help="Resolution text for the escalation"
+)
+def quality_resolve_escalation(objection_id: str, resolution: str) -> None:
+    """Resolve a user-escalated objection."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    # Parse objection_id as "artifact_type:artifact_id:round_number"
+    parts = objection_id.split(":")
+    if len(parts) != 3:
+        console.print(
+            "[red]Invalid objection ID format. "
+            "Expected: artifact_type:artifact_id:round_number[/red]"
+        )
+        return
+
+    artifact_type, artifact_id, round_str = parts
+    try:
+        round_number = int(round_str)
+    except ValueError:
+        console.print(f"[red]Invalid round number: {round_str}[/red]")
+        return
+
+    try:
+        result = storage.update_challenge_round(
+            artifact_type, artifact_id, round_number,
+            responses=resolution, verdict="resolved", status="resolved",
+        )
+        if not result:
+            console.print(
+                f"[red]Challenge round not found: {objection_id}[/red]"
+            )
+            return
+    except Exception as exc:
+        console.print(f"[red]Failed to resolve escalation: {exc}[/red]")
+        return
+
+    storage.append_audit_log(
+        project["id"],
+        "escalation_resolved",
+        "success",
+        target_entity=objection_id,
+        details={"resolution": resolution},
+    )
+    console.print(f"[green]Escalation {objection_id} resolved.[/green]")
+
+
+@quality.command("waive")
+@click.argument("req_id")
+@click.option("--reason", required=True, help="Justification for waiving the requirement")
+@click.option("--sprint-id", default=None, help="Sprint ID to scope the waiver")
+def quality_waive(req_id: str, reason: str, sprint_id: str | None) -> None:
+    """Waive a requirement with justification."""
+    from a_sdlc.storage import HybridStorage
+
+    storage = HybridStorage()
+    project = storage.get_most_recent_project()
+    if not project:
+        console.print("[red]No project found.[/red]")
+        return
+
+    req = storage.get_requirement(req_id)
+    if not req:
+        console.print(f"[red]Requirement not found: {req_id}[/red]")
+        return
+
+    storage.append_audit_log(
+        project["id"],
+        "requirement_waived",
+        "success",
+        target_entity=req_id,
+        details={
+            "reason": reason,
+            "sprint_id": sprint_id,
+            "req_number": req.get("req_number", ""),
+            "summary": req.get("summary", ""),
+        },
+    )
+    console.print(
+        f"[green]Requirement {req_id} waived. Reason: {reason}[/green]"
+    )
 
 
 if __name__ == "__main__":

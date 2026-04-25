@@ -1,0 +1,64 @@
+<div class="work-item-card" id="work-item-{{ item.id }}">
+    <div class="work-item-header">
+        <span class="work-item-type">{% if item.artifact_type %}{{ item.artifact_type }} {% endif %}{{ item.work_type }}</span>
+        <span class="work-item-status status-{{ item.status }}">{{ item.status|replace('_', ' ') }}</span>
+    </div>
+    <div class="work-item-label">
+        {% if item.artifact_id %}
+        <span class="badge badge-muted">{{ item.artifact_id }}</span>
+        {% else %}
+        {{ item.id }}
+        {% endif %}
+    </div>
+    
+    {% if item.assigned_agent_id %}
+    <div class="agent-indicator">
+        <span class="agent-persona-badge">{{ item.assigned_agent_persona or item.assigned_agent_id }}</span>
+        {% if item.elapsed_min %}<span class="agent-elapsed">{{ item.elapsed_min }}m</span>{% endif %}
+    </div>
+    {% endif %}
+
+    <div class="work-item-actions">
+        {% if item.status == 'pending' %}
+        <button class="btn-action btn-action-primary" 
+                hx-post="/runs/items/{{ item.id }}/action?action=start"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}">Start</button>
+        <button class="btn-action btn-action-warn"
+                hx-post="/runs/items/{{ item.id }}/action?action=cancel"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}"
+                hx-confirm="Cancel this pending work item?">Cancel</button>
+        {% elif item.status == 'in_progress' %}
+        <button class="btn-action btn-action-muted"
+                hx-post="/runs/items/{{ item.id }}/action?action=pause"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}">Pause</button>
+        <button class="btn-action btn-action-warn"
+                hx-post="/runs/items/{{ item.id }}/action?action=cancel"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}"
+                hx-confirm="Cancel this work item?">Cancel</button>
+        {% elif item.status in ['failed', 'escalated'] %}
+        <button class="btn-action btn-action-primary"
+                hx-post="/runs/items/{{ item.id }}/action?action=retry"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}">Retry</button>
+        {% endif %}
+
+        {% if item.status in ['pending', 'failed', 'escalated'] %}
+        <button class="btn-action btn-action-muted"
+                hx-post="/runs/items/{{ item.id }}/action?action=skip"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}"
+                hx-confirm="Skip this work item?">Skip</button>
+        {% endif %}
+
+        {% if item.status == 'skipped' %}
+        <button class="btn-action btn-action-primary"
+                hx-post="/runs/items/{{ item.id }}/action?action=retry"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}">Retry</button>
+        {% endif %}
+
+        {% if item.work_type == 'challenge' and item.status in ['in_progress', 'pending'] %}
+        <button class="btn-action btn-action-success"
+                hx-post="/runs/items/{{ item.id }}/action?action=force_approve"
+                hx-swap="outerHTML" hx-target="#work-item-{{ item.id }}"
+                hx-confirm="Force approve? The challenge cycle will end.">Force Approve</button>
+        {% endif %}
+    </div>
+</div>

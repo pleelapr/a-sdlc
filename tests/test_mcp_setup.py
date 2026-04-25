@@ -13,7 +13,9 @@ from a_sdlc.mcp_setup import (
     check_tool_available,
     get_available_installer,
     load_claude_settings,
+    load_settings,
     save_claude_settings,
+    save_settings,
     update_claude_settings,
     verify_setup,
 )
@@ -218,3 +220,57 @@ def test_default_serena_config():
     assert DEFAULT_SERENA_CONFIG["command"] == "uvx"
     assert "serena-agent" in DEFAULT_SERENA_CONFIG["args"]
     assert "SERENA_LOG_LEVEL" in DEFAULT_SERENA_CONFIG["env"]
+
+
+class TestGenericSettings:
+    """Tests for generic load_settings/save_settings functions."""
+
+    def test_load_settings_nonexistent(self, tmp_path):
+        """Test loading from non-existent path returns empty dict."""
+        result = load_settings(tmp_path / "nonexistent.json")
+        assert result == {}
+
+    def test_load_settings_valid_json(self, tmp_path):
+        """Test loading valid JSON file."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text('{"key": "value"}')
+        result = load_settings(settings_file)
+        assert result == {"key": "value"}
+
+    def test_load_settings_invalid_json(self, tmp_path):
+        """Test loading invalid JSON returns empty dict."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("not json")
+        result = load_settings(settings_file)
+        assert result == {}
+
+    def test_save_settings_creates_parents(self, tmp_path):
+        """Test save creates parent directories."""
+        settings_file = tmp_path / "deep" / "nested" / "settings.json"
+        save_settings({"test": True}, settings_file)
+        assert settings_file.exists()
+        loaded = json.loads(settings_file.read_text())
+        assert loaded == {"test": True}
+
+    def test_save_settings_indent(self, tmp_path):
+        """Test save uses 2-space indent."""
+        settings_file = tmp_path / "settings.json"
+        save_settings({"a": 1}, settings_file)
+        content = settings_file.read_text()
+        assert "  " in content  # 2-space indent
+
+    def test_save_then_load_roundtrip(self, tmp_path):
+        """Test save/load roundtrip preserves data."""
+        settings_file = tmp_path / "settings.json"
+        original = {"mcpServers": {"asdlc": {"command": "uvx"}}}
+        save_settings(original, settings_file)
+        loaded = load_settings(settings_file)
+        assert loaded == original
+
+    def test_claude_wrappers_still_work(self, tmp_path):
+        """Test that load/save_claude_settings still work as wrappers."""
+        settings_file = tmp_path / "settings.json"
+        with patch("a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH", settings_file):
+            save_claude_settings({"test": "data"})
+            result = load_claude_settings()
+            assert result == {"test": "data"}

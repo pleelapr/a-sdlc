@@ -25,7 +25,7 @@ Example:
 ## Quick Start
 
 1. **Create PRD**: `/sdlc:prd-generate "your feature description"`
-2. **Assign to Sprint**: `mcp__asdlc__add_prd_to_sprint("SPRINT-01", "feature-auth")`
+2. **Assign to Sprint**: `mcp__asdlc__manage_sprint_prds(action="add", prd_id="feature-auth", sprint_id="SPRINT-01")`
 3. **View PRDs**: `/sdlc:prd-list`
 4. **Generate tasks**: `/sdlc:prd-split "<prd-id>"`
 
@@ -41,10 +41,10 @@ When a PRD is in a sprint, all its tasks are considered part of that sprint.
 
 ```
 # Assign PRD to sprint
-mcp__asdlc__add_prd_to_sprint("SPRINT-01", "feature-auth")
+mcp__asdlc__manage_sprint_prds(action="add", prd_id="feature-auth", sprint_id="SPRINT-01")
 
 # Remove from sprint (move to backlog)
-mcp__asdlc__remove_prd_from_sprint("feature-auth")
+mcp__asdlc__manage_sprint_prds(action="remove", prd_id="feature-auth")
 
 # List PRDs in a sprint
 mcp__asdlc__get_sprint_prds("SPRINT-01")

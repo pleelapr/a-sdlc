@@ -183,6 +183,21 @@
     {% endif %}
 </div>
 
+<!-- Agent Thread Card (FR-008) -->
+<div class="card">
+    <div class="card-header">
+        <h3 style="margin: 0;">Agent Thread {% if thread_count %}({{ thread_count }}){% endif %}</h3>
+    </div>
+    <div id="thread-viewer-target"
+         hx-get="/threads/sprint/{{ sprint.id }}"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="empty-state" style="padding: 2rem;">
+            <p style="color: var(--text-muted);">Loading thread...</p>
+        </div>
+    </div>
+</div>
+
 <script>
     async function updateStatus(status) {
         try {

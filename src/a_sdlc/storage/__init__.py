@@ -196,21 +196,31 @@ class HybridStorage:
         prd_result["file_path"] = str(file_path)
         return prd_result
 
-    def get_prd(self, prd_id: str) -> dict[str, Any] | None:
-        """Get PRD by ID with content."""
+    def get_prd(self, prd_id: str, include_content: bool = True) -> dict[str, Any] | None:
+        """Get PRD by ID, optionally with content.
+
+        Args:
+            prd_id: PRD identifier.
+            include_content: If True (default), read and include file content.
+                If False, return metadata + file_path only (saves tokens).
+        """
         prd = self._db.get_prd(prd_id)
         if not prd:
             return None
 
-        # Read content from file
-        content = None
-        if prd.get("file_path"):
-            content = self._content_mgr.read_content(Path(prd["file_path"]))
-        elif prd.get("project_id"):
-            content = self._content_mgr.read_prd(prd["project_id"], prd_id)
-
         prd_with_content = dict(prd)
-        prd_with_content["content"] = content or ""
+
+        if include_content:
+            # Read content from file
+            content = None
+            if prd.get("file_path"):
+                content = self._content_mgr.read_content(Path(prd["file_path"]))
+            elif prd.get("project_id"):
+                content = self._content_mgr.read_prd(prd["project_id"], prd_id)
+            prd_with_content["content"] = content or ""
+        else:
+            prd_with_content["content"] = ""
+
         return prd_with_content
 
     def list_prds(
@@ -300,33 +310,44 @@ class HybridStorage:
         task_result["file_path"] = str(file_path)
         return task_result
 
-    def get_task(self, task_id: str) -> dict[str, Any] | None:
-        """Get task by ID with content."""
+    def get_task(self, task_id: str, include_content: bool = True) -> dict[str, Any] | None:
+        """Get task by ID, optionally with content.
+
+        Args:
+            task_id: Task identifier.
+            include_content: If True (default), read and include file content.
+                If False, return metadata + file_path only (saves tokens).
+        """
         task = self._db.get_task(task_id)
         if not task:
             return None
 
-        # Read content from file
-        content = None
-        if task.get("file_path"):
-            content = self._content_mgr.read_content(Path(task["file_path"]))
-        elif task.get("project_id"):
-            content = self._content_mgr.read_task(task["project_id"], task_id)
-
         task_with_content = dict(task)
 
-        # Add full raw content (like PRD handling)
-        task_with_content["content"] = content or ""
+        if include_content:
+            # Read content from file
+            content = None
+            if task.get("file_path"):
+                content = self._content_mgr.read_content(Path(task["file_path"]))
+            elif task.get("project_id"):
+                content = self._content_mgr.read_task(task["project_id"], task_id)
 
-        # Parse content for description and data (kept for backward compatibility)
-        if content:
-            parsed = self._content_mgr.parse_task_content(content)
-            task_with_content["description"] = parsed.get("description", "")
-            if "dependencies" in parsed:
-                task_with_content["data"] = {"dependencies": parsed["dependencies"]}
+            # Add full raw content (like PRD handling)
+            task_with_content["content"] = content or ""
+
+            # Parse content for description and data (kept for backward compatibility)
+            if content:
+                parsed = self._content_mgr.parse_task_content(content)
+                task_with_content["description"] = parsed.get("description", "")
+                if "dependencies" in parsed:
+                    task_with_content["data"] = {"dependencies": parsed["dependencies"]}
+                else:
+                    task_with_content["data"] = None
             else:
+                task_with_content["description"] = ""
                 task_with_content["data"] = None
         else:
+            task_with_content["content"] = ""
             task_with_content["description"] = ""
             task_with_content["data"] = None
 
@@ -637,6 +658,662 @@ class HybridStorage:
     def list_external_configs(self, project_id: str) -> list[dict[str, Any]]:
         """List external configs."""
         return self._db.list_external_configs(project_id)
+
+    # =========================================================================
+    # Agent Operations
+    # =========================================================================
+
+    def create_agent(
+        self,
+        agent_id: str,
+        project_id: str,
+        persona_type: str,
+        display_name: str,
+        status: str = "active",
+        permissions_profile: str | None = None,
+        approved_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new agent record."""
+        return self._db.create_agent(
+            agent_id, project_id, persona_type, display_name,
+            status, permissions_profile, approved_by,
+        )
+
+    def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        """Get an agent by ID."""
+        return self._db.get_agent(agent_id)
+
+    def list_agents(
+        self, project_id: str, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List agents for a project, optionally filtered by status."""
+        return self._db.list_agents(project_id, status)
+
+    def update_agent(self, agent_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        """Update agent fields dynamically."""
+        return self._db.update_agent(agent_id, **kwargs)
+
+    def update_agent_status(
+        self, agent_id: str, status: str, reason: str | None = None
+    ) -> dict[str, Any] | None:
+        """Update agent status (active/suspended/retired)."""
+        return self._db.update_agent_status(agent_id, status, reason)
+
+    def delete_agent(self, agent_id: str) -> bool:
+        """Soft-delete an agent by setting status to 'retired'."""
+        return self._db.delete_agent(agent_id)
+
+    def get_next_agent_id(self, project_id: str) -> str:
+        """Generate next agent ID for a project."""
+        return self._db.get_next_agent_id(project_id)
+
+    # =========================================================================
+    # Agent Permission Operations
+    # =========================================================================
+
+    def set_agent_permission(
+        self,
+        agent_id: str,
+        permission_type: str,
+        permission_value: str,
+        allowed: int = 1,
+    ) -> dict[str, Any]:
+        """Set or update a permission for an agent."""
+        return self._db.set_agent_permission(
+            agent_id, permission_type, permission_value, allowed,
+        )
+
+    def check_agent_permission(
+        self, agent_id: str, permission_type: str, permission_value: str
+    ) -> bool:
+        """Check if agent has a specific permission."""
+        return self._db.check_agent_permission(agent_id, permission_type, permission_value)
+
+    def get_agent_permissions(self, agent_id: str) -> list[dict[str, Any]]:
+        """Get all permissions for an agent."""
+        return self._db.get_agent_permissions(agent_id)
+
+    # =========================================================================
+    # Agent Budget Operations
+    # =========================================================================
+
+    def create_agent_budget(
+        self,
+        agent_id: str,
+        run_id: str | None = None,
+        token_limit: int | None = None,
+        cost_limit_cents: int | None = None,
+        alert_threshold_pct: int = 90,
+    ) -> dict[str, Any]:
+        """Create a budget record for an agent."""
+        return self._db.create_agent_budget(
+            agent_id, run_id, token_limit, cost_limit_cents, alert_threshold_pct,
+        )
+
+    def get_agent_budget(
+        self, agent_id: str, run_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Get budget for an agent, optionally filtered by run."""
+        return self._db.get_agent_budget(agent_id, run_id)
+
+    def update_agent_budget(
+        self,
+        budget_id: int,
+        token_used_delta: int = 0,
+        cost_used_delta: int = 0,
+    ) -> dict[str, Any] | None:
+        """Update budget usage with delta values."""
+        return self._db.update_agent_budget(budget_id, token_used_delta, cost_used_delta)
+
+    def increment_agent_budget(
+        self,
+        agent_id: str,
+        tokens_delta: int = 0,
+        cost_delta_cents: int = 0,
+        run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically increment an agent's budget usage counters (REM-004)."""
+        return self._db.increment_agent_budget(
+            agent_id, tokens_delta, cost_delta_cents, run_id,
+        )
+
+    # =========================================================================
+    # Execution Run Operations
+    # =========================================================================
+
+    def create_execution_run(
+        self,
+        run_id: str,
+        project_id: str,
+        sprint_id: str | None = None,
+        status: str = "pending",
+        governance_config: str | None = None,
+        total_budget_cents: int | None = None,
+        agent_count: int = 0,
+    ) -> dict[str, Any]:
+        """Create an execution run record."""
+        return self._db.create_execution_run(
+            run_id, project_id, sprint_id, status,
+            governance_config, total_budget_cents, agent_count,
+        )
+
+    def get_execution_run(self, run_id: str) -> dict[str, Any] | None:
+        """Get an execution run by ID."""
+        return self._db.get_execution_run(run_id)
+
+    def update_execution_run(self, run_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        """Update execution run fields dynamically."""
+        return self._db.update_execution_run(run_id, **kwargs)
+
+    def get_next_run_id(self, project_id: str) -> str:
+        """Generate next execution run ID for a project."""
+        return self._db.get_next_run_id(project_id)
+
+    def list_execution_runs(
+        self,
+        project_id: str,
+        run_type: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List execution runs for a project."""
+        return self._db.list_execution_runs(project_id, run_type=run_type, status=status)
+
+    def get_execution_run_detail(self, run_id: str) -> dict[str, Any] | None:
+        """Get an execution run by ID with summary stats."""
+        return self._db.get_execution_run_detail(run_id)
+
+    def count_work_items_by_status(self, run_id: str) -> dict[str, int]:
+        """Count work items by status for a run."""
+        return self._db.count_work_items_by_status(run_id)
+
+    def count_thread_entries(self, run_id: str) -> int:
+        """Count total thread entries for a run."""
+        return self._db.count_thread_entries(run_id)
+
+    def get_recent_thread_entries(self, run_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Get recent thread entries across all artifacts for a run."""
+        return self._db.get_recent_thread_entries(run_id, limit=limit)
+
+    def create_work_queue_item(
+        self,
+        item_id: str,
+        run_id: str,
+        project_id: str,
+        work_type: str,
+        artifact_type: str | None = None,
+        artifact_id: str | None = None,
+        status: str = "pending",
+        priority: int = 0,
+        depends_on: str | None = None,
+        assigned_agent_id: str | None = None,
+        config: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a work queue item."""
+        return self._db.create_work_queue_item(
+            item_id, run_id, project_id, work_type,
+            artifact_type=artifact_type, artifact_id=artifact_id,
+            status=status, priority=priority, depends_on=depends_on,
+            assigned_agent_id=assigned_agent_id, config=config,
+        )
+
+    def list_work_queue_items(
+        self, run_id: str, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List work queue items for a run."""
+        return self._db.list_work_queue_items(run_id, status=status)
+
+    def get_work_queue_item(self, item_id: str) -> dict[str, Any] | None:
+        """Get a single work queue item by ID."""
+        return self._db.get_work_queue_item(item_id)
+
+    def update_work_queue_item(
+        self, item_id: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        """Update work queue item fields dynamically."""
+        return self._db.update_work_queue_item(item_id, **kwargs)
+
+    def create_artifact_thread_entry(
+        self,
+        run_id: str,
+        project_id: str,
+        artifact_type: str,
+        artifact_id: str,
+        entry_type: str,
+        agent_id: str | None = None,
+        agent_persona: str | None = None,
+        round_number: int = 1,
+        content: str | None = None,
+        parent_thread_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Create an artifact thread entry."""
+        return self._db.create_artifact_thread_entry(
+            run_id, project_id, artifact_type, artifact_id, entry_type,
+            agent_id=agent_id, agent_persona=agent_persona,
+            round_number=round_number, content=content,
+            parent_thread_id=parent_thread_id,
+        )
+
+    def list_artifact_threads(
+        self,
+        run_id: str,
+        artifact_type: str | None = None,
+        artifact_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List artifact thread entries for a run."""
+        return self._db.list_artifact_threads(
+            run_id, artifact_type=artifact_type, artifact_id=artifact_id
+        )
+
+    def list_artifact_threads_by_artifact(
+        self,
+        artifact_type: str,
+        artifact_id: str,
+    ) -> list[dict[str, Any]]:
+        """List artifact thread entries for a specific artifact across all runs."""
+        return self._db.list_artifact_threads_by_artifact(
+            artifact_type, artifact_id
+        )
+
+    def get_run_state_hash(self, run_id: str) -> str:
+        """Get a hash representing the current state of a run."""
+        return self._db.get_run_state_hash(run_id)
+
+    # =========================================================================
+    # Work Queue Advanced Operations
+    # =========================================================================
+
+    def get_next_work_item_id(self, project_id: str) -> str:
+        """Generate next work item ID for a project."""
+        return self._db.get_next_work_item_id(project_id)
+
+    def create_work_item(
+        self,
+        run_id: str,
+        project_id: str,
+        work_type: str,
+        artifact_type: str | None = None,
+        artifact_id: str | None = None,
+        status: str = "pending",
+        priority: int = 0,
+        depends_on: "list[str] | str | None" = None,
+        config: "dict[str, Any] | str | None" = None,
+        retry_count: int = 0,
+    ) -> dict[str, Any]:
+        """Create a work queue item with auto-generated ID."""
+        return self._db.create_work_item(
+            run_id, project_id, work_type,
+            artifact_type=artifact_type, artifact_id=artifact_id,
+            status=status, priority=priority, depends_on=depends_on,
+            config=config, retry_count=retry_count,
+        )
+
+    def get_work_item(self, item_id: str) -> dict[str, Any] | None:
+        """Get a single work queue item with deserialized JSON fields."""
+        return self._db.get_work_item(item_id)
+
+    def get_work_items(
+        self, run_id: str, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List work queue items with deserialized JSON fields."""
+        return self._db.get_work_items(run_id, status=status)
+
+    def update_work_item(
+        self, item_id: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        """Update work queue item with JSON serialization and auto-timestamps."""
+        return self._db.update_work_item(item_id, **kwargs)
+
+    def get_dispatchable_items(
+        self, run_id: str, max_concurrent: int = 3
+    ) -> list[dict[str, Any]]:
+        """Get work items that are ready to be dispatched."""
+        return self._db.get_dispatchable_items(run_id, max_concurrent)
+
+    def increment_retry_count(self, item_id: str) -> dict[str, Any] | None:
+        """Atomically increment retry count for a work item."""
+        return self._db.increment_retry_count(item_id)
+
+    def pause_work_item(self, item_id: str) -> dict[str, Any]:
+        """Pause a work item (pending/in_progress -> paused)."""
+        return self._db.pause_work_item(item_id)
+
+    def cancel_work_item(self, item_id: str) -> dict[str, Any]:
+        """Cancel a work item (non-terminal -> cancelled)."""
+        return self._db.cancel_work_item(item_id)
+
+    def skip_work_item(
+        self, item_id: str, reason: str | None = None
+    ) -> dict[str, Any]:
+        """Skip a work item (pending/blocked -> skipped)."""
+        return self._db.skip_work_item(item_id, reason)
+
+    def force_approve_work_item(self, item_id: str) -> dict[str, Any]:
+        """Force-approve a work item (any -> completed + force_approved)."""
+        return self._db.force_approve_work_item(item_id)
+
+    def retry_work_item(self, item_id: str) -> dict[str, Any]:
+        """Retry a work item (failed/blocked -> pending, increment retry)."""
+        return self._db.retry_work_item(item_id)
+
+    def answer_work_item(self, item_id: str, answer: str) -> dict[str, Any]:
+        """Answer a question work item (question -> completed + answer)."""
+        return self._db.answer_work_item(item_id, answer)
+
+    def get_hierarchical_thread(
+        self,
+        artifact_type: str,
+        artifact_id: str,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        """Get thread entries across sprint/PRD/task hierarchy."""
+        return self._db.get_hierarchical_thread(artifact_type, artifact_id, run_id)
+
+    # =========================================================================
+    # Audit Log Operations
+    # =========================================================================
+
+    def append_audit_log(
+        self,
+        project_id: str,
+        action_type: str,
+        outcome: str,
+        agent_id: str | None = None,
+        run_id: str | None = None,
+        target_entity: str | None = None,
+        details: dict[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        """Append an entry to the audit log."""
+        return self._db.append_audit_log(
+            project_id, action_type, outcome,
+            agent_id, run_id, target_entity, details,
+        )
+
+    def get_audit_log(
+        self,
+        project_id: str,
+        agent_id: str | None = None,
+        run_id: str | None = None,
+        action_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get audit log entries with optional filters."""
+        return self._db.get_audit_log(project_id, agent_id, run_id, action_type, limit)
+
+    # =========================================================================
+    # Task Claim Operations
+    # =========================================================================
+
+    def claim_task(self, task_id: str, agent_id: str) -> dict[str, Any]:
+        """Atomically claim a task for an agent."""
+        return self._db.claim_task(task_id, agent_id)
+
+    def release_task(
+        self, task_id: str, agent_id: str, reason: str = "manual"
+    ) -> dict[str, Any] | None:
+        """Release a task claim, resetting the task to pending."""
+        return self._db.release_task(task_id, agent_id, reason)
+
+    def get_active_claim(self, task_id: str) -> dict[str, Any] | None:
+        """Get the active claim for a task."""
+        return self._db.get_active_claim(task_id)
+
+    def list_claims_by_agent(self, agent_id: str) -> list[dict[str, Any]]:
+        """List all claims for an agent."""
+        return self._db.list_claims_by_agent(agent_id)
+
+    def detect_stale_claims(self, timeout_minutes: int = 30) -> list[dict[str, Any]]:
+        """Detect active claims that have exceeded the timeout threshold."""
+        return self._db.detect_stale_claims(timeout_minutes)
+
+    def get_available_work(
+        self,
+        project_id: str,
+        agent_id: str,
+        sprint_id: str | None = None,
+        component_map: dict[str, list[str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get available (unclaimed, pending) tasks for an agent."""
+        return self._db.get_available_work(
+            project_id, agent_id, sprint_id, component_map
+        )
+
+    # =========================================================================
+    # Agent Message Operations
+    # =========================================================================
+
+    def send_agent_message(
+        self,
+        from_agent_id: str,
+        to_agent_id: str,
+        message_type: str,
+        content: str,
+        related_task_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send a message from one agent to another."""
+        return self._db.send_agent_message(
+            from_agent_id, to_agent_id, message_type, content, related_task_id,
+        )
+
+    def get_agent_messages(
+        self,
+        agent_id: str,
+        unread_only: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get messages sent to an agent."""
+        return self._db.get_agent_messages(agent_id, unread_only, limit)
+
+    def mark_message_read(self, message_id: int) -> dict[str, Any] | None:
+        """Mark a message as read."""
+        return self._db.mark_message_read(message_id)
+
+    # =========================================================================
+    # Agent Team Operations
+    # =========================================================================
+
+    def create_agent_team(
+        self,
+        name: str,
+        project_id: str,
+        lead_agent_id: str | None = None,
+        sprint_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new agent team."""
+        return self._db.create_agent_team(name, project_id, lead_agent_id, sprint_id)
+
+    def assign_agent_to_team(
+        self, agent_id: str, team_id: int
+    ) -> dict[str, Any] | None:
+        """Assign an agent to a team."""
+        return self._db.assign_agent_to_team(agent_id, team_id)
+
+    def get_team_composition(
+        self, team_id: int, sprint_id: str | None = None
+    ) -> dict[str, Any]:
+        """Get team details with all member agents."""
+        return self._db.get_team_composition(team_id, sprint_id)
+
+    def list_agent_teams(
+        self, project_id: str, sprint_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List all teams in a project."""
+        return self._db.list_agent_teams(project_id, sprint_id)
+
+    # =========================================================================
+    # Agent Performance Operations
+    # =========================================================================
+
+    def record_agent_performance(
+        self,
+        agent_id: str,
+        sprint_id: str | None = None,
+        tasks_completed: int = 0,
+        tasks_failed: int = 0,
+        avg_quality_score: float | None = None,
+        avg_completion_time_min: float | None = None,
+        corrections_count: int = 0,
+        review_pass_rate: float | None = None,
+    ) -> dict[str, Any]:
+        """Upsert agent performance record."""
+        return self._db.record_agent_performance(
+            agent_id, sprint_id, tasks_completed, tasks_failed,
+            avg_quality_score, avg_completion_time_min,
+            corrections_count, review_pass_rate,
+        )
+
+    def get_agent_performance(
+        self, agent_id: str, sprint_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Get performance record for an agent."""
+        return self._db.get_agent_performance(agent_id, sprint_id)
+
+    def compute_agent_performance(self, agent_id: str) -> dict[str, Any]:
+        """Compute aggregated performance metrics across all sprints."""
+        return self._db.compute_agent_performance(agent_id)
+
+    def update_agent_performance_score(
+        self, agent_id: str, new_score: float
+    ) -> dict[str, Any] | None:
+        """Update the rolling performance_score on the agents table."""
+        return self._db.update_agent_performance_score(agent_id, new_score)
+
+    # =========================================================================
+    # Health & Org Operations
+    # =========================================================================
+
+    def detect_health_issues(
+        self,
+        project_id: str,
+        stalled_timeout_min: int = 30,
+        error_rate_threshold_pct: int = 30,
+        quality_threshold: int = 40,
+    ) -> list[dict[str, Any]]:
+        """Detect agents with health issues."""
+        return self._db.detect_health_issues(
+            project_id, stalled_timeout_min, error_rate_threshold_pct, quality_threshold,
+        )
+
+    def suspend_agent(self, agent_id: str) -> dict[str, Any] | None:
+        """Suspend an agent."""
+        return self._db.suspend_agent(agent_id)
+
+    def retire_agent(self, agent_id: str) -> dict[str, Any] | None:
+        """Retire an agent (preserves all data)."""
+        return self._db.retire_agent(agent_id)
+
+    def get_org_overview(self, project_id: str) -> dict[str, Any]:
+        """Get organizational overview with agent stats, teams, and performance."""
+        return self._db.get_org_overview(project_id)
+
+    # =========================================================================
+    # Quality & Traceability Operations
+    # =========================================================================
+
+    def upsert_requirement(
+        self,
+        id: str,
+        prd_id: str,
+        req_type: str,
+        req_number: str,
+        summary: str,
+        depth: str = "structural",
+    ) -> dict[str, Any]:
+        """Insert or replace a requirement record."""
+        return self._db.upsert_requirement(id, prd_id, req_type, req_number, summary, depth)
+
+    def get_requirement(self, requirement_id: str) -> dict[str, Any] | None:
+        """Get a single requirement by ID."""
+        return self._db.get_requirement(requirement_id)
+
+    def get_requirements(
+        self, prd_id: str, req_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get all requirements for a PRD, optionally filtered by type."""
+        return self._db.get_requirements(prd_id, req_type)
+
+    def delete_requirements(self, prd_id: str) -> int:
+        """Delete all requirements for a PRD."""
+        return self._db.delete_requirements(prd_id)
+
+    def link_task_requirement(self, requirement_id: str, task_id: str) -> dict[str, Any]:
+        """Link a task to a requirement."""
+        return self._db.link_task_requirement(requirement_id, task_id)
+
+    def get_task_requirements(self, task_id: str) -> list[dict[str, Any]]:
+        """Get all requirements linked to a task, with verification status."""
+        return self._db.get_task_requirements(task_id)
+
+    def get_requirement_tasks(self, requirement_id: str) -> list[dict[str, Any]]:
+        """Get all tasks linked to a requirement."""
+        return self._db.get_requirement_tasks(requirement_id)
+
+    def get_orphaned_requirements(self, prd_id: str) -> list[dict[str, Any]]:
+        """Get requirements with zero linked tasks."""
+        return self._db.get_orphaned_requirements(prd_id)
+
+    def get_coverage_stats(self, prd_id: str) -> dict[str, Any]:
+        """Compute requirement coverage statistics for a PRD."""
+        return self._db.get_coverage_stats(prd_id)
+
+    def record_ac_verification(
+        self,
+        requirement_id: str,
+        task_id: str,
+        verified_by: str,
+        evidence_type: str,
+        evidence: str,
+    ) -> dict[str, Any]:
+        """Record acceptance-criteria verification evidence."""
+        return self._db.record_ac_verification(
+            requirement_id, task_id, verified_by, evidence_type, evidence,
+        )
+
+    def get_ac_verifications(self, task_id: str) -> list[dict[str, Any]]:
+        """Get all AC verifications for a task."""
+        return self._db.get_ac_verifications(task_id)
+
+    def get_unverified_acs(self, task_id: str) -> list[dict[str, Any]]:
+        """Get AC requirements linked to a task but not yet verified."""
+        return self._db.get_unverified_acs(task_id)
+
+    def create_challenge_round(
+        self,
+        artifact_type: str,
+        artifact_id: str,
+        round_number: int,
+        objections: str,
+        challenger_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new challenge round for an artifact."""
+        return self._db.create_challenge_round(
+            artifact_type, artifact_id, round_number, objections, challenger_context,
+        )
+
+    def update_challenge_round(
+        self,
+        artifact_type: str,
+        artifact_id: str,
+        round_number: int,
+        responses: str | None = None,
+        verdict: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update specific fields of a challenge round."""
+        return self._db.update_challenge_round(
+            artifact_type, artifact_id, round_number, responses, verdict, status,
+        )
+
+    def get_challenge_rounds(
+        self, artifact_type: str, artifact_id: str
+    ) -> list[dict[str, Any]]:
+        """Get all challenge rounds for an artifact."""
+        return self._db.get_challenge_rounds(artifact_type, artifact_id)
+
+    def get_challenge_status(
+        self, artifact_type: str, artifact_id: str
+    ) -> dict[str, Any]:
+        """Get summary status of challenge rounds for an artifact."""
+        return self._db.get_challenge_status(artifact_type, artifact_id)
 
 
 # Backward compatibility aliases

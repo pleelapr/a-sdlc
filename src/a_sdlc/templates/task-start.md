@@ -9,7 +9,7 @@ Mark a task as in-progress and begin working on it.
 Use the MCP tool to start a task:
 
 ```
-mcp__asdlc__start_task(task_id="TASK-001")
+mcp__asdlc__update_task(task_id="TASK-001", status="in_progress")
 ```
 
 ## Parameters
@@ -393,7 +393,7 @@ After completing implementation and tests:
    - If no config exists, run the project's default test command
    - Capture and include ACTUAL test output — no self-assertions without evidence
    - If any check fails, fix the issues before proceeding
-2. Call `mcp__asdlc__submit_self_review(task_id='{task.id}', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
+2. Call `mcp__asdlc__submit_review(task_id='{task.id}', reviewer_type='self', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
 3. If self-review verdict is 'fail', fix the issues and re-submit until 'pass'
 4. Log corrections for EVERY finding discovered during implementation:
    mcp__asdlc__log_correction(context_type='task', context_id='{task.id}', category='{category}', description='{what_was_found_and_fixed}')
@@ -415,8 +415,8 @@ After the implementing subagent returns, the orchestrator runs the review dispat
 ##### Review Dispatch Sequence
 
 1. **Check self-review**: Call `mcp__asdlc__get_review_evidence(task_id='{task.id}')` — verify self-review was submitted
-   - If missing → `mcp__asdlc__block_task(task_id='{task.id}', reason='self-review not submitted')` — task cannot complete
-   - If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task.id}', reason='self-review failed')` — task cannot complete
+   - If missing → `mcp__asdlc__update_task(task_id='{task.id}', status='blocked')` — task cannot complete
+   - If present and verdict='fail' → `mcp__asdlc__update_task(task_id='{task.id}', status='blocked')` — task cannot complete
 
 2. **Check subagent review config**: Read `.sdlc/config.yaml` `review.subagent_review.enabled`
    - If disabled or absent → skip to step 5 (complete task)
@@ -432,7 +432,7 @@ After the implementing subagent returns, the orchestrator runs the review dispat
 
             Evaluate: spec compliance, code quality, test coverage.
 
-            Call mcp__asdlc__submit_review_verdict(task_id='{task.id}', verdict='approve'|'request_changes'|'escalate', findings='...') with:
+            Call mcp__asdlc__submit_review(task_id='{task.id}', reviewer_type='subagent', verdict='approve'|'request_changes'|'escalate', findings='...') with:
             - 'approve' if implementation meets all criteria
             - 'request_changes' if issues found (list specific fixes needed)
             - 'escalate' if you cannot determine correctness
@@ -504,7 +504,7 @@ mcp__asdlc__log_correction(
 
 Log corrections as they happen — don't wait until task completion.
 
-When implementation is complete, run `/sdlc:task-complete {task_id}` which will trigger the review gate process (self-review via `submit_self_review()`, orchestrator-level subagent review dispatch, self-heal loop, evidence-based completion).
+When implementation is complete, run `/sdlc:task-complete {task_id}` which will trigger the review gate process (self-review via `submit_review(reviewer_type='self')`, orchestrator-level subagent review dispatch, self-heal loop, evidence-based completion).
 
 ---
 

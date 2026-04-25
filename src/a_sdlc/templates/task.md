@@ -31,7 +31,7 @@ Sprint (SPRINT-01)
 | `pending` | Not started |
 | `in_progress` | Currently being worked on |
 | `completed` | Finished |
-| `blocked` | Cannot proceed (use `block_task()` with reason) |
+| `blocked` | Cannot proceed (use `update_task(status="blocked")`) |
 
 ## Quick Start
 
@@ -72,9 +72,9 @@ Write(file_path=result["file_path"], content="<task description markdown>")
 ### Update Task Status
 
 ```
-mcp__asdlc__start_task(task_id="TASK-001")     # → in_progress
-mcp__asdlc__complete_task(task_id="TASK-001")  # → completed
-mcp__asdlc__block_task(task_id="TASK-001")     # → blocked
+mcp__asdlc__update_task(task_id="TASK-001", status="in_progress")   # → in_progress
+mcp__asdlc__update_task(task_id="TASK-001", status="completed")    # → completed
+mcp__asdlc__update_task(task_id="TASK-001", status="blocked")      # → blocked
 ```
 
 ## Sprint Integration
@@ -82,7 +82,7 @@ mcp__asdlc__block_task(task_id="TASK-001")     # → blocked
 Tasks belong to sprints **through their parent PRD**:
 
 1. Create or get a PRD
-2. Assign PRD to sprint: `mcp__asdlc__add_prd_to_sprint(prd_id="...", sprint_id="...")`
+2. Assign PRD to sprint: `mcp__asdlc__manage_sprint_prds(action="add", prd_id="...", sprint_id="...")`
 3. Create tasks with that PRD: `mcp__asdlc__create_task(..., prd_id="...")`
 4. Tasks are now part of the sprint
 
@@ -101,7 +101,7 @@ All task data is stored in the SQLite database at `~/.a-sdlc/data.db`. No file-b
 
 - Tasks are auto-numbered (TASK-001, TASK-002, etc.)
 - Completing all tasks for a PRD should trigger updating PRD status to "completed"
-- Use `block_task()` with a reason when a task cannot proceed
+- Use `update_task(status="blocked")` when a task cannot proceed
 - Task priorities: low, medium, high, critical
 
 ## Related Commands

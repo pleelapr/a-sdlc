@@ -95,6 +95,9 @@
         <button class="tab" onclick="switchTab('dependencies')" id="tab-dependencies">
             Dependencies
         </button>
+        <button class="tab" onclick="switchTab('thread')" id="tab-thread">
+            Agent Thread {% if thread_count %}({{ thread_count }}){% endif %}
+        </button>
     </div>
 
     <!-- Documentation Tab Panel -->
@@ -271,6 +274,18 @@
         </p>
         {% endif %}
     </div>
+
+    <!-- Agent Thread Tab Panel (FR-008) -->
+    <div class="tab-panel" id="panel-thread">
+        <div id="thread-viewer-target"
+             hx-get="/threads/prd/{{ prd.id }}"
+             hx-trigger="revealed"
+             hx-swap="innerHTML">
+            <div class="empty-state" style="padding: 2rem;">
+                <p style="color: var(--text-muted);">Loading thread...</p>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -278,6 +293,7 @@
     let originalContent = {{ prd.content | tojson | safe if prd.content else '""' }};
     let isEditing = false;
     let mermaidRendered = false;
+    let threadLoaded = false;
     let designContent = {{ (design.content if design and design.content else "") | tojson | safe }};
     let isDesignEditing = false;
 
@@ -307,6 +323,11 @@
                 mermaid.run({ nodes: [el] });
                 mermaidRendered = true;
             }
+        }
+
+        // Load thread viewer on first view (HTMX handles lazy loading via revealed trigger)
+        if (tabName === 'thread' && !threadLoaded) {
+            threadLoaded = true;
         }
     }
 

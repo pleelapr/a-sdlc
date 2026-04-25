@@ -15,10 +15,14 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from a_sdlc.installer import Installer, get_claude_settings_path
+from a_sdlc.cli_targets import CLAUDE_TARGET, CLITarget
+from a_sdlc.installer import (  # noqa: F401 — used via patch() in tests
+    Installer,
+    get_claude_settings_path,
+)
 from a_sdlc.mcp_setup import (
-    CLAUDE_SETTINGS_PATH,
     load_claude_settings,
+    load_settings,
     save_claude_settings,
 )
 from a_sdlc.monitoring_setup import MONITORING_DIR, OTEL_ENV_VARS
@@ -66,6 +70,9 @@ class UninstallPlan:
     # Flags
     include_data: bool = False
 
+    # CLI targets
+    targets: list[CLITarget] = field(default_factory=lambda: [CLAUDE_TARGET])
+
 
 @dataclass
 class UninstallResult:
@@ -80,62 +87,78 @@ class UninstallResult:
         return len(self.errors) == 0
 
 
-def build_uninstall_plan(include_data: bool = False) -> UninstallPlan:
+def build_uninstall_plan(
+    include_data: bool = False,
+    targets: list[CLITarget] | None = None,
+) -> UninstallPlan:
     """Survey the system and build a read-only uninstall plan.
 
     Args:
         include_data: If True, plan includes removal of ~/.a-sdlc/ data directory.
+        targets: CLI targets to uninstall from. Defaults to [CLAUDE_TARGET].
 
     Returns:
         UninstallPlan describing what would be removed.
     """
-    plan = UninstallPlan(include_data=include_data)
+    if targets is None:
+        targets = [CLAUDE_TARGET]
 
-    # Check ~/.claude.json for asdlc MCP server
-    claude_json_path = get_claude_settings_path()
-    if claude_json_path.exists():
-        try:
-            with open(claude_json_path) as f:
-                claude_json = json.load(f)
-            plan.has_asdlc_mcp = "asdlc" in claude_json.get("mcpServers", {})
-        except (json.JSONDecodeError, OSError):
-            pass
+    plan = UninstallPlan(include_data=include_data, targets=targets)
 
-    # Check ~/.claude/settings.json for serena, hooks, env
-    if CLAUDE_SETTINGS_PATH.exists():
-        settings = load_claude_settings()
+    # Check each target for MCP server config
+    for target in targets:
+        if target.mcp_config_path.exists():
+            try:
+                with open(target.mcp_config_path) as f:
+                    config = json.load(f)
+                if "asdlc" in config.get("mcpServers", {}):
+                    plan.has_asdlc_mcp = True
+            except (json.JSONDecodeError, OSError):
+                pass
 
-        plan.has_serena_mcp = "serena" in settings.get("mcpServers", {})
-        plan.has_playwright_mcp = "playwright" in settings.get("mcpServers", {})
+    # Check settings for each target (serena, hooks, env)
+    for target in targets:
+        if target.settings_path.exists():
+            settings = load_settings(target.settings_path)
 
-        # Find monitoring hook indices
-        stop_hooks = settings.get("hooks", {}).get("Stop", [])
-        for i, entry in enumerate(stop_hooks):
-            for hook in entry.get("hooks", []):
-                if "langfuse-hook.py" in hook.get("command", ""):
-                    plan.monitoring_hook_indices.append(i)
-                    break
-        plan.has_monitoring_hook = len(plan.monitoring_hook_indices) > 0
+            if "serena" in settings.get("mcpServers", {}):
+                plan.has_serena_mcp = True
+            if "playwright" in settings.get("mcpServers", {}):
+                plan.has_playwright_mcp = True
 
-        # Find managed env keys
-        env = settings.get("environment", {})
-        plan.managed_env_keys = [k for k in ALL_MANAGED_ENV_KEYS if k in env]
+            # Find monitoring hook indices (Claude only — Gemini doesn't have hooks)
+            if target.name == "claude":
+                stop_hooks = settings.get("hooks", {}).get("Stop", [])
+                for i, entry in enumerate(stop_hooks):
+                    for hook in entry.get("hooks", []):
+                        if "langfuse-hook.py" in hook.get("command", ""):
+                            plan.monitoring_hook_indices.append(i)
+                            break
+                plan.has_monitoring_hook = len(plan.monitoring_hook_indices) > 0
 
-    # Check skill templates
-    installer = Installer()
-    if installer.target_dir.exists():
-        templates = list(installer.target_dir.glob("*.md"))
-        if templates:
-            plan.skill_template_dir = installer.target_dir
-            plan.skill_template_count = len(templates)
+                # Find managed env keys
+                env = settings.get("environment", {})
+                plan.managed_env_keys = [k for k in ALL_MANAGED_ENV_KEYS if k in env]
 
-    # Check persona agents
-    persona_target = Installer.PERSONA_TARGET
-    if persona_target.exists():
-        personas = list(persona_target.glob("sdlc-*.md"))
-        if personas:
-            plan.persona_dir = persona_target
-            plan.persona_count = len(personas)
+    # Check skill templates for each target
+    for target in targets:
+        installer = Installer(target=target)
+        if installer.target_dir.exists():
+            # Count both .md and .toml files (Claude has .md, Gemini has .toml)
+            templates = list(installer.target_dir.glob("*.md")) + list(
+                installer.target_dir.glob("*.toml")
+            )
+            if templates:
+                plan.skill_template_dir = installer.target_dir
+                plan.skill_template_count += len(templates)
+
+    # Check persona agents for each target
+    for target in targets:
+        if target.agents_dir and target.agents_dir.exists():
+            personas = list(target.agents_dir.glob("sdlc-*.md"))
+            if personas:
+                plan.persona_dir = target.agents_dir
+                plan.persona_count += len(personas)
 
     # Check monitoring directory
     plan.has_monitoring_dir = MONITORING_DIR.exists()
@@ -191,22 +214,27 @@ def execute_uninstall(plan: UninstallPlan) -> UninstallResult:
 
 
 def _remove_asdlc_mcp(plan: UninstallPlan, result: UninstallResult) -> None:
-    """Remove asdlc MCP server from ~/.claude.json."""
+    """Remove asdlc MCP server from all target config files."""
     if not plan.has_asdlc_mcp:
         return
 
-    try:
-        settings_path = get_claude_settings_path()
-        with open(settings_path) as f:
-            settings = json.load(f)
+    for target in plan.targets:
+        try:
+            settings_path = target.mcp_config_path
+            if not settings_path.exists():
+                continue
+            with open(settings_path) as f:
+                settings = json.load(f)
 
-        if "asdlc" in settings.get("mcpServers", {}):
-            del settings["mcpServers"]["asdlc"]
-            with open(settings_path, "w") as f:
-                json.dump(settings, f, indent=2)
-            result.actions.append("Removed asdlc MCP server from ~/.claude.json")
-    except (json.JSONDecodeError, OSError) as e:
-        result.errors.append(f"Failed to update ~/.claude.json: {e}")
+            if "asdlc" in settings.get("mcpServers", {}):
+                del settings["mcpServers"]["asdlc"]
+                with open(settings_path, "w") as f:
+                    json.dump(settings, f, indent=2)
+                result.actions.append(
+                    f"Removed asdlc MCP server from {settings_path}"
+                )
+        except (json.JSONDecodeError, OSError) as e:
+            result.errors.append(f"Failed to update {settings_path}: {e}")
 
 
 def _remove_settings_entries(plan: UninstallPlan, result: UninstallResult) -> None:
@@ -267,31 +295,41 @@ def _remove_settings_entries(plan: UninstallPlan, result: UninstallResult) -> No
 
 
 def _remove_skill_templates(plan: UninstallPlan, result: UninstallResult) -> None:
-    """Remove skill templates via Installer.uninstall()."""
-    if not plan.skill_template_dir or plan.skill_template_count == 0:
+    """Remove skill templates via Installer for each target."""
+    if plan.skill_template_count == 0:
         return
 
-    try:
-        installer = Installer()
-        count = installer.uninstall()
-        if count > 0:
-            result.actions.append(f"Removed {count} skill template(s)")
-    except OSError as e:
-        result.errors.append(f"Failed to remove skill templates: {e}")
+    for target in plan.targets:
+        try:
+            installer = Installer(target=target)
+            count = installer.uninstall()
+            if count > 0:
+                result.actions.append(
+                    f"Removed {count} skill template(s) from {target.display_name}"
+                )
+        except OSError as e:
+            result.errors.append(
+                f"Failed to remove skill templates for {target.display_name}: {e}"
+            )
 
 
 def _remove_personas(plan: UninstallPlan, result: UninstallResult) -> None:
-    """Remove persona agent files via Installer.uninstall_personas()."""
-    if not plan.persona_dir or plan.persona_count == 0:
+    """Remove persona agent files via Installer for each target."""
+    if plan.persona_count == 0:
         return
 
-    try:
-        installer = Installer()
-        count = installer.uninstall_personas()
-        if count > 0:
-            result.actions.append(f"Removed {count} persona agent(s)")
-    except OSError as e:
-        result.errors.append(f"Failed to remove persona agents: {e}")
+    for target in plan.targets:
+        try:
+            installer = Installer(target=target)
+            count = installer.uninstall_personas()
+            if count > 0:
+                result.actions.append(
+                    f"Removed {count} persona agent(s) from {target.display_name}"
+                )
+        except OSError as e:
+            result.errors.append(
+                f"Failed to remove persona agents for {target.display_name}: {e}"
+            )
 
 
 def _remove_monitoring(plan: UninstallPlan, result: UninstallResult) -> None:

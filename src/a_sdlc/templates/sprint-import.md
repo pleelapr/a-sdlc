@@ -39,7 +39,7 @@ a-sdlc connect jira --url <url> --email <email> --api-token <token> --project-ke
 Check that the external system is configured:
 
 ```
-Use MCP tool: mcp__asdlc__get_integrations()
+Use MCP tool: mcp__asdlc__manage_integration("list")
 
 Expected response:
 {

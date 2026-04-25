@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from a_sdlc.cli_targets import CLITarget
 from a_sdlc.uninstall import (
     UninstallPlan,
     UninstallResult,
@@ -17,6 +18,20 @@ from a_sdlc.uninstall import (
     build_uninstall_plan,
     execute_uninstall,
 )
+
+
+def _make_target(tmp_path: Path, name: str = "claude") -> CLITarget:
+    """Create a CLITarget pointing at tmp_path for isolated testing."""
+    return CLITarget(
+        name=name,
+        display_name="Claude Code" if name == "claude" else "Gemini CLI",
+        home_dir=tmp_path / f".{name}",
+        mcp_config_path=tmp_path / f"{name}.json",
+        settings_path=tmp_path / f"{name}-settings.json",
+        commands_dir=tmp_path / "commands" / "sdlc",
+        agents_dir=tmp_path / "agents",
+        context_file="CLAUDE.md" if name == "claude" else "GEMINI.md",
+    )
 
 # ---------------------------------------------------------------------------
 # UninstallPlan / UninstallResult dataclasses
@@ -73,15 +88,9 @@ def test_uninstall_result_failure():
 
 def test_build_plan_empty_system(tmp_path):
     """Plan on a clean system finds nothing to remove."""
+    target = _make_target(tmp_path)
+
     with (
-        patch(
-            "a_sdlc.uninstall.get_claude_settings_path",
-            return_value=tmp_path / "nonexistent.json",
-        ),
-        patch(
-            "a_sdlc.uninstall.CLAUDE_SETTINGS_PATH",
-            tmp_path / "nonexistent-settings.json",
-        ),
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "monitoring"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
@@ -90,7 +99,7 @@ def test_build_plan_empty_system(tmp_path):
         mock_inst.target_dir = tmp_path / "commands" / "sdlc"
         mock_inst.target_dir.mkdir(parents=True, exist_ok=True)
 
-        plan = build_uninstall_plan()
+        plan = build_uninstall_plan(targets=[target])
         assert plan.has_asdlc_mcp is False
         assert plan.has_serena_mcp is False
         assert plan.skill_template_count == 0
@@ -101,15 +110,15 @@ def test_build_plan_empty_system(tmp_path):
 
 def test_build_plan_full_system(tmp_path):
     """Plan detects all installed components."""
-    # Create ~/.claude.json with asdlc MCP
-    claude_json = tmp_path / "claude.json"
-    claude_json.write_text(json.dumps({
+    target = _make_target(tmp_path)
+
+    # Create mcp_config_path with asdlc MCP
+    target.mcp_config_path.write_text(json.dumps({
         "mcpServers": {"asdlc": {"command": "uvx", "args": ["a-sdlc", "serve"]}}
     }))
 
-    # Create settings.json with serena, playwright, hook, env
-    settings_json = tmp_path / "settings.json"
-    settings_json.write_text(json.dumps({
+    # Create settings_path with serena, playwright, hook, env
+    target.settings_path.write_text(json.dumps({
         "mcpServers": {"serena": {"command": "uvx"}, "playwright": {"command": "npx"}},
         "hooks": {
             "Stop": [
@@ -137,18 +146,14 @@ def test_build_plan_full_system(tmp_path):
     data_dir.mkdir()
 
     with (
-        patch("a_sdlc.uninstall.get_claude_settings_path", return_value=claude_json),
-        patch("a_sdlc.uninstall.CLAUDE_SETTINGS_PATH", settings_json),
-        patch("a_sdlc.uninstall.load_claude_settings") as mock_load,
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", monitoring_dir),
         patch("a_sdlc.core.database.get_data_dir", return_value=data_dir),
     ):
-        mock_load.return_value = json.loads(settings_json.read_text())
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = skill_dir
 
-        plan = build_uninstall_plan(include_data=True)
+        plan = build_uninstall_plan(include_data=True, targets=[target])
 
         assert plan.has_asdlc_mcp is True
         assert plan.has_serena_mcp is True
@@ -165,13 +170,11 @@ def test_build_plan_full_system(tmp_path):
 
 
 def test_build_plan_malformed_claude_json(tmp_path):
-    """Plan handles malformed ~/.claude.json gracefully."""
-    claude_json = tmp_path / "claude.json"
-    claude_json.write_text("not json")
+    """Plan handles malformed mcp_config_path gracefully."""
+    target = _make_target(tmp_path)
+    target.mcp_config_path.write_text("not json")
 
     with (
-        patch("a_sdlc.uninstall.get_claude_settings_path", return_value=claude_json),
-        patch("a_sdlc.uninstall.CLAUDE_SETTINGS_PATH", tmp_path / "none.json"),
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
@@ -180,7 +183,7 @@ def test_build_plan_malformed_claude_json(tmp_path):
         mock_inst.target_dir = tmp_path / "cmds"
         mock_inst.target_dir.mkdir(parents=True)
 
-        plan = build_uninstall_plan()
+        plan = build_uninstall_plan(targets=[target])
         assert plan.has_asdlc_mcp is False
 
 
@@ -192,56 +195,47 @@ def test_build_plan_detects_personas(tmp_path):
     (agents_dir / "sdlc-qa-engineer.md").write_text("# qa")
     (agents_dir / "custom-agent.md").write_text("# custom")  # Should NOT be counted
 
+    target = _make_target(tmp_path)
+    # target.agents_dir is already tmp_path / "agents" from _make_target
+
     with (
-        patch(
-            "a_sdlc.uninstall.get_claude_settings_path",
-            return_value=tmp_path / "none.json",
-        ),
-        patch(
-            "a_sdlc.uninstall.CLAUDE_SETTINGS_PATH",
-            tmp_path / "none2.json",
-        ),
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
     ):
-        # Set PERSONA_TARGET on the mock class so build_uninstall_plan()
-        # sees the real agents_dir when it accesses Installer.PERSONA_TARGET
-        MockInstaller.PERSONA_TARGET = agents_dir
-
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "cmds"
         mock_inst.target_dir.mkdir(parents=True)
 
-        plan = build_uninstall_plan()
+        plan = build_uninstall_plan(targets=[target])
         assert plan.persona_count == 2  # Only sdlc-*.md files
         assert plan.persona_dir == agents_dir
 
 
 def test_build_plan_no_personas_when_dir_missing(tmp_path):
     """build_uninstall_plan() reports 0 personas when agents dir missing."""
-    nonexistent_dir = tmp_path / "no_agents"
+    # Create target with nonexistent agents_dir
+    target = CLITarget(
+        name="claude",
+        display_name="Claude Code",
+        home_dir=tmp_path / ".claude",
+        mcp_config_path=tmp_path / "claude.json",
+        settings_path=tmp_path / "claude-settings.json",
+        commands_dir=tmp_path / "commands" / "sdlc",
+        agents_dir=tmp_path / "no_agents",
+        context_file="CLAUDE.md",
+    )
 
     with (
-        patch(
-            "a_sdlc.uninstall.get_claude_settings_path",
-            return_value=tmp_path / "none.json",
-        ),
-        patch(
-            "a_sdlc.uninstall.CLAUDE_SETTINGS_PATH",
-            tmp_path / "none2.json",
-        ),
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
     ):
-        MockInstaller.PERSONA_TARGET = nonexistent_dir
-
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "cmds"
         mock_inst.target_dir.mkdir(parents=True)
 
-        plan = build_uninstall_plan()
+        plan = build_uninstall_plan(targets=[target])
         assert plan.persona_count == 0
         assert plan.persona_dir is None
 
@@ -252,25 +246,24 @@ def test_build_plan_no_personas_when_dir_missing(tmp_path):
 
 
 def test_remove_asdlc_mcp_present(tmp_path):
-    """Removes asdlc key from ~/.claude.json."""
-    claude_json = tmp_path / "claude.json"
-    claude_json.write_text(json.dumps({
+    """Removes asdlc key from target mcp_config_path."""
+    target = _make_target(tmp_path)
+    target.mcp_config_path.write_text(json.dumps({
         "mcpServers": {
             "asdlc": {"command": "uvx"},
             "other": {"command": "node"},
         }
     }))
 
-    plan = UninstallPlan(has_asdlc_mcp=True)
+    plan = UninstallPlan(has_asdlc_mcp=True, targets=[target])
     result = UninstallResult()
 
-    with patch("a_sdlc.uninstall.get_claude_settings_path", return_value=claude_json):
-        _remove_asdlc_mcp(plan, result)
+    _remove_asdlc_mcp(plan, result)
 
     assert len(result.actions) == 1
     assert len(result.errors) == 0
 
-    data = json.loads(claude_json.read_text())
+    data = json.loads(target.mcp_config_path.read_text())
     assert "asdlc" not in data["mcpServers"]
     assert "other" in data["mcpServers"]
 
@@ -287,12 +280,14 @@ def test_remove_asdlc_mcp_not_present():
 
 def test_remove_asdlc_mcp_io_error(tmp_path):
     """Records error on IO failure."""
-    plan = UninstallPlan(has_asdlc_mcp=True)
+    target = _make_target(tmp_path)
+    # Create an mcp_config_path that exists but contains invalid JSON
+    target.mcp_config_path.write_text("not json")
+
+    plan = UninstallPlan(has_asdlc_mcp=True, targets=[target])
     result = UninstallResult()
 
-    bad_path = tmp_path / "nonexistent" / "claude.json"
-    with patch("a_sdlc.uninstall.get_claude_settings_path", return_value=bad_path):
-        _remove_asdlc_mcp(plan, result)
+    _remove_asdlc_mcp(plan, result)
 
     assert len(result.errors) == 1
 
@@ -897,28 +892,21 @@ def test_uninstall_removes_agent_teams_env(tmp_path):
 
 def test_build_plan_detects_agent_teams_env(tmp_path):
     """build_uninstall_plan() detects CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS."""
-    settings_json = tmp_path / "settings.json"
-    settings_json.write_text(json.dumps({
+    target = _make_target(tmp_path)
+    target.settings_path.write_text(json.dumps({
         "environment": {
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
         },
     }))
 
     with (
-        patch(
-            "a_sdlc.uninstall.get_claude_settings_path",
-            return_value=tmp_path / "nonexistent.json",
-        ),
-        patch("a_sdlc.uninstall.CLAUDE_SETTINGS_PATH", settings_json),
-        patch("a_sdlc.uninstall.load_claude_settings") as mock_load,
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "monitoring"),
         patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
     ):
-        mock_load.return_value = json.loads(settings_json.read_text())
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "commands" / "sdlc"
         mock_inst.target_dir.mkdir(parents=True, exist_ok=True)
 
-        plan = build_uninstall_plan()
+        plan = build_uninstall_plan(targets=[target])
         assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" in plan.managed_env_keys

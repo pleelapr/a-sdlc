@@ -116,40 +116,27 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__list_tasks(status?, sprint_id?, prd_id?)` - List tasks
 - `mcp__asdlc__get_task(task_id)` - Get task details with file_path
 - `mcp__asdlc__create_task(title, prd_id?, priority?, component?)` - Create task (returns file_path → Write content)
-- `mcp__asdlc__update_task(task_id, status?, priority?, ...)` - Update task metadata
-- `mcp__asdlc__start_task(task_id)` - Mark in_progress
-- `mcp__asdlc__complete_task(task_id)` - Mark completed
-- `mcp__asdlc__block_task(task_id)` - Mark blocked
+- `mcp__asdlc__update_task(task_id, status?, priority?, ...)` - Update task metadata (use status="in_progress"/"completed"/"blocked")
 - `mcp__asdlc__delete_task(task_id)` - Delete task
 
 ### Sprint Operations
 - `mcp__asdlc__list_sprints()` - List sprints
 - `mcp__asdlc__get_sprint(sprint_id)` - Get sprint details
 - `mcp__asdlc__create_sprint(title, goal?)` - Create sprint
-- `mcp__asdlc__start_sprint(sprint_id)` - Activate sprint
+- `mcp__asdlc__update_sprint(sprint_id, status?, title?, goal?)` - Update sprint (use status="active" to start)
 - `mcp__asdlc__complete_sprint(sprint_id)` - Complete sprint
-- `mcp__asdlc__add_prd_to_sprint(sprint_id, prd_id)` - Assign PRD to sprint
-- `mcp__asdlc__remove_prd_from_sprint(prd_id)` - Remove PRD from sprint
+- `mcp__asdlc__manage_sprint_prds(action, prd_id, sprint_id?)` - Add/remove PRDs from sprint
 - `mcp__asdlc__get_sprint_prds(sprint_id)` - List PRDs in sprint
 - `mcp__asdlc__get_sprint_tasks(sprint_id)` - List tasks in sprint (derived via PRDs)
 - `mcp__asdlc__delete_sprint(sprint_id)` - Delete sprint
 
-### Sprint Sync Operations
-- `mcp__asdlc__link_sprint(sprint_id, system, external_id)` - Link sprint to external
-- `mcp__asdlc__unlink_sprint(sprint_id)` - Remove sprint link
-- `mcp__asdlc__sync_sprint(sprint_id, strategy?)` - Bidirectional sync
-- `mcp__asdlc__sync_sprint_to(sprint_id)` - Push to external
-- `mcp__asdlc__sync_sprint_from(sprint_id)` - Pull from external
+### Sync Operations
+- `mcp__asdlc__manage_sync_mapping(action, entity_type, entity_id, system?, external_id?)` - Link/unlink sprint or PRD
+- `mcp__asdlc__sync_sprint(sprint_id, direction?)` - Sync sprint (direction: "bidirectional"/"push"/"pull")
+- `mcp__asdlc__sync_prd(prd_id, direction?)` - Sync PRD (direction: "bidirectional"/"push"/"pull")
 - `mcp__asdlc__import_from_linear()` - Import cycles from Linear
 - `mcp__asdlc__import_from_jira()` - Import sprints from Jira
 - `mcp__asdlc__list_sync_mappings()` - View all sync mappings
-
-### PRD Sync Operations
-- `mcp__asdlc__link_prd(prd_id, system, external_id)` - Link PRD to external issue
-- `mcp__asdlc__unlink_prd(prd_id)` - Remove PRD link
-- `mcp__asdlc__sync_prd(prd_id, strategy?, dry_run?)` - Bidirectional sync
-- `mcp__asdlc__sync_prd_to(prd_id)` - Push PRD to external
-- `mcp__asdlc__sync_prd_from(prd_id)` - Pull from external to PRD
 
 ### Worktree & PR Operations
 - `mcp__asdlc__setup_prd_worktree(prd_id)` - Create git worktree for PRD
@@ -157,12 +144,11 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__create_prd_pr(prd_id)` - Create PR from PRD worktree
 
 ### Integration Configuration
-- `mcp__asdlc__configure_linear(api_key, team_id)` - Configure Linear
-- `mcp__asdlc__configure_jira(url, email, api_token, project_key)` - Configure Jira
-- `mcp__asdlc__configure_confluence(url, email, api_token, space_key)` - Configure Confluence
-- `mcp__asdlc__configure_github(token)` - Configure GitHub
-- `mcp__asdlc__get_integrations()` - List configured integrations
-- `mcp__asdlc__remove_integration(system)` - Remove integration
+- `mcp__asdlc__manage_integration(action, system?, config?)` - Manage integrations (action: "configure"|"list"|"remove")
+
+### Review Tools
+- `mcp__asdlc__submit_review(task_id, reviewer_type, verdict, findings?, test_output?)` - Submit review (reviewer_type: "self"/"subagent")
+- `mcp__asdlc__get_review_evidence(task_id)` - Get all review evidence for a task
 
 ### Quality Tools
 - `mcp__asdlc__log_correction(context_type, context_id, category, description)` - Log a correction to `.sdlc/corrections.log`
@@ -178,7 +164,7 @@ All commands use the a-sdlc MCP server tools:
 5. /sdlc:prd-architect "<prd-id>"          # Generate design document
 6. /sdlc:prd-split "<prd-id>"             # Decompose into tasks
 7. /sdlc:sprint-create "Sprint 1"          # Create sprint
-   → use add_prd_to_sprint to assign PRDs  # Link PRDs to sprint
+   → use manage_sprint_prds(action="add") to assign PRDs  # Link PRDs to sprint
 8. /sdlc:sprint-start "<sprint-id>"        # Activate sprint
 9. /sdlc:sprint-run "<sprint-id>"          # Execute tasks in order
 ```
@@ -261,7 +247,7 @@ When using a-sdlc, you will encounter two different "task" systems. Understandin
 | Action | CORRECT Tool | WRONG Tool |
 |--------|--------------|------------|
 | Create task from PRD | `mcp__asdlc__split_prd()` | `TaskCreate` |
-| Mark task in progress | `mcp__asdlc__start_task()` | `TaskUpdate` |
+| Mark task in progress | `mcp__asdlc__update_task(status="in_progress")` | `TaskUpdate` |
 | List project tasks | `mcp__asdlc__list_tasks()` | `TaskList` |
 | Track coding steps | `TodoWrite` (OK for this) | - |
 

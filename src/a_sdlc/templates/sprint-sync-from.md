@@ -26,7 +26,7 @@ Pull changes from an external system (Linear/Jira) to update the local sprint. O
 ### 1. Call Sync From MCP Tool
 
 ```
-mcp__asdlc__sync_sprint_from(sprint_id="SPRINT-001")
+mcp__asdlc__sync_sprint(sprint_id="SPRINT-001", direction="pull")
 ```
 
 ### 2. Review Pull Result
