@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import signal
+import sys
 from datetime import datetime
 from pathlib import Path
 from types import FrameType
@@ -210,6 +211,7 @@ class TestStopDaemon:
         assert result is True
         mock_kill.assert_any_call(12345, signal.SIGTERM)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="SIGKILL not available on Windows")
     def test_sends_sigkill_after_timeout(self, pid_file: Path) -> None:
         pid_file.write_text("12345")
 

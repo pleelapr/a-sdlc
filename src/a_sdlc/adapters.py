@@ -43,21 +43,29 @@ _active_processes: dict[int, subprocess.Popen] = {}
 def _cleanup_children() -> None:
     """Terminate all tracked child processes on exit.
 
-    Sends SIGTERM to the entire process group (killing both the PTY
-    wrapper and the ``claude`` grandchild), then SIGKILL if needed.
+    On Unix, sends SIGTERM to the entire process group (killing both the
+    PTY wrapper and the ``claude`` grandchild), then SIGKILL if needed.
+    On Windows, falls back to proc.terminate() / proc.kill().
     """
+    _has_pgid = hasattr(os, "getpgid")
     for pid, proc in list(_active_processes.items()):
         try:
-            pgid = os.getpgid(pid)
-            os.killpg(pgid, signal.SIGTERM)
+            if _has_pgid:
+                pgid = os.getpgid(pid)
+                os.killpg(pgid, signal.SIGTERM)
+            else:
+                proc.terminate()
         except (OSError, ProcessLookupError):
             pass
         try:
             proc.wait(timeout=3)
         except Exception:
             try:
-                pgid = os.getpgid(pid)
-                os.killpg(pgid, signal.SIGKILL)
+                if _has_pgid:
+                    pgid = os.getpgid(pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                else:
+                    proc.kill()
             except (OSError, ProcessLookupError):
                 pass
     _active_processes.clear()
@@ -785,9 +793,12 @@ def check_execution(log_path: str, pid: int) -> dict[str, Any]:
 def stop_execution(pid: int) -> dict[str, Any]:
     """Kill a running subprocess and its entire process group.
 
-    Uses ``os.killpg()`` to kill the PTY wrapper AND the ``claude``
-    grandchild process.  Sends SIGTERM first for graceful shutdown,
-    then SIGKILL after 2 seconds if needed.
+    On Unix, uses ``os.killpg()`` to kill the PTY wrapper AND the
+    ``claude`` grandchild process.  On Windows, falls back to
+    ``proc.terminate()`` / ``proc.kill()``.
+
+    Sends SIGTERM first for graceful shutdown, then SIGKILL after
+    2 seconds if needed.
 
     Args:
         pid: Process ID to kill (the PTY wrapper's PID).
@@ -802,6 +813,17 @@ def stop_execution(pid: int) -> dict[str, Any]:
         pgid = os.getpgid(pid)
     except (OSError, ProcessLookupError):
         _active_processes.pop(pid, None)
+        return {"status": "already_stopped", "pid": pid}
+    except AttributeError:
+        # Windows: no os.getpgid — fall back to direct process kill
+        proc = _active_processes.pop(pid, None)
+        if proc:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+            return {"status": "stopped", "pid": pid}
         return {"status": "already_stopped", "pid": pid}
 
     try:

@@ -147,7 +147,8 @@ def stop_daemon() -> bool:
                 return True
 
         # Force kill if still running after timeout
-        os.kill(pid, signal.SIGKILL)
+        _sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+        os.kill(pid, _sigkill)
         time.sleep(0.5)
 
         _remove_pid()

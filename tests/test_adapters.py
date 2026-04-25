@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -143,7 +144,7 @@ class TestClaudeCodeAdapter:
         cmd = mock_run.call_args[0][0]
         assert "--dangerously-skip-permissions" not in cmd
 
-    def test_launch_uses_stream_json(self):
+    def test_launch_uses_stream_json(self, tmp_path):
         with patch("shutil.which", return_value="/usr/local/bin/claude"):
             adapter = ClaudeCodeAdapter()
 
@@ -152,7 +153,7 @@ class TestClaudeCodeAdapter:
         mock_proc.poll.return_value = None  # process still running
 
         with (
-            patch("a_sdlc.adapters._ensure_log_dir", return_value=Path("/tmp")),
+            patch("a_sdlc.adapters._ensure_log_dir", return_value=tmp_path),
             patch("builtins.open", MagicMock()),
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("a_sdlc.adapters.time"),
@@ -160,7 +161,7 @@ class TestClaudeCodeAdapter:
             handle = adapter.launch(
                 prompt="do task",
                 max_turns=50,
-                working_dir="/home/project",
+                working_dir=str(tmp_path),
                 task_id="PROJ-T00001",
                 allowed_tools=["Read", "Write"],
             )
@@ -184,7 +185,7 @@ class TestClaudeCodeAdapter:
         # Clean up registry
         _active_processes.pop(12345, None)
 
-    def test_launch_registers_in_process_registry(self):
+    def test_launch_registers_in_process_registry(self, tmp_path):
         with patch("shutil.which", return_value="/usr/local/bin/claude"):
             adapter = ClaudeCodeAdapter()
 
@@ -193,7 +194,7 @@ class TestClaudeCodeAdapter:
         mock_proc.poll.return_value = None  # process still running
 
         with (
-            patch("a_sdlc.adapters._ensure_log_dir", return_value=Path("/tmp")),
+            patch("a_sdlc.adapters._ensure_log_dir", return_value=tmp_path),
             patch("builtins.open", MagicMock()),
             patch("subprocess.Popen", return_value=mock_proc),
             patch("a_sdlc.adapters.time"),
@@ -201,7 +202,7 @@ class TestClaudeCodeAdapter:
             handle = adapter.launch(
                 prompt="test",
                 max_turns=10,
-                working_dir="/tmp",
+                working_dir=str(tmp_path),
                 task_id="REG-T00001",
             )
 
@@ -212,7 +213,7 @@ class TestClaudeCodeAdapter:
         # Clean up
         _active_processes.pop(54321, None)
 
-    def test_launch_sets_child_env(self):
+    def test_launch_sets_child_env(self, tmp_path):
         """launch() passes A_SDLC_CHILD=1 in the subprocess environment."""
         with patch("shutil.which", return_value="/usr/local/bin/claude"):
             adapter = ClaudeCodeAdapter()
@@ -222,7 +223,7 @@ class TestClaudeCodeAdapter:
         mock_proc.poll.return_value = None  # process still running
 
         with (
-            patch("a_sdlc.adapters._ensure_log_dir", return_value=Path("/tmp")),
+            patch("a_sdlc.adapters._ensure_log_dir", return_value=tmp_path),
             patch("builtins.open", MagicMock()),
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("a_sdlc.adapters.time"),
@@ -230,7 +231,7 @@ class TestClaudeCodeAdapter:
             adapter.launch(
                 prompt="test",
                 max_turns=10,
-                working_dir="/tmp",
+                working_dir=str(tmp_path),
                 task_id="ENV-T00001",
             )
 
@@ -839,6 +840,7 @@ class TestCheckExecution:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Process groups not available on Windows")
 class TestStopExecution:
     def test_stops_running_process_group(self):
         """stop_execution uses killpg to kill the entire process group."""
@@ -1041,7 +1043,7 @@ class TestBuildExecuteTaskPrompt:
 
 
 class TestStderrCapture:
-    def test_launch_captures_stderr_to_err_file(self):
+    def test_launch_captures_stderr_to_err_file(self, tmp_path):
         """launch() writes stderr to a .err file instead of DEVNULL."""
         with patch("shutil.which", return_value="/usr/local/bin/claude"):
             adapter = ClaudeCodeAdapter()
@@ -1062,7 +1064,7 @@ class TestStderrCapture:
             return original_open(path, *args, **kwargs)
 
         with (
-            patch("a_sdlc.adapters._ensure_log_dir", return_value=Path("/tmp")),
+            patch("a_sdlc.adapters._ensure_log_dir", return_value=tmp_path),
             patch("builtins.open", side_effect=tracking_open),
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("a_sdlc.adapters.time"),
@@ -1070,7 +1072,7 @@ class TestStderrCapture:
             handle = adapter.launch(
                 prompt="test",
                 max_turns=10,
-                working_dir="/tmp",
+                working_dir=str(tmp_path),
                 task_id="ERR-T00001",
             )
 

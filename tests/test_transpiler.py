@@ -223,7 +223,7 @@ class TestWriteToml:
             source_path=Path("/fake/test.md"),
         )
         write_toml(command, tmp_path)
-        content = (tmp_path / "test.toml").read_text()
+        content = (tmp_path / "test.toml").read_text(encoding="utf-8")
         assert 'description = "Test description"' in content
 
     def test_toml_has_prompt(self, tmp_path):
@@ -234,7 +234,7 @@ class TestWriteToml:
             source_path=Path("/fake/test.md"),
         )
         write_toml(command, tmp_path)
-        content = (tmp_path / "test.toml").read_text()
+        content = (tmp_path / "test.toml").read_text(encoding="utf-8")
         assert 'prompt = """' in content
         assert "prompt body" in content
 
@@ -257,7 +257,7 @@ class TestWriteToml:
             source_path=Path("/fake/test.md"),
         )
         write_toml(command, tmp_path)
-        content = (tmp_path / "test.toml").read_text()
+        content = (tmp_path / "test.toml").read_text(encoding="utf-8")
         assert '\\"quotes\\"' in content
 
 
@@ -354,7 +354,7 @@ class TestFullCatalogTranspilation:
 
         claude_tools = ["AskUserQuestion", "TodoWrite"]
         for toml_file in tmp_path.glob("*.toml"):
-            content = toml_file.read_text()
+            content = toml_file.read_text(encoding="utf-8")
             for tool in claude_tools:
                 assert tool not in content, (
                     f"Claude tool '{tool}' found in {toml_file.name}"
@@ -369,7 +369,7 @@ class TestFullCatalogTranspilation:
         for name in ["prd-list", "task-list", "sprint-show"]:
             toml_file = tmp_path / f"{name}.toml"
             if toml_file.exists():
-                content = toml_file.read_text()
+                content = toml_file.read_text(encoding="utf-8")
                 assert "mcp__asdlc__" in content, (
                     f"MCP references missing in {name}.toml"
                 )
@@ -380,7 +380,7 @@ class TestFullCatalogTranspilation:
         transpile_all(template_dir, tmp_path)
 
         for toml_file in tmp_path.glob("*.toml"):
-            content = toml_file.read_text()
+            content = toml_file.read_text(encoding="utf-8")
             assert "{{args}}" in content, (
                 f"{{{{args}}}} missing in {toml_file.name}"
             )
@@ -391,7 +391,7 @@ class TestFullCatalogTranspilation:
         transpile_all(template_dir, tmp_path)
 
         for toml_file in tmp_path.glob("*.toml"):
-            content = toml_file.read_text()
+            content = toml_file.read_text(encoding="utf-8")
             assert content.startswith('description = "'), (
                 f"Missing description in {toml_file.name}"
             )
@@ -402,7 +402,7 @@ class TestFullCatalogTranspilation:
         transpile_all(template_dir, tmp_path)
 
         for toml_file in tmp_path.glob("*.toml"):
-            content = toml_file.read_text()
+            content = toml_file.read_text(encoding="utf-8")
             assert 'description = "' in content, f"No description in {toml_file.name}"
             assert 'prompt = """' in content, f"No prompt in {toml_file.name}"
 
@@ -423,7 +423,7 @@ class TestFullCatalogTranspilation:
         for name in core_workflows:
             toml_file = tmp_path / f"{name}.toml"
             assert toml_file.exists(), f"Core workflow {name}.toml not found"
-            content = toml_file.read_text()
+            content = toml_file.read_text(encoding="utf-8")
             # Should have valid structure
             assert 'description = "' in content
             assert 'prompt = """' in content
@@ -448,7 +448,7 @@ class TestFullCatalogTranspilation:
         transpile_all(template_dir, tmp_path)
 
         for toml_file in tmp_path.glob("*.toml"):
-            content = toml_file.read_text()
+            content = toml_file.read_text(encoding="utf-8")
             try:
                 parsed = tomllib.loads(content)
             except tomllib.TOMLDecodeError as e:
