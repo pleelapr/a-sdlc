@@ -3701,7 +3701,7 @@ def run_goal(
     run_id = f"R-{uuid.uuid4().hex[:8]}"
 
     # --- Create run state file ---
-    _ensure_runs_dir()
+    runs_dir = _ensure_runs_dir()
     _write_run(
         run_id,
         {
@@ -3724,7 +3724,7 @@ def run_goal(
     )
 
     # --- Build orchestrator command ---
-    log_file = Path.home() / ".a-sdlc" / "runs" / f"{run_id}.log"
+    log_file = runs_dir / f"{run_id}.log"
     cmd = [
         sys.executable,
         "-m",
@@ -3869,7 +3869,7 @@ def run_sprint(
     run_id = f"R-{uuid.uuid4().hex[:8]}"
 
     # --- Create run state file ---
-    _ensure_runs_dir()
+    runs_dir = _ensure_runs_dir()
     _write_run(
         run_id,
         {
@@ -3887,7 +3887,7 @@ def run_sprint(
     )
 
     # --- Build executor command ---
-    log_file = Path.home() / ".a-sdlc" / "runs" / f"{run_id}.log"
+    log_file = runs_dir / f"{run_id}.log"
     cmd = [
         sys.executable,
         "-m",
@@ -3994,7 +3994,7 @@ def run_task(task_id: str, max_turns: int | None) -> None:
     run_id = f"R-{uuid.uuid4().hex[:8]}"
 
     # --- Create run state file ---
-    _ensure_runs_dir()
+    runs_dir = _ensure_runs_dir()
     _write_run(
         run_id,
         {
@@ -4010,7 +4010,7 @@ def run_task(task_id: str, max_turns: int | None) -> None:
     )
 
     # --- Build executor command ---
-    log_file = Path.home() / ".a-sdlc" / "runs" / f"{run_id}.log"
+    log_file = runs_dir / f"{run_id}.log"
     cmd = [
         sys.executable,
         "-m",
@@ -5271,7 +5271,9 @@ def daemon_status() -> None:
         click.echo(f"\nNo log file found at {log_file}")
 
     # Show active runs from ~/.a-sdlc/runs/
-    runs_dir = Path.home() / ".a-sdlc" / "runs"
+    from a_sdlc.executor import _RUNS_DIR
+
+    runs_dir = _RUNS_DIR
     if runs_dir.exists():
         import json as json_mod
         import os
