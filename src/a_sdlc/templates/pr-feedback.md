@@ -231,4 +231,4 @@ Skip comments marked as **Won't Fix** or **Already Done** — only log correctio
 ## MCP Tools Used
 
 - `mcp__asdlc__get_pr_feedback()` — **REQUIRED** — Fetch PR comments (handles all GitHub API work, token resolution, and pagination). Do NOT substitute with `gh` CLI.
-- `mcp__asdlc__configure_github()` — One-time token setup (if needed)
+- `mcp__asdlc__manage_integration("configure", system="github", config={...})` — One-time token setup (if needed)

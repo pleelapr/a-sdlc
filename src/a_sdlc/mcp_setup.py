@@ -136,20 +136,45 @@ def install_serena(method: str | None = None) -> tuple[bool, str]:
     return False, f"Unknown installation method: {method}"
 
 
+def load_settings(path: Path) -> dict:
+    """Load settings from any JSON file.
+
+    Args:
+        path: Path to the settings JSON file.
+
+    Returns:
+        Settings dict (empty dict if file doesn't exist or is invalid).
+    """
+    if not path.exists():
+        return {}
+
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_settings(settings: dict, path: Path) -> None:
+    """Save settings to any JSON file.
+
+    Args:
+        settings: Settings dict to save.
+        path: Path to the settings JSON file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w") as f:
+        json.dump(settings, f, indent=2)
+
+
 def load_claude_settings() -> dict:
     """Load existing Claude Code settings.
 
     Returns:
         Settings dict (empty dict if file doesn't exist)
     """
-    if not CLAUDE_SETTINGS_PATH.exists():
-        return {}
-
-    try:
-        with open(CLAUDE_SETTINGS_PATH) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_settings(CLAUDE_SETTINGS_PATH)
 
 
 def save_claude_settings(settings: dict) -> None:
@@ -158,10 +183,7 @@ def save_claude_settings(settings: dict) -> None:
     Args:
         settings: Settings dict to save
     """
-    CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(CLAUDE_SETTINGS_PATH, "w") as f:
-        json.dump(settings, f, indent=2)
+    save_settings(settings, CLAUDE_SETTINGS_PATH)
 
 
 def check_serena_in_settings() -> bool:

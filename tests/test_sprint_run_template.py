@@ -44,9 +44,9 @@ class TestTemplateContent:
         """Branch completion should use complete_prd_worktree."""
         assert "mcp__asdlc__complete_prd_worktree" in self.content
 
-    def test_template_references_get_git_safety_config(self):
+    def test_template_references_manage_git_safety(self):
         """Template should check git safety config before mode detection."""
-        assert "mcp__asdlc__get_git_safety_config" in self.content
+        assert "mcp__asdlc__manage_git_safety" in self.content
 
     def test_template_references_worktree_enabled_check(self):
         """Template should check worktree_enabled flag."""
@@ -81,9 +81,9 @@ class TestTemplateContent:
         """Template should mention DB-backed resume."""
         assert "DB" in self.content or "database" in self.content.lower()
 
-    def test_template_documents_configure_git_safety(self):
+    def test_template_documents_manage_git_safety_configure(self):
         """Template should tell users how to enable worktree isolation."""
-        assert "configure_git_safety" in self.content
+        assert "manage_git_safety" in self.content
 
     def test_template_keep_and_discard_always_available(self):
         """Template should document that keep and discard are always available."""
@@ -156,9 +156,9 @@ class TestModeDetectionWithConfig:
 
         assert result["status"] == "created"
 
-    def test_get_git_safety_config_returns_effective(self):
-        """get_git_safety_config returns effective config with sources."""
-        from a_sdlc.server import get_git_safety_config
+    def test_manage_git_safety_get_returns_effective(self):
+        """manage_git_safety('get') returns effective config with sources."""
+        from a_sdlc.server import manage_git_safety
 
         with patch("a_sdlc.server.get_effective_config_summary") as mock_summary:
             mock_summary.return_value = {
@@ -175,7 +175,7 @@ class TestModeDetectionWithConfig:
                 "always_require_confirmation": ["branch_delete", "force_push"],
             }
 
-            result = get_git_safety_config()
+            result = manage_git_safety("get")
 
             assert result["status"] == "ok"
             assert result["config"]["effective"]["worktree_enabled"] is False

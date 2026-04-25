@@ -313,6 +313,204 @@ AskUserQuestion([
 - If **Re-review**: Loop back to Step 4.1
 - If **Cancel**: Discard and stop
 
+### 4.5. Design Validation (FR-018, AC-009)
+
+**REQUIRED:** Before saving, the design must provide concrete answers to the following four validation questions. Answers must NOT contain TBDs, placeholders, or deferred decisions (AC-009).
+
+#### 4.5.1: Validation Questions
+
+For each question, extract the answer from the design document sections (Context, Decision, Approach, Impact Analysis). If an answer cannot be found, the design is incomplete.
+
+**Question 1: Runtime Model**
+> How does the system execute at runtime after this change?
+
+Answer must describe:
+- Process/thread model for the new components
+- How new components are started, managed, and stopped
+- Resource lifecycle (connections, file handles, caches)
+
+**Question 2: Integration Contracts**
+> What are the exact API contracts between components?
+
+Answer must describe:
+- Function/method signatures for new interfaces
+- Request/response shapes for new or modified APIs
+- Data formats passed between components (types, not just names)
+
+**Question 3: Enforcement Audit**
+> How is each requirement enforced in code?
+
+Answer must provide:
+- For each FR cited in the Decision section: the specific code mechanism that enforces it
+- For each NFR: the technical approach (e.g., "rate limiting via middleware X at path Y")
+- No requirement should rely on "developer discipline" alone
+
+**Question 4: End-to-End Scenario**
+> Walk through one complete user journey end-to-end with the proposed changes.
+
+Answer must describe:
+- A concrete scenario (not abstract)
+- Each step from user action to system response
+- Which components are involved at each step (cite file paths)
+
+#### 4.5.2: Validate Answers
+
+Check each answer against these rules:
+
+| Question | Validation Rule | Flag If |
+|----------|----------------|---------|
+| Runtime Model | Concrete process description | Contains "TBD", "to be determined", "will decide later" |
+| Integration Contracts | Specific signatures/shapes | Uses vague terms like "appropriate format", "standard interface" |
+| Enforcement Audit | Maps every FR/NFR to code | Any requirement has no enforcement mechanism |
+| E2E Scenario | Concrete step-by-step | Uses abstract language like "the system handles it" |
+
+If any question has an incomplete answer:
+
+```
+Design Validation: {N} incomplete answers found
+
+- [INCOMPLETE] Runtime Model: {reason}
+- [INCOMPLETE] Integration Contracts: {reason}
+
+The design document must provide concrete answers to all 4 validation questions
+before it can be saved (AC-009). Edit the flagged sections to provide specific answers.
+```
+
+Return to Step 4.2 (flag sections for revision) with the incomplete validation questions highlighted.
+
+If all questions have concrete answers:
+
+```
+Design Validation: All 4 questions answered with concrete details.
+```
+
+Proceed to Step 5.
+
+### 4.6. Challenge Gate (Post-Design)
+
+**This gate is conditional on quality configuration. Skip entirely if not configured.**
+
+#### 4.6.1: Check Quality Config
+
+```
+Read: .sdlc/config.yaml → look for quality.enabled and quality.challenge sections
+```
+
+**Skip this entire section if ANY of these are true:**
+- `.sdlc/config.yaml` does not exist
+- `quality.enabled` is `false` or absent
+- `quality.challenge.enabled` is `false`
+- `quality.challenge.gates.design` is `false`
+
+If skipping:
+```
+Challenge gate: skipped (quality challenges not enabled for design)
+```
+Proceed to Step 5.
+
+#### 4.6.2: Check PRD Challenge Status (AC-012)
+
+Before challenging the design, verify the PRD challenge is resolved:
+
+```
+prd_status = mcp__asdlc__get_challenge_status(
+    artifact_type="prd",
+    artifact_id=prd_id
+)
+```
+
+If `prd_status.challenge_status` is not `"accepted"` and not `"unchallenged"`, and the gate mode is `"hard"`:
+
+```
+BLOCKED: PRD {prd_id} has unresolved escalations from its challenge.
+The design cannot proceed until the PRD challenge is resolved (AC-012).
+
+PRD challenge status: {prd_status.challenge_status}
+Unresolved escalations: {count}
+
+Resolve the PRD challenge first, then re-run /sdlc:prd-architect.
+```
+
+**STOP HERE. Do not proceed to save.**
+
+If PRD challenge is resolved or gate is "soft", continue.
+
+#### 4.6.3: Initiate Design Challenge
+
+```
+challenge = mcp__asdlc__challenge_artifact(
+    artifact_type="design",
+    artifact_id=prd_id
+)
+```
+
+#### 4.6.4: Run Challenger via Task Tool
+
+Launch a challenger agent:
+
+```
+Task:
+  description: "Challenge this design document as a critical reviewer"
+  prompt: |
+    You are a challenger reviewing a design document for architectural quality.
+
+    {challenge.challenge_prompt}
+
+    Focus your review on:
+    - Design decisions that lack evidence from codebase analysis
+    - Missing integration contracts between components
+    - File paths that may not exist or are inaccurate
+    - Patterns proposed that conflict with existing codebase patterns
+    - Requirements cited in the design that are not actually in the PRD
+    - Validation questions with incomplete or vague answers
+
+    Return your objections in this format:
+    ---CHALLENGE-OBJECTIONS---
+    - category: evidence|contract|accuracy|consistency|completeness
+      description: "..."
+      severity: blocking|warning
+      requirement_ref: "FR-xxx or DD-N if applicable"
+    ---END-OBJECTIONS---
+```
+
+#### 4.6.5: Record and Resolve
+
+Follow the same challenge round loop as the PRD challenge gate:
+
+1. Record objections via `mcp__asdlc__record_challenge_round(artifact_type="design", artifact_id=prd_id, ...)`
+2. Present objections to user
+3. User addresses, accepts risk, or skips (soft gate only)
+4. Re-challenge if needed, up to `quality.challenge.max_rounds`
+5. Check status via `mcp__asdlc__get_challenge_status(artifact_type="design", artifact_id=prd_id)`
+
+#### 4.6.6: Gate Enforcement
+
+- If `quality.challenge.gate` is `"hard"` AND unresolved blocking objections remain:
+  ```
+  BLOCKED: Design challenge has unresolved blocking objections.
+  The design cannot be saved until these are addressed.
+
+  Unresolved:
+  - {objection description}
+
+  Edit the design and re-run the challenge.
+  ```
+  **STOP HERE. Do not proceed to Step 5.**
+
+- If `quality.challenge.gate` is `"soft"` AND unresolved objections remain:
+  ```
+  WARNING: Design challenge has unresolved objections. Proceeding with warnings.
+  Consider addressing these before splitting:
+  - {objection description}
+  ```
+  Proceed to Step 5.
+
+- If all objections resolved:
+  ```
+  Design challenge passed. All objections resolved.
+  ```
+  Proceed to Step 5.
+
 ### 5. Save Design Document
 
 For a **new** design:
@@ -364,6 +562,9 @@ The user must explicitly run one of these commands to continue:
 | `mcp__asdlc__get_design` | Check for existing design |
 | `mcp__asdlc__create_design` | Create design document (returns file_path) |
 | `Write` / `Edit` | Write or edit design content directly |
+| `mcp__asdlc__challenge_artifact` | Initiate design challenge (quality gate) |
+| `mcp__asdlc__record_challenge_round` | Record challenger objections and responses |
+| `mcp__asdlc__get_challenge_status` | Check challenge resolution status |
 
 ## Notes
 

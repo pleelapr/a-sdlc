@@ -21,7 +21,7 @@ Activate a sprint, changing its status from `planned` to `active`.
 Use the MCP tool to start a sprint:
 
 ```
-mcp__asdlc__start_sprint(sprint_id="SPRINT-01")
+mcp__asdlc__update_sprint(sprint_id="SPRINT-01", status="active")
 ```
 
 This will:

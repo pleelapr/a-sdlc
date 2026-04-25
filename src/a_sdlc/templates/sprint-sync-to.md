@@ -26,7 +26,7 @@ Push local sprint changes to the linked external system (Linear/Jira). One-way s
 ### 1. Call Sync To MCP Tool
 
 ```
-mcp__asdlc__sync_sprint_to(sprint_id="SPRINT-001")
+mcp__asdlc__sync_sprint(sprint_id="SPRINT-001", direction="push")
 ```
 
 ### 2. Review Push Result

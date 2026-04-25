@@ -65,7 +65,7 @@ Task Summary:
 
 Commands:
   Start sprint: /sdlc:sprint-start SPRINT-001
-  Add PRD: mcp__asdlc__add_prd_to_sprint("SPRINT-001", "prd-id")
+  Add PRD: mcp__asdlc__manage_sprint_prds(action="add", prd_id="prd-id", sprint_id="SPRINT-001")
   Complete: /sdlc:sprint-complete SPRINT-001
 ```
 
@@ -83,8 +83,8 @@ Sprints now contain PRDs, not tasks directly:
 | `get_sprint(sprint_id)` | Get sprint with PRD/task counts |
 | `get_sprint_prds(sprint_id)` | List all PRDs in sprint |
 | `get_sprint_tasks(sprint_id)` | List all tasks (derived via PRDs) |
-| `add_prd_to_sprint(sprint_id, prd_id)` | Assign PRD to sprint |
-| `remove_prd_from_sprint(prd_id)` | Move PRD to backlog |
+| `manage_sprint_prds(action="add", prd_id, sprint_id)` | Assign PRD to sprint |
+| `manage_sprint_prds(action="remove", prd_id)` | Move PRD to backlog |
 
 ## Examples
 

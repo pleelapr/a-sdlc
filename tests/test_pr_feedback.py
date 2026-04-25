@@ -1,4 +1,4 @@
-"""Tests for GitHub PR feedback MCP tools (configure_github, get_pr_feedback)."""
+"""Tests for GitHub PR feedback MCP tools (manage_integration for github, get_pr_feedback)."""
 
 import os
 import tempfile
@@ -288,18 +288,18 @@ class TestGlobalGitHubConfig:
 
 
 # ---------------------------------------------------------------------------
-# configure_github MCP tool tests
+# manage_integration (github) MCP tool tests
 # ---------------------------------------------------------------------------
 
 
 class TestConfigureGitHub:
-    """Test configure_github MCP tool."""
+    """Test manage_integration('configure', system='github') MCP tool."""
 
     @patch("a_sdlc.server.github.GitHubClient")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_no_project(self, mock_getcwd, mock_get_db, mock_gh_client):
-        from a_sdlc.server import configure_github
+        from a_sdlc.server import manage_integration
 
         mock_getcwd.return_value = "/nonexistent"
         mock_db = MagicMock()
@@ -310,7 +310,7 @@ class TestConfigureGitHub:
         mock_instance.validate_token.return_value = {"login": "octocat", "name": "Octo"}
         mock_gh_client.return_value = mock_instance
 
-        result = configure_github(token="ghp_test")
+        result = manage_integration("configure", system="github", config={"token": "ghp_test"})
         assert result["status"] == "error"
         assert "No project context" in result["message"]
 
@@ -318,7 +318,7 @@ class TestConfigureGitHub:
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_invalid_token(self, mock_getcwd, mock_get_db, mock_gh_client, mock_project_dir):
-        from a_sdlc.server import configure_github
+        from a_sdlc.server import manage_integration
 
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
@@ -329,7 +329,7 @@ class TestConfigureGitHub:
         mock_instance.validate_token.side_effect = RuntimeError("Invalid GitHub token (HTTP 401)")
         mock_gh_client.return_value = mock_instance
 
-        result = configure_github(token="bad-token")
+        result = manage_integration("configure", system="github", config={"token": "bad-token"})
         assert result["status"] == "error"
         assert "Invalid GitHub token" in result["message"]
 
@@ -337,7 +337,7 @@ class TestConfigureGitHub:
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_success(self, mock_getcwd, mock_get_db, mock_gh_client, mock_project_dir):
-        from a_sdlc.server import configure_github
+        from a_sdlc.server import manage_integration
 
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
@@ -348,7 +348,7 @@ class TestConfigureGitHub:
         mock_instance.validate_token.return_value = {"login": "octocat", "name": "Octo"}
         mock_gh_client.return_value = mock_instance
 
-        result = configure_github(token="ghp_valid")
+        result = manage_integration("configure", system="github", config={"token": "ghp_valid"})
         assert result["status"] == "configured"
         assert result["system"] == "github"
         assert result["scope"] == "project"
@@ -361,13 +361,13 @@ class TestConfigureGitHub:
     @patch("a_sdlc.server.github.GitHubClient")
     def test_global_scope_saves_to_file(self, mock_gh_client, mock_save_global):
         """scope='global' stores in YAML, not DB."""
-        from a_sdlc.server import configure_github
+        from a_sdlc.server import manage_integration
 
         mock_instance = MagicMock()
         mock_instance.validate_token.return_value = {"login": "octocat", "name": "Octo"}
         mock_gh_client.return_value = mock_instance
 
-        result = configure_github(token="ghp_global", scope="global")
+        result = manage_integration("configure", system="github", config={"token": "ghp_global", "scope": "global"})
         assert result["status"] == "configured"
         assert result["scope"] == "global"
         assert result["user"] == "octocat"
@@ -377,14 +377,14 @@ class TestConfigureGitHub:
     @patch("a_sdlc.server.github.GitHubClient")
     def test_global_scope_no_project_needed(self, mock_gh_client, mock_save_global):
         """Global scope works without project context."""
-        from a_sdlc.server import configure_github
+        from a_sdlc.server import manage_integration
 
         mock_instance = MagicMock()
         mock_instance.validate_token.return_value = {"login": "octocat", "name": "Octo"}
         mock_gh_client.return_value = mock_instance
 
         # No project mocks — should not error
-        result = configure_github(token="ghp_global", scope="global")
+        result = manage_integration("configure", system="github", config={"token": "ghp_global", "scope": "global"})
         assert result["status"] == "configured"
         assert result["scope"] == "global"
 
@@ -807,12 +807,12 @@ class TestGetPrFeedback:
 
 
 class TestGetIntegrationsGitHub:
-    """Test that get_integrations masks GitHub token."""
+    """Test that manage_integration('list') masks GitHub token."""
 
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_token_masked(self, mock_getcwd, mock_get_db, mock_project_dir):
-        from a_sdlc.server import get_integrations
+        from a_sdlc.server import manage_integration
 
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
@@ -827,18 +827,18 @@ class TestGetIntegrationsGitHub:
             },
         ]
 
-        result = get_integrations()
+        result = manage_integration("list")
         assert result["status"] == "ok"
         assert result["integrations"][0]["config"]["token"] == "***"
 
 
 class TestRemoveIntegrationGitHub:
-    """Test that remove_integration accepts 'github'."""
+    """Test that manage_integration('remove') accepts 'github'."""
 
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
     def test_remove_github(self, mock_getcwd, mock_get_db, mock_project_dir):
-        from a_sdlc.server import remove_integration
+        from a_sdlc.server import manage_integration
 
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
@@ -846,7 +846,7 @@ class TestRemoveIntegrationGitHub:
         _setup_project_mocks(mock_db, str(mock_project_dir))
         mock_db.delete_external_config.return_value = True
 
-        result = remove_integration(system="github")
+        result = manage_integration("remove", system="github")
         assert result["status"] == "removed"
         assert result["system"] == "github"
 

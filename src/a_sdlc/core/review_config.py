@@ -7,7 +7,7 @@ Project config (.sdlc/config.yaml) can override to enable review features.
 
 Configuration keys under the 'review' section:
     enabled: bool            - Master toggle for review system (default: False)
-    self_review: bool        - Implementing agent must call submit_self_review (default: True)
+    self_review: bool        - Implementing agent must call submit_review(reviewer_type='self') (default: True)
     subagent_review: bool    - Orchestrator dispatches fresh reviewer (default: True)
     max_rounds: int          - Self-heal loop limit before escalation (default: 3)
     evidence_required: bool  - Require evidence for completion (default: True)

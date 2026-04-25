@@ -498,6 +498,170 @@ Returns:
 }
 ```
 
+### 5.5. Challenge Gate (Post-PRD Generation)
+
+**This gate is conditional on quality configuration. Skip entirely if not configured.**
+
+#### 5.5.1: Check Quality Config
+
+```
+Read: .sdlc/config.yaml → look for quality.enabled and quality.challenge sections
+```
+
+**Skip this entire section if ANY of these are true:**
+- `.sdlc/config.yaml` does not exist
+- `quality.enabled` is `false` or absent
+- `quality.challenge.enabled` is `false`
+- `quality.challenge.gates.prd` is `false`
+
+If skipping:
+```
+Challenge gate: skipped (quality challenges not enabled for PRD)
+```
+Proceed to Step 6.
+
+#### 5.5.2: Open Question Enforcement (FR-035, AC-019, AC-020)
+
+Before initiating the challenge, scan the PRD content for unresolved open questions:
+
+1. Read the saved PRD file at `result["file_path"]`
+2. Look for an "## Open Questions" section
+3. If the section exists and contains items (non-empty bullet points):
+
+```
+open_questions = [list of unresolved items from Open Questions section]
+```
+
+These open questions will be automatically converted to "gap" objections in the challenge. A challenge CANNOT resolve (verdict = "accepted") while open questions remain unresolved (AC-020).
+
+#### 5.5.3: Initiate Challenge
+
+```
+challenge = mcp__asdlc__challenge_artifact(
+    artifact_type="prd",
+    artifact_id=result["prd"]["id"]
+)
+```
+
+This returns:
+- `challenge_prompt`: Structured prompt for the challenger agent
+- `round_number`: Current round (starts at 1)
+- `checklist`: PRD-specific challenge checklist
+
+#### 5.5.4: Run Challenger via Task Tool
+
+Launch a challenger agent using the Task tool:
+
+```
+Task:
+  description: "Challenge this PRD as a critical reviewer"
+  prompt: |
+    You are a challenger reviewing a PRD for quality and completeness.
+
+    {challenge.challenge_prompt}
+
+    ## Open Questions (Auto-Converted to Gap Objections)
+    {If open_questions exist, list them here as mandatory gap objections}
+
+    Review the PRD against the checklist and raise objections for:
+    - Missing or vague requirements
+    - Untestable acceptance criteria
+    - Scope gaps or ambiguities
+    - Open questions that must be resolved before design (AC-019)
+
+    Return your objections in this format:
+    ---CHALLENGE-OBJECTIONS---
+    - category: gap|clarity|testability|completeness|scope
+      description: "..."
+      severity: blocking|warning
+      requirement_ref: "FR-xxx or AC-xxx if applicable"
+    ---END-OBJECTIONS---
+```
+
+#### 5.5.5: Record Challenge Round
+
+After the challenger returns objections:
+
+```
+mcp__asdlc__record_challenge_round(
+    artifact_type="prd",
+    artifact_id=result["prd"]["id"],
+    round_number=challenge["round_number"],
+    objections=[...challenger's objections...],
+    responses=None,
+    verdict=None
+)
+```
+
+#### 5.5.6: Present Objections to User (Producer)
+
+Display the challenger's objections and ask the user to respond:
+
+```
+AskUserQuestion([
+  {
+    question: "The challenger raised {N} objections against this PRD. How would you like to respond?",
+    header: "Challenge Response",
+    options: [
+      { label: "Address all", description: "Edit the PRD to resolve all objections" },
+      { label: "Address some", description: "Review each objection individually" },
+      { label: "Accept risk", description: "Acknowledge objections without changes (escalates blocking items)" },
+      { label: "Skip challenge", description: "Dismiss the challenge entirely (only if gate is 'soft')" }
+    ]
+  }
+])
+```
+
+- If **Address all/some**: Edit PRD via `Edit` tool, then record responses and re-challenge if needed
+- If **Accept risk**: Record verdict with escalated items. If gate mode is "hard" (from `quality.challenge.gate`), blocking objections prevent progression to design (AC-012)
+- If **Skip challenge**: Only allowed if `quality.challenge.gate` is `"soft"`. Log a warning and proceed.
+
+#### 5.5.7: Challenge Resolution Loop
+
+Repeat rounds until one of these conditions is met:
+- All objections are resolved or accepted → verdict = "accepted"
+- Maximum rounds reached (`quality.challenge.max_rounds`, default 3)
+- Stale loop detected (auto-terminated by `record_challenge_round`)
+
+After each round, check status:
+
+```
+status = mcp__asdlc__get_challenge_status(
+    artifact_type="prd",
+    artifact_id=result["prd"]["id"]
+)
+```
+
+#### 5.5.8: Gate Enforcement
+
+After the challenge completes:
+
+- If `quality.challenge.gate` is `"hard"` AND unresolved blocking objections remain (including unresolved open questions per AC-020):
+  ```
+  BLOCKED: PRD challenge has unresolved blocking objections.
+  The PRD cannot proceed to design until these are addressed (AC-012).
+
+  Unresolved:
+  - {objection description}
+
+  Edit the PRD and re-run the challenge, or change the gate mode to 'soft' in .sdlc/config.yaml.
+  ```
+  **STOP HERE. Do not proceed to Step 6.**
+
+- If `quality.challenge.gate` is `"soft"` AND unresolved objections remain:
+  ```
+  WARNING: PRD challenge has unresolved objections. Proceeding with warnings.
+  Consider addressing these before design:
+  - {objection description}
+  ```
+  Proceed to Step 6.
+
+- If all objections resolved:
+  ```
+  PRD challenge passed. All objections resolved.
+  ```
+  Proceed to Step 6.
+
 ### 6. Display Summary
 
 ```
@@ -653,6 +817,9 @@ User selects: **Cost metrics + Latency benchmarks + Integration tests**, **Promp
 |------|---------|
 | `mcp__asdlc__create_prd` | Save new PRD to database |
 | `mcp__asdlc__list_prds` | Check for duplicate IDs |
+| `mcp__asdlc__challenge_artifact` | Initiate PRD challenge (quality gate) |
+| `mcp__asdlc__record_challenge_round` | Record challenger objections and responses |
+| `mcp__asdlc__get_challenge_status` | Check challenge resolution status |
 
 ## PRD Status Flow
 

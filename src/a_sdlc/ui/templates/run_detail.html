@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Run {{ run.id }} - a-sdlc Dashboard{% endblock %}
+
+{% block content %}
+<div hx-ext="ws" ws-connect="/ws/runs/{{ run.id }}">
+    <div class="card-header">
+        <div class="breadcrumbs">
+            <a href="/runs?project={{ project.id }}">Pipeline</a>
+            <span class="sep">/</span>
+            <span>{{ run.id }}</span>
+        </div>
+        <h1>Run Board: {{ run.id }}</h1>
+        <div class="actions">
+            {% if run.status == 'active' %}
+            <button class="btn btn-danger-sm" hx-post="/runs/{{ run.id }}/action?action=pause">Pause Run</button>
+            <button class="btn btn-danger-sm" hx-post="/runs/{{ run.id }}/action?action=cancel">Cancel</button>
+            {% elif run.status == 'paused' %}
+            <button class="btn btn-primary" hx-post="/runs/{{ run.id }}/action?action=resume">Resume</button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">Phase</div>
+            <div class="stat-value" style="font-size: 1.25rem;">{{ run.current_phase or 'Initialization' }}</div>
+            <div class="progress-bar" style="margin-top: 0.5rem;">
+                <div class="progress-bar-fill" style="width: {{ phase_pct or 20 }}%"></div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Convergence</div>
+            <div class="stat-value" style="font-size: 1.25rem;">{{ convergence_rate or 0 }}%</div>
+            <div class="stat-label">{{ run.thread_count or 0 }} Threads</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Budget Spent</div>
+            <div class="stat-value" style="font-size: 1.25rem;">${{ (run.total_spent_cents or 0) / 100 }}</div>
+            <div class="stat-label">Limit: ${{ (run.total_budget_cents or 0) / 100 }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Active Agents</div>
+            <div class="stat-value" style="font-size: 1.25rem;">{{ run.agent_count or 0 }}</div>
+            <div class="stat-label">Running</div>
+        </div>
+    </div>
+
+    {% if run.clarification_question and not run.clarification_answer %}
+    <div class="clarification-panel" id="clarification-{{ run.id }}">
+        <div class="clarification-question">
+            <strong>Agent Question:</strong> {{ run.clarification_question }}
+        </div>
+        <form class="clarification-form" hx-post="/runs/{{ run.id }}/action?action=answer" hx-target="#clarification-{{ run.id }}" hx-swap="outerHTML">
+            <input type="text" name="answer" class="clarification-input" placeholder="Type your answer here..." required>
+            <button type="submit" class="btn btn-primary">Answer</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="kanban-board">
+        <!-- Pending Column -->
+        <div class="kanban-column">
+            <div class="kanban-column-header">
+                <span class="kanban-column-title">Pending</span>
+                <span class="kanban-column-count" id="count-pending">{{ queue.pending|length }}</span>
+            </div>
+            <div id="column-pending">
+                {% for item in queue.pending %}
+                {% include "work_item_card.html" with context %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- In Progress Column -->
+        <div class="kanban-column">
+            <div class="kanban-column-header">
+                <span class="kanban-column-title">In Progress</span>
+                <span class="kanban-column-count" id="count-in_progress">{{ queue.in_progress|length }}</span>
+            </div>
+            <div id="column-in_progress">
+                {% for item in queue.in_progress %}
+                {% include "work_item_card.html" with context %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Completed Column -->
+        <div class="kanban-column">
+            <div class="kanban-column-header">
+                <span class="kanban-column-title">Completed</span>
+                <span class="kanban-column-count" id="count-completed">{{ queue.completed|length }}</span>
+            </div>
+            <div id="column-completed">
+                {% for item in queue.completed %}
+                {% include "work_item_card.html" with context %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Escalated / Failed Column -->
+        <div class="kanban-column">
+            <div class="kanban-column-header" style="border-bottom-color: var(--danger);">
+                <span class="kanban-column-title" style="color: var(--danger);">Escalated</span>
+                <span class="kanban-column-count" id="count-escalated">{{ queue.escalated|length + queue.failed|length }}</span>
+            </div>
+            <div id="column-escalated">
+                {% for item in queue.failed %}
+                {% include "work_item_card.html" with context %}
+                {% endfor %}
+                {% for item in queue.escalated %}
+                {% include "work_item_card.html" with context %}
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h2>Recent Agent Activity</h2>
+            <div class="actions">
+                <span class="stat-label">Live streaming via WebSocket</span>
+            </div>
+        </div>
+        <div id="activity-stream" style="max-height: 400px; overflow-y: auto;">
+            {% include "partials/thread_viewer.html" with context %}
+        </div>
+    </div>
+</div>
+
+<script>
+    // Audio notification on change (optional/bonus)
+    document.body.addEventListener('htmx:wsAfterMessage', function(evt) {
+        console.log("WebSocket update received");
+    });
+</script>
+{% endblock %}

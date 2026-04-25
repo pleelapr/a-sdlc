@@ -32,6 +32,44 @@ review:
   # Require actual test command output before marking task complete
   evidence_required: true
 
+# Quality Gates & Challenge System (SDLC-P0029)
+quality:
+  # Master toggle — set to true to enable quality gates
+  # When false, all quality gates are bypassed (backward compatible)
+  enabled: false
+
+  # Block task completion when acceptance criteria are unverified
+  ac_gate: true
+
+  # Require behavioral tests (not just structural) for task completion
+  behavioral_test_required: true
+
+  # Emit warnings when coverage drops below min_coverage_pct
+  coverage_warnings: true
+
+  # Minimum test coverage percentage (0-100)
+  min_coverage_pct: 80
+
+  # Maximum remediation passes before escalating to user
+  max_remediation_passes: 2
+
+  # Challenge subsystem — adversarial review of artifacts
+  challenge:
+    # Enable/disable challenge rounds (default: true when quality is enabled)
+    enabled: true
+    # Gate mode: 'hard' (block on challenge) or 'soft' (warn only)
+    gate: hard
+    # Maximum challenge rounds per artifact
+    max_rounds: 3
+    # Token budget multiplier for challenge rounds
+    budget_multiplier: 1.5
+    # Per-lifecycle-point toggles — set to false to skip challenges at that stage
+    gates:
+      prd: true
+      design: true
+      split: true
+      implementation: true
+
 git:
   # Allow agent to commit changes automatically (default: false — agent stages only)
   auto_commit: false
@@ -41,3 +79,176 @@ git:
   auto_merge: false
   # Use git worktree isolation for PRD execution
   worktree_enabled: false
+
+# Sprint Orchestration Context Management
+sprint:
+  # Context budget for the orchestrator agent (estimated tokens)
+  # Set to 0 to disable context tracking
+  context_budget: 150000
+  # Context pressure thresholds (percentage of budget)
+  context_thresholds:
+    warn: 70      # Log notice + save checkpoint
+    urgent: 85    # Prompt user to halt or continue
+    compact: 95   # Auto-compact context and continue
+
+  # Task dispatch configuration — controls parallelism and complexity classification
+  dispatch:
+    # Maximum concurrent subprocess dispatches per batch (default: 3)
+    max_parallel: 3
+    # Complexity classification keywords and max_turns overrides
+    # Tasks matching heavy keywords get more turns; light get fewer
+    heavy:
+      keywords: ["migration", "schema", "refactor", "redesign", "architect"]
+      max_turns: 80
+    medium:
+      max_turns: 50
+    light:
+      keywords: ["test", "doc", "readme", "config", "typo", "comment", "lint"]
+      components: ["test", "qa", "docs", "documentation"]
+      max_turns: 20
+
+# Background Daemon & Scheduled Execution (SDLC-P0022)
+daemon:
+  # Maximum agentic turns per Claude Code session
+  # Higher values allow more complex work but may hit rate limits
+  max_turns: 200
+
+  # Execution mode:
+  # - "session": One Claude Code session per sprint (simpler, recommended)
+  # - "parallel": One session per task with ThreadPoolExecutor (more control)
+  mode: session
+
+  # Execution adapter: which CLI subprocess to spawn for task execution
+  # - "mock": No real subprocess (safe default, logs intent only)
+  # - "claude": Spawn `claude -p` (Claude Code CLI)
+  # - "gemini": Spawn `gemini -p` (Gemini CLI)
+  adapter: mock
+
+  # Supervised mode: Pause between batches for user approval
+  # When true, runs pause after each batch and set status to 'awaiting_confirmation'
+  # User must run `a-sdlc run approve <run_id>` to continue
+  # Can be overridden per-run with `--supervised` flag
+  supervised: false
+
+  # Scheduled runs (cron-like syntax)
+  # Requires croniter: pip install croniter
+  schedules:
+    # - type: sync
+    #   cron: "0 2 * * *"        # Nightly at 2 AM
+    #   sprint_id: auto          # "auto" = current active sprint
+    # - type: sprint_run
+    #   cron: "0 22 * * 5"       # Friday at 10 PM
+    #   sprint_id: PROJ-S0001
+
+  # Notification hooks (run after execution completes)
+  notifications:
+    # - type: file
+    #   path: ~/.a-sdlc/run-summaries/{run_id}.md  # {run_id} replaced at runtime
+    # - type: webhook
+    #   url: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+    #   events:
+    #     - run_completed  # Only send on success
+    #     - run_failed     # Only send on failure
+
+# Autonomous Goal Loop (SDLC-P0023)
+objective:
+  # Default max iterations for goal loops
+  # Each iteration creates PRDs, runs sprints, and evaluates results
+  max_iterations: 5
+
+  # Default max agentic turns for the orchestrator session
+  # Higher values accommodate complex multi-PRD iterations
+  max_turns: 500
+
+  # Evaluation strategy — how to determine if the objective is met
+  evaluation:
+    # Commands to run after each iteration to evaluate progress
+    # Falls back to testing.commands if not specified
+    commands: []
+    # commands:
+    #   - "uv run pytest tests/ -v"
+    #   - "uv run ruff check src/"
+    #   - "uv run mypy src/"
+
+# Task Governance & Permissions (SDLC-P0026)
+governance:
+  # Master toggle — set to true to enable governance enforcement
+  # When false, all tasks run with unrestricted permissions (backward compatible)
+  enabled: false
+
+  # Token and cost budget limits per task execution
+  budget:
+    # Maximum tokens a single task execution may consume (0 = unlimited)
+    token_limit: 100000
+    # Maximum cost in cents per task execution (0 = unlimited)
+    cost_limit_cents: 500
+    # Alert when budget usage exceeds this percentage
+    alert_threshold_pct: 90
+
+  # Escalation rules — conditions that pause execution and notify the user
+  escalation:
+    # List of escalation rule objects (empty = no automatic escalation)
+    # Example:
+    #   - condition: "cost > 400"
+    #     action: pause
+    #     notify: true
+    rules: []
+
+  # Health monitoring thresholds for running tasks
+  health:
+    # Minutes of inactivity before a task is considered stalled
+    stalled_timeout_min: 30
+    # Error rate (%) above which the task is flagged unhealthy
+    error_rate_threshold_pct: 30
+    # Minimum quality score (0-100) below which the task is flagged
+    quality_threshold: 40
+    # Action when health check fails: alert | pause | abort
+    action: alert
+
+# Pipeline Orchestrator (SDLC-P0032)
+orchestrator:
+  # Master toggle for the autonomous pipeline orchestrator
+  enabled: true
+
+  # Challenger pairings — map lifecycle phases to challenger persona types
+  # Supported phases: prd, design, implementation
+  challenger_pairings:
+    prd: ["qa_engineer", "security_engineer"]
+    design: ["backend_engineer", "security_engineer"]
+    implementation: ["qa_engineer"]
+
+  # Maximum challenge rounds before escalation
+  max_iterations: 5
+
+  # Seconds between polling cycles when waiting for agent completion
+  polling_interval: 30
+
+  # Max turns per agent session (per work item)
+  max_turns_per_phase: 200
+
+  # Max concurrent agent sessions
+  max_concurrent: 3
+
+  # Adapter to use for agent sessions
+  adapter: claude
+
+# Task Routing & Assignment (SDLC-P0027)
+routing:
+  # Maps task component labels to persona types for automatic assignment
+  # When a task has a matching component, it is routed to the listed persona(s)
+  # First available persona is assigned; others serve as fallbacks
+  component_map:
+    frontend: ["frontend_engineer"]
+    backend: ["backend_engineer"]
+    api: ["backend_engineer"]
+    infra: ["devops_engineer"]
+    devops: ["devops_engineer"]
+    security: ["security_engineer"]
+    test: ["qa_engineer"]
+    qa: ["qa_engineer"]
+
+  # Seconds before a claimed-but-idle task is returned to the queue
+  stale_claim_timeout: 30
+
+  # Seconds between polling cycles for new available tasks
+  poll_interval: 30

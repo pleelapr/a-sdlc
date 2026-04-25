@@ -29,17 +29,15 @@ Import a single Jira issue as a local PRD with interactive sprint assignment.
 Check that Jira is configured:
 
 ```
-Use MCP tool: mcp__asdlc__get_integrations()
+Use MCP tool: mcp__asdlc__manage_integration("list")
 
 If Jira not configured:
   Error: Jira integration not configured.
 
   Configure first with MCP tool:
-    mcp__asdlc__configure_jira(
-      base_url="https://company.atlassian.net",
-      email="your-email@example.com",
-      api_token="your-api-token",
-      project_key="PROJ"
+    mcp__asdlc__manage_integration("configure",
+      system="jira",
+      config={"base_url": "https://company.atlassian.net", "email": "your-email@example.com", "api_token": "your-api-token", "project_key": "PROJ"}
     )
 ```
 
@@ -54,7 +52,7 @@ result = mcp__asdlc__create_prd(
     source="jira:PROJ-123"
 )
 prd_id = result["prd"]["id"]  # e.g., "PROJ-P0001"
-# Content will be populated by sync_prd_from() in step 4
+# Content will be populated by sync_prd(direction="pull") in step 4
 ```
 
 ### 3. Link PRD to External System
@@ -62,8 +60,10 @@ prd_id = result["prd"]["id"]  # e.g., "PROJ-P0001"
 Create sync mapping with explicit system parameter (future-proof for Linear, etc.):
 
 ```python
-mcp__asdlc__link_prd(
-    prd_id=prd_id,
+mcp__asdlc__manage_sync_mapping(
+    action="link",
+    entity_type="prd",
+    entity_id=prd_id,
     system="jira",      # Explicit: "jira" | "linear" | future systems
     external_id="PROJ-123"
 )
@@ -74,7 +74,7 @@ mcp__asdlc__link_prd(
 Pull the actual content from Jira:
 
 ```python
-result = mcp__asdlc__sync_prd_from(prd_id=prd_id)
+result = mcp__asdlc__sync_prd(prd_id=prd_id, direction="pull")
 # This fetches title, description, status from Jira and updates the PRD
 ```
 
@@ -140,7 +140,7 @@ PRD Imported: PROJ-P0001
   Sprint: PROJ-S0001 (Authentication Sprint)
   Status: draft
 
-  Sync mapping created - use mcp__asdlc__sync_prd_from() to pull updates.
+  Sync mapping created - use mcp__asdlc__sync_prd(direction="pull") to pull updates.
 ```
 
 ### 8. Ask About Next Steps (INTERACTIVE)
@@ -184,7 +184,7 @@ Error: Jira issue PROJ-999 not found.
 Verify:
   - Issue key is correct
   - You have access to the project
-  - Integration is configured: mcp__asdlc__get_integrations()
+  - Integration is configured: mcp__asdlc__manage_integration("list")
 ```
 
 ### Already Imported
@@ -195,7 +195,7 @@ Jira issue PROJ-123 is already linked to PRD PROJ-P0001.
 
 Options:
   1. View existing PRD: /sdlc:prd PROJ-P0001
-  2. Sync latest changes: mcp__asdlc__sync_prd_from(prd_id="PROJ-P0001")
+  2. Sync latest changes: mcp__asdlc__sync_prd(prd_id="PROJ-P0001", direction="pull")
   3. Reimport (will create duplicate): Continue anyway
 ```
 
@@ -204,11 +204,9 @@ Options:
 Error: Jira integration not configured.
 
 Configure with MCP tool:
-  mcp__asdlc__configure_jira(
-    base_url="https://company.atlassian.net",
-    email="your-email@example.com",
-    api_token="your-api-token",
-    project_key="PROJ"
+  mcp__asdlc__manage_integration("configure",
+    system="jira",
+    config={"base_url": "https://company.atlassian.net", "email": "...", "api_token": "...", "project_key": "PROJ"}
   )
 ```
 
@@ -216,17 +214,17 @@ Configure with MCP tool:
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__asdlc__get_integrations` | Check Jira is configured |
+| `mcp__asdlc__manage_integration("list")` | Check Jira is configured |
 | `mcp__asdlc__list_sprints` | Get available sprints for assignment |
 | `mcp__asdlc__create_prd` | Create the PRD with Jira content |
-| `mcp__asdlc__link_prd` | Create sync mapping to Jira |
-| `mcp__asdlc__sync_prd_from` | Pull content from Jira |
+| `mcp__asdlc__manage_sync_mapping(action="link", entity_type="prd")` | Create sync mapping to Jira |
+| `mcp__asdlc__sync_prd(direction="pull")` | Pull content from Jira |
 | `mcp__asdlc__update_prd` | Assign PRD to sprint |
 | `mcp__asdlc__list_sync_mappings` | Check if already imported |
 
 ## Notes
 
-- Importing creates a local copy; use `mcp__asdlc__sync_prd_from` for updates
+- Importing creates a local copy; use `mcp__asdlc__sync_prd(direction="pull")` for updates
 - PRD content is derived from Jira issue description
 - Subtasks from Jira are appended to PRD content as a checklist
 - Labels and components are preserved in PRD metadata

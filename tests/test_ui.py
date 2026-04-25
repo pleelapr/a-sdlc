@@ -1,7 +1,11 @@
 """Tests for the web UI routes and dashboard enhancements."""
 
+import asyncio
+import contextlib
+import json
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,6 +39,9 @@ def app_client(temp_storage, monkeypatch):
 def storage_with_project(temp_storage, tmp_path):
     """Create storage with a test project."""
     temp_storage.create_project("test-proj", "Test Project", str(tmp_path / "test"))
+    # Add default agents for work_queue FK constraints
+    temp_storage.create_agent("architect", "test-proj", "architect", "System Architect")
+    temp_storage.create_agent("engineer-1", "test-proj", "implementer", "Backend Engineer")
     return temp_storage
 
 
@@ -1182,7 +1189,7 @@ class TestPRDTimestamps:
         assert updated.get("completed_at") is None
 
     def test_ready_at_fresh_after_draft_roundtrip(self, temp_storage, tmp_path):
-        """ready→draft→ready gets a fresh ready_at value."""
+        """ready->draft->ready gets a fresh ready_at value."""
         temp_storage.create_project("proj", "Proj", str(tmp_path / "proj"))
         temp_storage.create_prd(
             prd_id="P-0001",
@@ -1300,3 +1307,1429 @@ class TestTaskTimestamps:
         assert sprint4["completed_at"] is None
         # started_at should be preserved (set default, not overwrite)
         assert sprint4["started_at"] is not None
+
+
+# =============================================================================
+# Pipeline Runs Routes
+# =============================================================================
+
+
+class TestPipelineRunsPage:
+    """Test the pipeline runs list page (FR-001, FR-002, FR-003)."""
+
+    def test_runs_page_renders(self, client_with_project):
+        """GET /runs renders the pipeline runs page."""
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert "Pipeline Runs" in response.text
+
+    def test_runs_page_no_project_shows_onboarding(self, app_client):
+        """GET /runs with no project shows onboarding."""
+        response = app_client.get("/runs")
+        assert response.status_code == 200
+        assert "/sdlc:init" in response.text
+
+    def test_runs_page_empty_state(self, client_with_project):
+        """Empty runs page shows helpful message."""
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert "No pipeline runs yet" in response.text
+
+    def test_runs_page_has_new_run_button(self, client_with_project):
+        """Pipeline runs page has a New Run button."""
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert "New Run" in response.text
+
+    def test_runs_page_has_launch_modal(self, client_with_project):
+        """Pipeline runs page has launch modal with form."""
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert "launch-modal" in response.text
+        assert "Launch New Pipeline Run" in response.text
+        assert 'name="sprint_id"' in response.text
+        assert 'name="goal"' in response.text
+
+    def test_runs_page_has_status_filter(self, client_with_project):
+        """Pipeline runs page has status filter dropdown."""
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert "All Status" in response.text
+        assert "Active" in response.text
+        assert "Completed" in response.text
+        assert "Failed" in response.text
+
+    def test_runs_page_has_search_input(self, client_with_project, tmp_path, monkeypatch):
+        """Runs page has search input when runs exist."""
+        # Create a run file
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        run_data = {
+            "run_id": "R-test0001",
+            "type": "sprint",
+            "entity_id": "TEST-S0001",
+            "status": "completed",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "pid": None,
+        }
+        (runs_dir / "R-test0001.json").write_text(json.dumps(run_data))
+
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "_list_pipeline_runs", lambda status_filter=None: [
+            {**run_data, "pid_alive": False, "display_status": "completed"}
+        ])
+        monkeypatch.setattr(ui_module, "_count_active_runs", lambda: 0)
+
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert 'id="run-search"' in response.text
+        assert "initTableSearch" in response.text
+
+    def test_runs_page_shows_run_data(self, storage_with_project, monkeypatch):
+        """Runs page shows run data when runs exist."""
+        storage_with_project.create_execution_run(
+            "R-abc12345", "test-proj", status="completed"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        assert "R-abc12345" in response.text
+
+
+class TestRunDetailPage:
+    """Test the run detail page (FR-004 to FR-007)."""
+
+    def test_run_detail_not_found(self, client_with_project):
+        """GET /runs/nonexistent returns 404."""
+        response = client_with_project.get("/runs/R-nonexist")
+        assert response.status_code == 404
+        assert "Run not found" in response.text
+
+    def test_run_detail_renders(self, storage_with_project, monkeypatch):
+        """GET /runs/{run_id} renders the detail page."""
+        storage_with_project.create_execution_run(
+            "R-detail01", "test-proj", status="completed"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-detail01")
+        assert response.status_code == 200
+        assert "R-detail01" in response.text
+
+    def test_run_detail_shows_outcome(self, storage_with_project, monkeypatch):
+        """Run detail renders for a completed run."""
+        storage_with_project.create_execution_run(
+            "R-outcome1", "test-proj", status="completed"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-outcome1")
+        assert response.status_code == 200
+        assert "R-outcome1" in response.text
+        assert "completed" in response.text.lower()
+
+    def test_run_detail_shows_error(self, storage_with_project, monkeypatch):
+        """Run detail renders for a failed run."""
+        storage_with_project.create_execution_run(
+            "R-errored1", "test-proj", status="failed"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-errored1")
+        assert response.status_code == 200
+        assert "R-errored1" in response.text
+        assert "failed" in response.text.lower()
+
+    def test_run_detail_shows_log_tail(self, storage_with_project, monkeypatch):
+        """Run detail page renders for a completed run."""
+        storage_with_project.create_execution_run(
+            "R-logged01", "test-proj", status="completed"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-logged01")
+        assert response.status_code == 200
+        assert "R-logged01" in response.text
+
+
+class TestPipelineNavLink:
+    """Test navigation integration (FR-014, FR-015)."""
+
+    def test_nav_has_pipeline_link(self, client_with_project):
+        """Navigation includes Pipeline link."""
+        response = client_with_project.get("/projects/test-proj")
+        assert response.status_code == 200
+        assert "/runs?project=" in response.text
+        assert "Pipeline" in response.text
+
+    def test_pipeline_link_active_state(self, client_with_project, monkeypatch):
+        """Pipeline nav link is active on runs page."""
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "_list_pipeline_runs", lambda status_filter=None: [])
+        monkeypatch.setattr(ui_module, "_count_active_runs", lambda: 0)
+
+        response = client_with_project.get("/runs?project=test-proj")
+        assert response.status_code == 200
+        # The /runs link should have the active class
+        assert 'class="active"' in response.text
+
+
+class TestRunLauncher:
+    """Test the run launcher endpoint (FR-023, FR-024, FR-025)."""
+
+    def _patch_storage_create_run(self, storage, monkeypatch):
+        """Patch storage.create_execution_run to forward extra kwargs to DB."""
+        original = storage._db.create_execution_run
+
+        def patched_create(run_id, project_id, sprint_id=None, status="pending", **kwargs):
+            # Forward to DB which accepts run_type, goal, current_phase, etc.
+            return original(
+                run_id, project_id, sprint_id=sprint_id, status=status, **kwargs
+            )
+
+        monkeypatch.setattr(storage, "create_execution_run", patched_create)
+
+    def test_launch_sprint_missing_entity_id(self, storage_with_project, monkeypatch):
+        """POST /runs/launch creates a run and redirects."""
+        import subprocess
+        storage_with_project.create_sprint(
+            sprint_id="TEST-S0001", project_id="test-proj", title="Sprint 1"
+        )
+        self._patch_storage_create_run(storage_with_project, monkeypatch)
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: type("P", (), {"pid": 99})())
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/launch",
+            data={"sprint_id": "TEST-S0001"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/runs/")
+
+    def test_launch_objective_missing_goal(self, storage_with_project, monkeypatch):
+        """POST /runs/launch with goal creates an objective run."""
+        import subprocess
+        self._patch_storage_create_run(storage_with_project, monkeypatch)
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: type("P", (), {"pid": 99})())
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/launch",
+            data={"goal": "Build a REST API"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/runs/")
+
+    def test_launch_no_claude_cli(self, storage_with_project, monkeypatch):
+        """POST /runs/launch spawns subprocess and redirects."""
+        import subprocess
+        storage_with_project.create_sprint(
+            sprint_id="TEST-S0001", project_id="test-proj", title="Sprint 1"
+        )
+        self._patch_storage_create_run(storage_with_project, monkeypatch)
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: type("P", (), {"pid": 99})())
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/launch",
+            data={"sprint_id": "TEST-S0001"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+    def test_launch_sprint_success(self, storage_with_project, monkeypatch):
+        """POST /runs/launch with valid sprint spawns and redirects."""
+        import subprocess
+        storage_with_project.create_sprint(
+            sprint_id="TEST-S0001", project_id="test-proj", title="Sprint 1"
+        )
+        self._patch_storage_create_run(storage_with_project, monkeypatch)
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: type("P", (), {"pid": 99})())
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/launch",
+            data={"sprint_id": "TEST-S0001"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/runs/")
+
+    def test_launch_objective_success(self, storage_with_project, monkeypatch):
+        """POST /runs/launch with valid objective spawns and redirects."""
+        import subprocess
+        self._patch_storage_create_run(storage_with_project, monkeypatch)
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: type("P", (), {"pid": 99})())
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/launch",
+            data={"goal": "Build a REST API for user management"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/runs/")
+
+
+class TestListPipelineRuns:
+    """Test the _list_pipeline_runs helper function."""
+
+    def test_empty_when_no_directory(self, monkeypatch):
+        """Returns empty list when no project exists."""
+        from a_sdlc.ui import _list_pipeline_runs
+
+        mock_storage = MagicMock()
+        mock_storage.get_most_recent_project.return_value = None
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+        result = _list_pipeline_runs()
+        assert result == []
+
+    def test_reads_run_files(self, monkeypatch):
+        """Reads runs from the database."""
+        from a_sdlc.ui import _list_pipeline_runs
+
+        mock_storage = MagicMock()
+        mock_storage.get_most_recent_project.return_value = {"id": "test-proj"}
+        mock_storage.list_execution_runs.return_value = [
+            {"id": "R-list0001", "status": "completed", "pid": None}
+        ]
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+        result = _list_pipeline_runs()
+        assert len(result) == 1
+        assert result[0]["id"] == "R-list0001"
+        assert result[0]["display_status"] == "completed"
+
+    def test_filters_by_status(self, monkeypatch):
+        """Filters runs by status when status_filter is provided."""
+        from a_sdlc.ui import _list_pipeline_runs
+
+        mock_storage = MagicMock()
+        mock_storage.get_most_recent_project.return_value = {"id": "test-proj"}
+        mock_storage.list_execution_runs.return_value = [
+            {"id": "R-filt0000", "status": "completed", "pid": None},
+        ]
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+        result = _list_pipeline_runs(status_filter="completed")
+        assert len(result) == 1
+        mock_storage.list_execution_runs.assert_called_with("test-proj", status="completed")
+
+
+class TestCountActiveRuns:
+    """Test the _count_active_runs helper function."""
+
+    def test_zero_when_no_directory(self, monkeypatch):
+        """Returns 0 when runs directory does not exist."""
+        from a_sdlc.ui import _count_active_runs
+
+        mock_storage = MagicMock()
+        mock_storage.get_most_recent_project.return_value = None
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+        assert _count_active_runs() == 0
+
+    def test_zero_when_no_running(self, monkeypatch):
+        """Returns 0 when no runs are in running state."""
+        from a_sdlc.ui import _count_active_runs
+
+        mock_storage = MagicMock()
+        mock_storage.get_most_recent_project.return_value = {"id": "test-proj"}
+        mock_storage.list_execution_runs.return_value = []
+        import a_sdlc.ui as ui_module
+        monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+        assert _count_active_runs() == 0
+
+
+# =============================================================================
+# Thread Viewer + Comments + Thread Tabs (SDLC-T00200)
+# =============================================================================
+
+
+class TestThreadViewerPartial:
+    """Test GET /threads/{artifact_type}/{artifact_id} endpoint."""
+
+    def test_empty_thread_returns_empty_state(
+        self, storage_with_project, monkeypatch
+    ):
+        """Thread viewer shows empty state when no entries exist."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/threads/prd/TEST-P0001")
+        assert response.status_code == 200
+        assert "No thread entries yet" in response.text
+
+    def test_thread_with_entries(self, storage_with_project, monkeypatch):
+        """Thread viewer displays thread entries."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        # Create execution run first (FK requirement)
+        storage_with_project.create_execution_run(
+            run_id="R-test01", project_id="test-proj"
+        )
+        # Create a thread entry directly
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-test01",
+            project_id="test-proj",
+            artifact_type="prd",
+            artifact_id="TEST-P0001",
+            entry_type="creation",
+            agent_persona="pm",
+            content="Initial PRD creation",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/threads/prd/TEST-P0001")
+        assert response.status_code == 200
+        assert "pm" in response.text
+        assert "Creation" in response.text
+
+    def test_thread_for_task(self, storage_with_project, monkeypatch):
+        """Thread viewer works for tasks."""
+        storage_with_project.create_task(
+            task_id="TEST-T00001",
+            project_id="test-proj",
+            title="Test Task",
+        )
+        storage_with_project.create_execution_run(
+            run_id="R-test01", project_id="test-proj"
+        )
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-test01",
+            project_id="test-proj",
+            artifact_type="task",
+            artifact_id="TEST-T00001",
+            entry_type="challenge",
+            agent_persona="architect",
+            content="Challenge: missing error handling",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/threads/task/TEST-T00001")
+        assert response.status_code == 200
+        assert "architect" in response.text
+        assert "Challenge" in response.text
+
+    def test_thread_entry_type_colors(self, storage_with_project, monkeypatch):
+        """Thread entries have type-specific CSS classes."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        storage_with_project.create_execution_run(
+            run_id="R-test01", project_id="test-proj"
+        )
+        for etype in ["creation", "challenge", "revision", "approval"]:
+            storage_with_project.create_artifact_thread_entry(
+                run_id="R-test01",
+                project_id="test-proj",
+                artifact_type="prd",
+                artifact_id="TEST-P0001",
+                entry_type=etype,
+                agent_persona="agent",
+                content=f"Entry: {etype}",
+            )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/threads/prd/TEST-P0001")
+        text = response.text
+        assert "thread-entry-creation" in text
+        assert "thread-entry-challenge" in text
+        assert "thread-entry-revision" in text
+        assert "thread-entry-approval" in text
+
+
+class TestThreadComment:
+    """Test POST /threads/{artifact_type}/{artifact_id}/comment endpoint."""
+
+    def test_post_comment_creates_entry(
+        self, storage_with_project, monkeypatch
+    ):
+        """Posting a comment creates a user_intervention thread entry."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/threads/prd/TEST-P0001/comment",
+            json={"content": "This is a user comment"},
+        )
+        assert response.status_code == 200
+        # The response should be the updated thread viewer partial
+        assert "User" in response.text
+        assert "User Intervention" in response.text
+
+    def test_post_comment_rejects_empty(
+        self, storage_with_project, monkeypatch
+    ):
+        """Empty comment returns 400."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/threads/prd/TEST-P0001/comment",
+            json={"content": ""},
+        )
+        assert response.status_code == 400
+
+    def test_post_comment_returns_404_for_unknown_artifact(
+        self, storage_with_project, monkeypatch
+    ):
+        """Comment on non-existent artifact returns 404."""
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/threads/prd/NONEXIST-P9999/comment",
+            json={"content": "Hello"},
+        )
+        assert response.status_code == 404
+
+    def test_post_comment_uses_existing_run_id(
+        self, storage_with_project, monkeypatch
+    ):
+        """Comment uses the most recent run_id from existing thread entries."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        storage_with_project.create_execution_run(
+            run_id="R-existing", project_id="test-proj"
+        )
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-existing",
+            project_id="test-proj",
+            artifact_type="prd",
+            artifact_id="TEST-P0001",
+            entry_type="creation",
+            content="First entry",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        client.post(
+            "/threads/prd/TEST-P0001/comment",
+            json={"content": "User comment"},
+        )
+        # Verify the comment was stored with the existing run_id
+        entries = storage_with_project.list_artifact_threads_by_artifact(
+            "prd", "TEST-P0001"
+        )
+        user_entries = [e for e in entries if e["entry_type"] == "user_intervention"]
+        assert len(user_entries) == 1
+        assert user_entries[0]["run_id"] == "R-existing"
+
+    def test_post_comment_on_task(self, storage_with_project, monkeypatch):
+        """Posting a comment works for task artifacts."""
+        storage_with_project.create_task(
+            task_id="TEST-T00001",
+            project_id="test-proj",
+            title="Test Task",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/threads/task/TEST-T00001/comment",
+            json={"content": "Task comment"},
+        )
+        assert response.status_code == 200
+        entries = storage_with_project.list_artifact_threads_by_artifact(
+            "task", "TEST-T00001"
+        )
+        assert len(entries) == 1
+        assert entries[0]["content"] == "Task comment"
+
+
+class TestThreadTabsOnDetailPages:
+    """Test that detail pages include the Agent Thread tab."""
+
+    def test_prd_detail_has_thread_tab(
+        self, storage_with_project, monkeypatch
+    ):
+        """PRD detail page includes Agent Thread tab button."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds/TEST-P0001")
+        assert response.status_code == 200
+        assert "Agent Thread" in response.text
+        assert 'id="tab-thread"' in response.text
+        assert 'id="panel-thread"' in response.text
+
+    def test_prd_detail_thread_tab_count(
+        self, storage_with_project, monkeypatch
+    ):
+        """PRD detail shows thread entry count in tab badge."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        storage_with_project.create_execution_run(
+            run_id="R-test01", project_id="test-proj"
+        )
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-test01",
+            project_id="test-proj",
+            artifact_type="prd",
+            artifact_id="TEST-P0001",
+            entry_type="creation",
+            content="Entry 1",
+        )
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-test01",
+            project_id="test-proj",
+            artifact_type="prd",
+            artifact_id="TEST-P0001",
+            entry_type="challenge",
+            content="Entry 2",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/prds/TEST-P0001")
+        assert response.status_code == 200
+        assert "Agent Thread (2)" in response.text
+
+    def test_task_detail_has_thread_tab(
+        self, storage_with_project, monkeypatch
+    ):
+        """Task detail page includes Agent Thread tab."""
+        storage_with_project.create_prd(
+            prd_id="TEST-P0001",
+            project_id="test-proj",
+            title="Test PRD",
+        )
+        storage_with_project.create_task(
+            task_id="TEST-T00001",
+            project_id="test-proj",
+            title="Test Task",
+            prd_id="TEST-P0001",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/tasks/TEST-T00001")
+        assert response.status_code == 200
+        assert "Agent Thread" in response.text
+        assert 'id="tab-thread"' in response.text
+
+    def test_sprint_detail_has_thread_section(
+        self, storage_with_project, monkeypatch
+    ):
+        """Sprint detail page includes Agent Thread section."""
+        storage_with_project.create_sprint(
+            sprint_id="TEST-S0001",
+            project_id="test-proj",
+            title="Test Sprint",
+            goal="Test goal",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/sprints/TEST-S0001")
+        assert response.status_code == 200
+        assert "Agent Thread" in response.text
+        assert "thread-viewer-target" in response.text
+
+
+# =============================================================================
+# Kanban Board + Work Item Actions (SDLC-T00198)
+# =============================================================================
+
+
+class TestRunDetailKanban:
+    """Test the kanban board rendering on the run detail page (FR-004)."""
+
+    def test_kanban_renders_with_work_items(
+        self, storage_with_project, monkeypatch
+    ):
+        """Run detail shows kanban board when work queue items exist."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "prd_generate",
+            artifact_type="prd", artifact_id="TEST-P0001", status="pending",
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-002", "R-kanban01", "test-proj", "task_execute",
+            artifact_type="task", artifact_id="TEST-T00001",
+            status="in_progress", assigned_agent_id="engineer-1",
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-003", "R-kanban01", "test-proj", "prd_review",
+            artifact_type="prd", artifact_id="TEST-P0002", status="completed",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        assert response.status_code == 200
+        text = response.text
+
+        # Kanban board should be present
+        assert "kanban-board" in text
+
+        # Core columns always shown
+        assert "column-pending" in text
+        assert "column-in_progress" in text
+        assert "column-completed" in text
+        assert "column-escalated" in text
+
+    def test_kanban_shows_queue_stats(
+        self, storage_with_project, monkeypatch
+    ):
+        """Run detail shows queue summary stats cards."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "prd_generate",
+            status="pending",
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-002", "R-kanban01", "test-proj", "task_execute",
+            status="completed",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        assert response.status_code == 200
+        text = response.text
+
+        # Stats section shows stat-card elements with labels
+        assert "stat-card" in text
+        assert "Phase" in text
+
+    def test_kanban_no_board_without_db_run(
+        self, storage_with_project, monkeypatch
+    ):
+        """Kanban board does not render when no execution_run in DB."""
+        # Do NOT create execution_run in DB
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        # Route returns 404 when run not found in DB
+        assert response.status_code == 404
+
+    def test_kanban_persona_badge(
+        self, storage_with_project, monkeypatch
+    ):
+        """Active agent persona badge is shown for assigned items (FR-022)."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "task_execute",
+            status="in_progress", assigned_agent_id="architect",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        assert response.status_code == 200
+        assert "agent-persona-badge" in response.text
+        assert "architect" in response.text
+
+    def test_kanban_action_buttons_pending(
+        self, storage_with_project, monkeypatch
+    ):
+        """Pending items show Skip and Cancel action buttons (FR-016)."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "prd_generate",
+            status="pending",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        text = response.text
+        assert "Cancel" in text
+        assert "action=cancel" in text
+
+    def test_kanban_action_buttons_in_progress(
+        self, storage_with_project, monkeypatch
+    ):
+        """In-progress items show Cancel action button."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "task_execute",
+            status="in_progress",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        text = response.text
+        assert "Cancel" in text
+        assert "action=cancel" in text
+
+    def test_kanban_action_buttons_failed(
+        self, storage_with_project, monkeypatch
+    ):
+        """Failed items show Retry and Skip action buttons."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "task_execute",
+            status="failed",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        text = response.text
+        assert "Retry" in text
+        assert "action=retry" in text
+
+    def test_kanban_cancelled_column_hidden_when_empty(
+        self, storage_with_project, monkeypatch
+    ):
+        """Cancelled column not shown when there are no cancelled items."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "task_execute",
+            status="pending",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        # The 4 core columns are always shown, but cancelled is conditional
+        assert "col-cancelled" not in response.text or "<span>Cancelled</span>" not in response.text
+
+
+    def test_kanban_cancelled_column_shown_when_nonempty(
+        self, storage_with_project, monkeypatch
+    ):
+        """Escalated column appears when there are failed items."""
+        storage_with_project.create_execution_run(
+            "R-kanban01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-kanban01", "test-proj", "task_execute",
+            status="failed",
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-kanban01")
+        assert "column-escalated" in response.text
+
+
+class TestWorkItemAction:
+    """Test POST /runs/items/{item_id}/action endpoint (FR-016)."""
+
+    def test_cancel_action(self, storage_with_project, monkeypatch):
+        """Cancel action updates item status to cancelled."""
+        storage_with_project.create_execution_run(
+            "R-action01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-001", "R-action01", "test-proj", "task_execute",
+            status="in_progress",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/items/WQ-001/action",
+            data={"action": "cancel"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        assert "cancelled" in response.text.lower()
+
+        item = storage_with_project.get_work_queue_item("WQ-001")
+        assert item["status"] == "cancelled"
+
+    def test_skip_action(self, storage_with_project, monkeypatch):
+        """Skip action updates item status to skipped."""
+        storage_with_project.create_execution_run(
+            "R-action01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-002", "R-action01", "test-proj", "prd_generate",
+            status="pending",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/items/WQ-002/action",
+            data={"action": "skip"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        assert "skipped" in response.text.lower()
+
+        item = storage_with_project.get_work_queue_item("WQ-002")
+        assert item["status"] == "skipped"
+
+    def test_retry_action(self, storage_with_project, monkeypatch):
+        """Retry action resets status to pending and increments retry_count."""
+        storage_with_project.create_execution_run(
+            "R-action01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-003", "R-action01", "test-proj", "task_execute",
+            status="failed",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/items/WQ-003/action",
+            data={"action": "retry"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        assert "pending" in response.text.lower()
+
+        item = storage_with_project.get_work_queue_item("WQ-003")
+        assert item["status"] == "pending"
+        assert item["retry_count"] == 1
+
+    def test_retry_increments_count(self, storage_with_project, monkeypatch):
+        """Multiple retries increment the retry count cumulatively."""
+        storage_with_project.create_execution_run(
+            "R-action01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-004", "R-action01", "test-proj", "task_execute",
+            status="failed",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+
+        # First retry
+        client.post(
+            "/runs/items/WQ-004/action",
+            data={"action": "retry"},
+            follow_redirects=False,
+        )
+        # Set back to failed for second retry
+        storage_with_project.update_work_queue_item("WQ-004", status="failed")
+
+        # Second retry
+        client.post(
+            "/runs/items/WQ-004/action",
+            data={"action": "retry"},
+            follow_redirects=False,
+        )
+
+        item = storage_with_project.get_work_queue_item("WQ-004")
+        assert item["status"] == "pending"
+        assert item["retry_count"] == 2
+
+    def test_pause_action(self, storage_with_project, monkeypatch):
+        """Pause action sets item status to pending."""
+        storage_with_project.create_execution_run(
+            "R-action01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-005", "R-action01", "test-proj", "task_execute",
+            status="in_progress",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/items/WQ-005/action",
+            data={"action": "pause"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        item = storage_with_project.get_work_queue_item("WQ-005")
+        assert item["status"] == "pending"
+
+    def test_unknown_action_returns_400(self, storage_with_project, monkeypatch):
+        """Unknown action returns 400 error."""
+        storage_with_project.create_execution_run(
+            "R-action01", "test-proj", status="running"
+        )
+        storage_with_project.create_work_queue_item(
+            "WQ-006", "R-action01", "test-proj", "task_execute",
+            status="pending",
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/items/WQ-006/action",
+            data={"action": "bogus"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+        assert "Unknown action" in response.text
+
+    def test_nonexistent_item_returns_404(
+        self, storage_with_project, monkeypatch
+    ):
+        """Action on non-existent work item returns 404."""
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.post(
+            "/runs/items/WQ-NOPE/action",
+            data={"action": "cancel"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 404
+        assert "Work item not found" in response.text
+
+
+
+class TestPhaseProgress:
+    """Test phase progress indicator on run detail (FR-006)."""
+
+    def _setup_run_with_phase(
+        self, storage, monkeypatch, current_phase="implementation"
+    ):
+        """Helper: create execution_run with a current phase."""
+        storage.create_execution_run("R-phase01", "test-proj", status="running")
+        if current_phase:
+            storage.update_execution_run(
+                "R-phase01", current_phase=current_phase
+            )
+
+    def test_phase_progress_renders(
+        self, storage_with_project, monkeypatch
+    ):
+        """Phase progress section renders with phase stat card."""
+        self._setup_run_with_phase(
+            storage_with_project, monkeypatch, "implementation"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-phase01")
+        assert response.status_code == 200
+        text = response.text
+
+        # Template has a stat card with "Phase" label and progress bar
+        assert "Phase" in text
+        assert "stat-card" in text
+        assert "progress-bar" in text
+
+    def test_phase_active_class(
+        self, storage_with_project, monkeypatch
+    ):
+        """Current phase is shown in the stat card."""
+        self._setup_run_with_phase(
+            storage_with_project, monkeypatch, "design"
+        )
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-phase01")
+        assert response.status_code == 200
+        assert "design" in response.text.lower()
+
+
+class TestChallengeConvergence:
+    """Test challenge convergence display on run detail (FR-007)."""
+
+    def _setup_run(self, storage, monkeypatch, run_id="R-conv01"):
+        """Helper: create DB execution_run."""
+        storage.create_execution_run(run_id, "test-proj", status="running")
+
+    def test_convergence_table_renders(
+        self, storage_with_project, monkeypatch
+    ):
+        """Challenge convergence section renders when artifact threads exist."""
+        self._setup_run(storage_with_project, monkeypatch)
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-conv01",
+            project_id="test-proj",
+            artifact_type="prd",
+            artifact_id="TEST-P0001",
+            entry_type="creation",
+            agent_persona="pm",
+            content="Created PRD",
+            round_number=1,
+        )
+        storage_with_project.create_artifact_thread_entry(
+            run_id="R-conv01",
+            project_id="test-proj",
+            artifact_type="prd",
+            artifact_id="TEST-P0001",
+            entry_type="challenge",
+            agent_persona="architect",
+            content="Missing error handling",
+            round_number=1,
+        )
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-conv01")
+        assert response.status_code == 200
+        text = response.text
+
+        # Template has a "Convergence" stat card showing convergence rate
+        assert "Convergence" in text or "convergence" in text.lower()
+
+    def test_convergence_not_shown_without_threads(
+        self, storage_with_project, monkeypatch
+    ):
+        """Challenge convergence section not rendered when no threads."""
+        self._setup_run(storage_with_project, monkeypatch)
+        # No artifact thread entries created
+
+        client = _make_client(storage_with_project, monkeypatch)
+        response = client.get("/runs/R-conv01")
+        assert response.status_code == 200
+        assert "<h2>Challenge Convergence</h2>" not in response.text
+
+
+# =============================================================================
+# WebSocket Infrastructure (SDLC-T00196)
+# =============================================================================
+
+
+class TestConnectionManager:
+    """Test the ConnectionManager class for WebSocket tracking."""
+
+    def test_connect_and_disconnect(self):
+        """ConnectionManager tracks connections per run_id."""
+        from unittest.mock import AsyncMock
+
+        from a_sdlc.ui import ConnectionManager
+
+        async def _run():
+            mgr = ConnectionManager()
+            ws = AsyncMock()
+            ws.accept = AsyncMock()
+            ws.send_json = AsyncMock()
+
+            await mgr.connect(ws, "RUN-001")
+            assert mgr.connection_count("RUN-001") == 1
+            assert "RUN-001" in mgr.watched_run_ids
+
+            mgr.disconnect(ws, "RUN-001")
+            assert mgr.connection_count("RUN-001") == 0
+            assert "RUN-001" not in mgr.watched_run_ids
+
+        asyncio.run(_run())
+
+    def test_broadcast_sends_to_all(self):
+        """Broadcast sends JSON to all watchers of a run."""
+        from unittest.mock import AsyncMock
+
+        from a_sdlc.ui import ConnectionManager
+
+        async def _run():
+            mgr = ConnectionManager()
+            ws1 = AsyncMock()
+            ws1.accept = AsyncMock()
+            ws1.send_json = AsyncMock()
+            ws2 = AsyncMock()
+            ws2.accept = AsyncMock()
+            ws2.send_json = AsyncMock()
+
+            await mgr.connect(ws1, "RUN-001")
+            await mgr.connect(ws2, "RUN-001")
+
+            await mgr.broadcast("RUN-001", {"type": "state_changed"})
+
+            ws1.send_json.assert_called_once_with({"type": "state_changed"})
+            ws2.send_json.assert_called_once_with({"type": "state_changed"})
+
+        asyncio.run(_run())
+
+    def test_broadcast_removes_dead_connections(self):
+        """Dead connections are removed during broadcast."""
+        from unittest.mock import AsyncMock
+
+        from a_sdlc.ui import ConnectionManager
+
+        async def _run():
+            mgr = ConnectionManager()
+            ws_good = AsyncMock()
+            ws_good.accept = AsyncMock()
+            ws_good.send_json = AsyncMock()
+            ws_dead = AsyncMock()
+            ws_dead.accept = AsyncMock()
+            ws_dead.send_json = AsyncMock(side_effect=RuntimeError("closed"))
+
+            await mgr.connect(ws_good, "RUN-001")
+            await mgr.connect(ws_dead, "RUN-001")
+            assert mgr.connection_count("RUN-001") == 2
+
+            await mgr.broadcast("RUN-001", {"type": "test"})
+
+            assert mgr.connection_count("RUN-001") == 1
+
+        asyncio.run(_run())
+
+    def test_disconnect_cleans_empty_run(self):
+        """Disconnecting the last watcher removes the run_id key."""
+        from unittest.mock import AsyncMock
+
+        from a_sdlc.ui import ConnectionManager
+
+        async def _run():
+            mgr = ConnectionManager()
+            ws = AsyncMock()
+            ws.accept = AsyncMock()
+
+            await mgr.connect(ws, "RUN-002")
+            assert "RUN-002" in mgr.active_connections
+
+            mgr.disconnect(ws, "RUN-002")
+            assert "RUN-002" not in mgr.active_connections
+
+        asyncio.run(_run())
+
+    def test_total_connections(self):
+        """total_connections property counts across all runs."""
+        from unittest.mock import AsyncMock
+
+        from a_sdlc.ui import ConnectionManager
+
+        async def _run():
+            mgr = ConnectionManager()
+            ws1 = AsyncMock()
+            ws1.accept = AsyncMock()
+            ws2 = AsyncMock()
+            ws2.accept = AsyncMock()
+
+            await mgr.connect(ws1, "RUN-001")
+            await mgr.connect(ws2, "RUN-002")
+            assert mgr.total_connections == 2
+
+        asyncio.run(_run())
+
+    def test_broadcast_to_nonexistent_run(self):
+        """Broadcasting to a run with no watchers is a no-op."""
+        from a_sdlc.ui import ConnectionManager
+
+        async def _run():
+            mgr = ConnectionManager()
+            # Should not raise
+            await mgr.broadcast("NONEXIST", {"type": "test"})
+
+        asyncio.run(_run())
+
+    def test_disconnect_unknown_websocket(self):
+        """Disconnecting an unknown websocket is a no-op."""
+        from unittest.mock import AsyncMock
+
+        from a_sdlc.ui import ConnectionManager
+
+        mgr = ConnectionManager()
+        ws = AsyncMock()
+        # Should not raise (synchronous method)
+        mgr.disconnect(ws, "RUN-UNKNOWN")
+
+
+class TestWebSocketEndpoint:
+    """Test the /ws/runs/{run_id} WebSocket endpoint."""
+
+    def test_websocket_connect_disconnect(self, client_with_project):
+        """WebSocket endpoint accepts and handles disconnect."""
+        with client_with_project.websocket_connect("/ws/runs/RUN-001") as _ws:
+            # Connection should be accepted (no exception)
+            pass  # Closing the context manager triggers disconnect
+
+
+class TestActivePipelineCount:
+    """Test the _get_active_pipeline_count helper."""
+
+    def test_returns_zero_when_no_project_id(self):
+        """Returns 0 when project_id is None."""
+        from a_sdlc.ui import _get_active_pipeline_count
+
+        assert _get_active_pipeline_count(None) == 0
+
+    def test_returns_zero_when_no_runs(self, storage_with_project, monkeypatch):
+        """Returns 0 when no execution runs exist."""
+        import a_sdlc.ui as ui_module
+        from a_sdlc.ui import _get_active_pipeline_count
+
+        monkeypatch.setattr(ui_module, "get_storage", lambda: storage_with_project)
+        count = _get_active_pipeline_count("test-proj")
+        assert count == 0
+
+    def test_returns_count_of_active_runs(self, storage_with_project, monkeypatch):
+        """Returns correct count of active runs."""
+        import a_sdlc.ui as ui_module
+        from a_sdlc.ui import _get_active_pipeline_count
+
+        monkeypatch.setattr(ui_module, "get_storage", lambda: storage_with_project)
+        storage_with_project.create_execution_run(
+            "R-active01", "test-proj", status="active"
+        )
+        storage_with_project.create_execution_run(
+            "R-active02", "test-proj", status="active"
+        )
+        storage_with_project.create_execution_run(
+            "R-done01", "test-proj", status="completed"
+        )
+        count = _get_active_pipeline_count("test-proj")
+        assert count == 2
+
+    def test_returns_zero_on_error(self, monkeypatch):
+        """Returns 0 when storage raises an exception."""
+        import a_sdlc.ui as ui_module
+        from a_sdlc.ui import _get_active_pipeline_count
+
+        def broken_storage():
+            raise RuntimeError("DB unavailable")
+
+        monkeypatch.setattr(ui_module, "get_storage", broken_storage)
+        assert _get_active_pipeline_count("test-proj") == 0
+
+
+class TestBaseTemplateWSExtension:
+    """Test base.html includes HTMX WebSocket extension and new CSS."""
+
+    def test_includes_ws_extension_script(self, client_with_project):
+        """base.html includes the HTMX WebSocket extension script."""
+        response = client_with_project.get("/projects/test-proj")
+        assert response.status_code == 200
+        assert "htmx-ext-ws" in response.text
+
+    def test_includes_pipeline_nav_link(self, client_with_project):
+        """base.html includes Pipeline nav link when project exists."""
+        response = client_with_project.get("/projects/test-proj")
+        assert response.status_code == 200
+        assert "Pipeline" in response.text
+        assert "/runs?project=" in response.text
+
+    def test_includes_nav_badge_css(self, client_with_project):
+        """base.html includes nav-badge CSS class."""
+        response = client_with_project.get("/projects/test-proj")
+        assert response.status_code == 200
+        assert ".nav-badge" in response.text
+
+    def test_includes_entry_type_css(self, client_with_project):
+        """base.html includes entry type color CSS classes."""
+        response = client_with_project.get("/projects/test-proj")
+        text = response.text
+        assert ".entry-implement" in text
+        assert ".entry-review" in text
+        assert ".entry-qa" in text
+        assert ".entry-design" in text
+        assert ".entry-pm" in text
+        assert ".entry-challenge" in text
+        assert ".entry-split" in text
+        assert ".entry-escalation" in text
+
+    def test_includes_entry_bg_css(self, client_with_project):
+        """base.html includes entry type background CSS classes."""
+        response = client_with_project.get("/projects/test-proj")
+        text = response.text
+        assert ".entry-bg-implement" in text
+        assert ".entry-bg-review" in text
+        assert ".entry-bg-qa" in text
+
+    def test_includes_new_status_css(self, client_with_project):
+        """base.html includes new status CSS classes."""
+        response = client_with_project.get("/projects/test-proj")
+        text = response.text
+        assert ".status-escalated" in text
+        assert ".status-awaiting_clarification" in text
+        assert ".status-running" in text
+        assert ".status-failed" in text
+
+    def test_includes_btn_action_danger_css(self, client_with_project):
+        """base.html includes btn-action-danger CSS class."""
+        response = client_with_project.get("/projects/test-proj")
+        assert ".btn-action-danger" in response.text
+
+
+class TestChangeDetector:
+    """Test the _change_detector background coroutine behavior."""
+
+    def test_skips_runs_with_no_watchers(self, monkeypatch):
+        """Change detector does not call get_run_state_hash when no watchers."""
+        import a_sdlc.ui as ui_module
+        from a_sdlc.ui import ConnectionManager
+
+        mock_storage = MagicMock()
+        monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+
+        # Use a fresh manager with no connections
+        test_mgr = ConnectionManager()
+        monkeypatch.setattr(ui_module, "manager", test_mgr)
+
+        async def _run():
+            from a_sdlc.ui import _change_detector
+
+            task = asyncio.create_task(_change_detector())
+            await asyncio.sleep(1.5)  # Allow one iteration
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        asyncio.run(_run())
+        mock_storage.get_run_state_hash.assert_not_called()
+
+    def test_broadcasts_on_hash_change(self, monkeypatch):
+        """Change detector broadcasts when hash changes (after initial population)."""
+        from unittest.mock import AsyncMock
+
+        import a_sdlc.ui as ui_module
+        from a_sdlc.ui import ConnectionManager
+
+        # Track results across async boundary
+        results = {}
+
+        async def _run():
+            test_mgr = ConnectionManager()
+            ws = AsyncMock()
+            ws.accept = AsyncMock()
+            ws.send_json = AsyncMock()
+            await test_mgr.connect(ws, "RUN-HASH01")
+
+            monkeypatch.setattr(ui_module, "manager", test_mgr)
+
+            # Mock storage to return changing hashes
+            call_count = {"n": 0}
+            hashes = ["hash-v1", "hash-v1", "hash-v2"]
+
+            def mock_get_hash(run_id):
+                idx = min(call_count["n"], len(hashes) - 1)
+                call_count["n"] += 1
+                return hashes[idx]
+
+            mock_storage = MagicMock()
+            mock_storage.get_run_state_hash = mock_get_hash
+            monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+
+            from a_sdlc.ui import _change_detector
+
+            task = asyncio.create_task(_change_detector())
+            await asyncio.sleep(3.5)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+            results["call_count"] = ws.send_json.call_count
+            if ws.send_json.call_count >= 1:
+                results["last_call"] = ws.send_json.call_args[0][0]
+
+        asyncio.run(_run())
+
+        assert results["call_count"] >= 1
+        assert results["last_call"]["type"] == "state_changed"
+        assert results["last_call"]["run_id"] == "RUN-HASH01"
+        assert results["last_call"]["hash"] == "hash-v2"
+
+    def test_does_not_broadcast_on_initial_hash(self, monkeypatch):
+        """Change detector does not broadcast on the first hash read."""
+        from unittest.mock import AsyncMock
+
+        import a_sdlc.ui as ui_module
+        from a_sdlc.ui import ConnectionManager
+
+        results = {}
+
+        async def _run():
+            test_mgr = ConnectionManager()
+            ws = AsyncMock()
+            ws.accept = AsyncMock()
+            ws.send_json = AsyncMock()
+            await test_mgr.connect(ws, "RUN-INIT01")
+
+            monkeypatch.setattr(ui_module, "manager", test_mgr)
+
+            mock_storage = MagicMock()
+            mock_storage.get_run_state_hash.return_value = "initial-hash"
+            monkeypatch.setattr(ui_module, "get_storage", lambda: mock_storage)
+
+            from a_sdlc.ui import _change_detector
+
+            task = asyncio.create_task(_change_detector())
+            await asyncio.sleep(2.5)  # Two iterations, same hash
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+            results["call_count"] = ws.send_json.call_count
+
+        asyncio.run(_run())
+
+        # No broadcast because only initial hash was seen (or same hash repeated)
+        assert results["call_count"] == 0

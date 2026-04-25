@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from a_sdlc import __version__
+from a_sdlc.cli_targets import CLAUDE_TARGET, CLITarget
+from a_sdlc.transpiler import transpile_all
 
 
 def check_python_version() -> tuple[bool, str]:
@@ -64,23 +66,23 @@ def get_claude_settings_path() -> Path:
     return Path.home() / ".claude.json"
 
 
-def configure_mcp_server(force: bool = False) -> dict[str, Any]:
-    """Configure a-sdlc MCP server in Claude Code settings.
+def configure_mcp_server(force: bool = False, target: CLITarget | None = None) -> dict[str, Any]:
+    """Configure a-sdlc MCP server in CLI settings.
 
     Args:
         force: If True, overwrite existing configuration.
+        target: CLI target to configure for. Defaults to Claude Code.
 
     Returns:
         Dict with status and message.
     """
-    settings_path = get_claude_settings_path()
+    settings_path = get_claude_settings_path() if target is None else target.mcp_config_path
 
     # Read existing settings or create empty
     if settings_path.exists():
         with open(settings_path) as f:
             settings = json.load(f)
     else:
-        # ~/.claude.json should exist if Claude CLI is installed
         settings = {}
 
     # Initialize mcpServers if needed
@@ -99,7 +101,7 @@ def configure_mcp_server(force: bool = False) -> dict[str, Any]:
     if "a-sdlc" in settings["mcpServers"]:
         del settings["mcpServers"]["a-sdlc"]
 
-    # Configure asdlc MCP server (matches Claude CLI format)
+    # Configure asdlc MCP server (same payload for all CLIs)
     settings["mcpServers"]["asdlc"] = {
         "type": "stdio",
         "command": "uvx",
@@ -107,13 +109,16 @@ def configure_mcp_server(force: bool = False) -> dict[str, Any]:
         "env": {},
     }
 
+    # Ensure parent directory exists
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Write settings
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)
 
     return {
         "status": "configured",
-        "message": "asdlc MCP server configured in Claude Code settings",
+        "message": f"asdlc MCP server configured in {settings_path}",
         "settings_path": str(settings_path),
     }
 
@@ -124,13 +129,15 @@ class Installer:
     DEFAULT_TARGET = Path.home() / ".claude" / "commands" / "sdlc"
     PERSONA_TARGET = Path.home() / ".claude" / "agents"
 
-    def __init__(self, target_dir: Path | None = None) -> None:
-        """Initialize installer with target directory.
+    def __init__(self, target: CLITarget | None = None, target_dir: Path | None = None) -> None:
+        """Initialize installer with target CLI configuration.
 
         Args:
-            target_dir: Custom target directory. Defaults to ~/.claude/commands/sdlc/
+            target: CLI target configuration. Defaults to CLAUDE_TARGET.
+            target_dir: Custom target directory override.
         """
-        self.target_dir = target_dir or self.DEFAULT_TARGET
+        self.target = target or CLAUDE_TARGET
+        self.target_dir = target_dir or self.target.commands_dir
 
     def install(self, force: bool = False, configure_mcp: bool = True) -> list[str]:
         """Install all skill templates to target directory.
@@ -152,22 +159,28 @@ class Installer:
         template_dir = self._get_template_dir()
 
         installed = []
-        for template_file in template_dir.glob("*.md"):
-            # Skip underscore-prefixed files (internal blocks, not user skills)
-            if template_file.name.startswith("_"):
-                continue
-            target_file = self.target_dir / template_file.name
+        if self.target.name == "gemini":
+            # Transpile markdown to TOML for Gemini CLI
+            installed = transpile_all(template_dir, self.target_dir)
+        else:
+            # Copy markdown files for Claude Code
+            for template_file in template_dir.glob("*.md"):
+                # Skip underscore-prefixed files (internal blocks, not user skills)
+                if template_file.name.startswith("_"):
+                    continue
+                target_file = self.target_dir / template_file.name
 
-            if target_file.exists() and not force:
-                # Skip existing files unless force=True
+                if target_file.exists() and not force:
+                    # Skip existing files unless force=True
+                    installed.append(template_file.stem)
+                    continue
+
+                shutil.copy2(template_file, target_file)
                 installed.append(template_file.stem)
-                continue
 
-            shutil.copy2(template_file, target_file)
-            installed.append(template_file.stem)
-
-        # Deploy persona agent files
-        self.install_personas(force=force)
+        # Deploy persona agent files (skip if target has no agents_dir)
+        if self.target.agents_dir is not None:
+            self.install_personas(force=force)
 
         # Write version marker
         version_file = self.target_dir / ".version"
@@ -175,7 +188,7 @@ class Installer:
 
         # Configure MCP server
         if configure_mcp:
-            configure_mcp_server(force=force)
+            configure_mcp_server(force=force, target=self.target)
 
         return installed
 
@@ -253,16 +266,41 @@ class Installer:
         Returns:
             List of installed persona names.
         """
-        self.PERSONA_TARGET.mkdir(parents=True, exist_ok=True)
+        persona_target = self.target.agents_dir or self.PERSONA_TARGET
+        persona_target.mkdir(parents=True, exist_ok=True)
         persona_dir = self._get_persona_dir()
         installed = []
         for persona_file in persona_dir.glob("*.md"):
-            target_file = self.PERSONA_TARGET / persona_file.name
+            target_file = persona_target / persona_file.name
             if target_file.exists() and not force:
                 installed.append(persona_file.stem)
                 continue
             shutil.copy2(persona_file, target_file)
             installed.append(persona_file.stem)
+
+        # Register installed personas as agents in the project database
+        try:
+            from a_sdlc.storage import HybridStorage
+
+            storage = HybridStorage()
+            project = storage.get_most_recent_project()
+            if project:
+                existing_agents = storage.list_agents(project["id"])
+                existing_types = {a["persona_type"] for a in existing_agents}
+                for persona_name in installed:
+                    if persona_name not in existing_types:
+                        agent_id = storage.get_next_agent_id(project["id"])
+                        display_name = persona_name.replace("sdlc-", "").replace("-", " ").title()
+                        storage.create_agent(
+                            agent_id=agent_id,
+                            project_id=project["id"],
+                            persona_type=persona_name,
+                            display_name=display_name,
+                            status="active",
+                        )
+        except Exception:
+            pass  # Silent fail — DB may not exist yet on first install
+
         return installed
 
     def uninstall_personas(self) -> int:
@@ -273,10 +311,11 @@ class Installer:
         Returns:
             Number of persona files removed.
         """
-        if not self.PERSONA_TARGET.exists():
+        persona_target = self.target.agents_dir or self.PERSONA_TARGET
+        if not persona_target.exists():
             return 0
         count = 0
-        for persona_file in self.PERSONA_TARGET.glob("sdlc-*.md"):
+        for persona_file in persona_target.glob("sdlc-*.md"):
             persona_file.unlink()
             count += 1
         return count
@@ -287,10 +326,11 @@ class Installer:
         Returns:
             List of dicts with 'name' and 'file' keys.
         """
-        if not self.PERSONA_TARGET.exists():
+        persona_target = self.target.agents_dir or self.PERSONA_TARGET
+        if not persona_target.exists():
             return []
         personas = []
-        for persona_file in sorted(self.PERSONA_TARGET.glob("sdlc-*.md")):
+        for persona_file in sorted(persona_target.glob("sdlc-*.md")):
             personas.append({
                 "name": persona_file.stem,
                 "file": persona_file.name,
@@ -304,9 +344,10 @@ class Installer:
             Dict mapping persona name to verification status.
         """
         persona_dir = self._get_persona_dir()
+        persona_target = self.target.agents_dir or self.PERSONA_TARGET
         results = {}
         for persona_file in persona_dir.glob("*.md"):
-            target_file = self.PERSONA_TARGET / persona_file.name
+            target_file = persona_target / persona_file.name
             name = persona_file.stem
             if not target_file.exists():
                 results[name] = False

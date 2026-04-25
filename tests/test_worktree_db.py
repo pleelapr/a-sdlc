@@ -296,18 +296,18 @@ def v6_db():
 
 
 class TestSchemaVersion:
-    """Test that the schema version is correctly set to 8."""
+    """Test that the schema version is at least 8 (worktrees table)."""
 
     def test_schema_version_constant(self):
-        """SCHEMA_VERSION constant should be 8."""
-        assert SCHEMA_VERSION == 8
+        """SCHEMA_VERSION constant should be at least 8 (worktrees table)."""
+        assert SCHEMA_VERSION >= 8
 
     def test_fresh_db_has_version_8(self, temp_db):
         """A fresh database should have schema version 8."""
         with temp_db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
     def test_fresh_db_has_worktrees_table(self, temp_db):
         """A fresh database should have the worktrees table."""
@@ -342,7 +342,7 @@ class TestMigrationV5ToV6:
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
     def test_migration_creates_indexes(self, v5_db):
         """Migration should create all expected indexes on worktrees table."""
@@ -399,7 +399,7 @@ class TestMigrationV5ToV6:
         with db2.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
 
 # =============================================================================
@@ -424,7 +424,7 @@ class TestMigrationV6ToV7:
         with db.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
     def test_migration_preserves_existing_worktrees(self, v6_db):
         """Migration should preserve existing worktree data."""
@@ -462,7 +462,7 @@ class TestMigrationV6ToV7:
         with db2.connection() as conn:
             cursor = conn.execute("SELECT version FROM schema_version")
             version = cursor.fetchone()[0]
-        assert version == 8
+        assert version == SCHEMA_VERSION
 
 
 # =============================================================================
@@ -1006,7 +1006,7 @@ class TestChainedMigration:
 
             with db.connection() as conn:
                 cursor = conn.execute("SELECT version FROM schema_version")
-                assert cursor.fetchone()[0] == 8
+                assert cursor.fetchone()[0] == SCHEMA_VERSION
 
                 # Both designs and worktrees tables should exist
                 cursor = conn.execute(

@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from a_sdlc import __version__
 from a_sdlc.cli import main
+from a_sdlc.cli_targets import CLAUDE_TARGET, GEMINI_TARGET, CLITarget
 from a_sdlc.installer import Installer
 
 
@@ -26,27 +27,54 @@ def _mock_doctor_externals():
     ports 13000/8080 with 5s timeouts each), SonarQube, and Playwright.
     Without mocking, each doctor test waits ~15s for these timeouts.
     """
-    with patch("a_sdlc.cli.check_docker_available", return_value=False), \
-         patch("a_sdlc.cli.check_services_health", return_value={
-             "langfuse_reachable": False,
-             "langfuse_url": "http://localhost:13000 (not reachable)",
-             "signoz_reachable": False,
-             "signoz_url": "http://localhost:8080 (not reachable)",
-             "services_running": False,
-         }), \
-         patch("a_sdlc.cli.verify_monitoring_setup", return_value={
-             "files_ready": False,
-             "settings_ready": False,
-             "ready": False,
-             "hook_registered": False,
-             "otel_configured": False,
-         }), \
-         patch("a_sdlc.cli.verify_sonarqube_setup", return_value={
-             "ready": False,
-             "host_url_configured": False,
-         }):
+    with (
+        patch("a_sdlc.cli.check_docker_available", return_value=False),
+        patch(
+            "a_sdlc.cli.check_services_health",
+            return_value={
+                "langfuse_reachable": False,
+                "langfuse_url": "http://localhost:13000 (not reachable)",
+                "signoz_reachable": False,
+                "signoz_url": "http://localhost:8080 (not reachable)",
+                "services_running": False,
+            },
+        ),
+        patch(
+            "a_sdlc.cli.verify_monitoring_setup",
+            return_value={
+                "files_ready": False,
+                "settings_ready": False,
+                "ready": False,
+                "hook_registered": False,
+                "otel_configured": False,
+            },
+        ),
+        patch(
+            "a_sdlc.cli.verify_sonarqube_setup",
+            return_value={
+                "ready": False,
+                "host_url_configured": False,
+            },
+        ),
+    ):
         yield
 
+
+@pytest.fixture(autouse=True)
+def _mock_cli_targets():
+    """Auto-mock resolve_targets and detect_targets to return Claude target by default.
+
+    The install command calls resolve_targets() and setup/doctor call
+    detect_targets(), both of which check for directories on disk.
+    This fixture ensures all existing tests continue to work without
+    modification. Tests that need specific target behavior can override
+    these by patching explicitly (inner patch wins over fixture).
+    """
+    with (
+        patch("a_sdlc.cli.resolve_targets", return_value=[CLAUDE_TARGET]),
+        patch("a_sdlc.cli.detect_targets", return_value=[CLAUDE_TARGET]),
+    ):
+        yield
 
 
 def test_doctor(runner: CliRunner) -> None:
@@ -69,8 +97,10 @@ class TestDoctorSchemaVersion:
         mock_db = MagicMock()
         mock_db.db_path = ":memory:"
 
-        with patch("a_sdlc.core.database.Database", return_value=mock_db), \
-             patch("sqlite3.connect") as mock_connect:
+        with (
+            patch("a_sdlc.core.database.Database", return_value=mock_db),
+            patch("sqlite3.connect") as mock_connect,
+        ):
             mock_conn = MagicMock()
             mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_connect.return_value.__exit__ = MagicMock(return_value=False)
@@ -91,8 +121,10 @@ class TestDoctorSchemaVersion:
         mock_db.db_path = ":memory:"
         old_version = SCHEMA_VERSION - 1
 
-        with patch("a_sdlc.core.database.Database", return_value=mock_db), \
-             patch("sqlite3.connect") as mock_connect:
+        with (
+            patch("a_sdlc.core.database.Database", return_value=mock_db),
+            patch("sqlite3.connect") as mock_connect,
+        ):
             mock_conn = MagicMock()
             mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
             mock_connect.return_value.__exit__ = MagicMock(return_value=False)
@@ -200,11 +232,12 @@ class TestSetupCommand:
         templates_dir = claude_dir / "commands" / "sdlc"
         templates_dir.mkdir(parents=True)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = []
             mock_installer.install.return_value = ["init", "scan", "help"]
@@ -228,11 +261,15 @@ class TestSetupCommand:
         templates_dir = claude_dir / "commands" / "sdlc"
         templates_dir.mkdir(parents=True)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(False, "Not found. Install from https://docs.astral.sh/uv/")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch(
+                "a_sdlc.cli.check_uv_available",
+                return_value=(False, "Not found. Install from https://docs.astral.sh/uv/"),
+            ),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = []
             mock_installer.install.return_value = ["init", "scan", "help"]
@@ -246,18 +283,19 @@ class TestSetupCommand:
         # Should still proceed with installation
         mock_installer.install.assert_called_once()
 
-    def test_setup_missing_claude_code_fails(self, runner: CliRunner) -> None:
-        """Test setup fails with instructions when Claude Code is missing."""
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(False, "~/.claude not found. Install Claude Code first.")):
-
+    def test_setup_missing_cli_targets_fails(self, runner: CliRunner) -> None:
+        """Test setup fails with instructions when no CLI targets are found."""
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")),
+            patch("a_sdlc.cli.detect_targets", return_value=[]),
+        ):
             result = runner.invoke(main, ["setup"])
 
         assert result.exit_code == 1
         assert "FAIL" in result.output
         assert "Critical prerequisites not met" in result.output
-        assert "Claude Code" in result.output
+        assert "CLI Targets" in result.output
 
     def test_setup_delegates_to_installer_install(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test setup delegates template installation to Installer.install()."""
@@ -269,14 +307,21 @@ class TestSetupCommand:
         templates_dir = claude_dir / "commands" / "sdlc"
         templates_dir.mkdir(parents=True)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = []
-            mock_installer.install.return_value = ["init", "scan", "help", "prd-generate", "prd-split"]
+            mock_installer.install.return_value = [
+                "init",
+                "scan",
+                "help",
+                "prd-generate",
+                "prd-split",
+            ]
             mock_installer.target_dir = templates_dir
 
             result = runner.invoke(main, ["setup"], input=self.DECLINE_ALL_OPTIONAL)
@@ -298,11 +343,12 @@ class TestSetupCommand:
         templates_dir = claude_dir / "commands" / "sdlc"
         templates_dir.mkdir(parents=True)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = [
                 {"name": "init", "file": "init.md"},
@@ -319,7 +365,9 @@ class TestSetupCommand:
         # force=False since user declined
         mock_installer.install.assert_called_once_with(force=False)
 
-    def test_setup_existing_templates_force_overwrite(self, runner: CliRunner, tmp_path: Path) -> None:
+    def test_setup_existing_templates_force_overwrite(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
         """Test setup with existing templates, user accepts overwrite."""
         claude_json = tmp_path / ".claude.json"
         claude_json.write_text('{"mcpServers": {"asdlc": {}}}')
@@ -329,11 +377,12 @@ class TestSetupCommand:
         templates_dir = claude_dir / "commands" / "sdlc"
         templates_dir.mkdir(parents=True)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = [
                 {"name": "init", "file": "init.md"},
@@ -359,12 +408,13 @@ class TestSetupCommand:
         templates_dir = claude_dir / "commands" / "sdlc"
         templates_dir.mkdir(parents=True)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(claude_dir))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
-             patch("a_sdlc.cli._setup_serena_mcp") as mock_serena:
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "Python 3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/local/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+            patch("a_sdlc.cli._setup_serena_mcp") as mock_serena,
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = []
             mock_installer.install.return_value = ["init", "scan", "help"]
@@ -399,13 +449,14 @@ class TestSetupUpgrade:
         """Test --upgrade calls installer.install(force=True)."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}), \
-             patch("a_sdlc.core.database.Database.__init__", return_value=None):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+            patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}),
+            patch("a_sdlc.core.database.Database.__init__", return_value=None),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
             mock_installer.install.return_value = ["init", "scan", "help"]
@@ -420,13 +471,14 @@ class TestSetupUpgrade:
         """Test --upgrade triggers Database init for migration."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}), \
-             patch("a_sdlc.core.database.Database.__init__", return_value=None) as mock_db_init:
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+            patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}),
+            patch("a_sdlc.core.database.Database.__init__", return_value=None) as mock_db_init,
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
             mock_installer.install.return_value = ["init", "scan"]
@@ -441,13 +493,14 @@ class TestSetupUpgrade:
         """Test --upgrade calls configure_mcp_server(force=True)."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}) as mock_mcp, \
-             patch("a_sdlc.core.database.Database.__init__", return_value=None):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+            patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}) as mock_mcp,
+            patch("a_sdlc.core.database.Database.__init__", return_value=None),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
             mock_installer.install.return_value = ["init", "scan"]
@@ -462,13 +515,14 @@ class TestSetupUpgrade:
         """Test --upgrade shows upgrade-specific banner and completion message."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json), \
-             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}), \
-             patch("a_sdlc.core.database.Database.__init__", return_value=None):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+            patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}),
+            patch("a_sdlc.core.database.Database.__init__", return_value=None),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
             mock_installer.install.return_value = ["init", "scan"]
@@ -480,15 +534,18 @@ class TestSetupUpgrade:
         assert "Upgrading a-sdlc" in result.output
         assert "Upgrade Complete" in result.output
 
-    def test_setup_without_upgrade_is_normal_wizard(self, runner: CliRunner, tmp_path: Path) -> None:
+    def test_setup_without_upgrade_is_normal_wizard(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
         """Test setup without --upgrade runs the normal wizard flow."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
 
-        with patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")), \
-             patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")), \
-             patch("a_sdlc.cli.check_claude_code_installed", return_value=(True, str(tmp_path / ".claude"))), \
-             patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json):
+        with (
+            patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
+            patch("a_sdlc.cli.check_uv_available", return_value=(True, "/usr/bin/uvx")),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed.return_value = []
             mock_installer.install.return_value = ["init", "scan"]
@@ -577,12 +634,15 @@ class TestDoctorDatabaseAccessible:
             mock_db = MagicMock()
             mock_db.db_path = db_path
 
-            with patch("a_sdlc.core.database.Database", return_value=mock_db), \
-                 patch("sqlite3.connect") as mock_connect:
+            with (
+                patch("a_sdlc.core.database.Database", return_value=mock_db),
+                patch("sqlite3.connect") as mock_connect,
+            ):
                 mock_conn = MagicMock()
                 mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
                 mock_connect.return_value.__exit__ = MagicMock(return_value=False)
                 from a_sdlc.core.database import SCHEMA_VERSION
+
                 mock_conn.execute.return_value.fetchone.return_value = (SCHEMA_VERSION,)
 
                 result = runner.invoke(main, ["doctor"])
@@ -686,8 +746,10 @@ class TestInstallPlaywright:
 
     def test_install_with_playwright_calls_setup(self, runner: CliRunner) -> None:
         """Test install with --with-playwright invokes Playwright setup."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+        with (
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup,
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.install.return_value = ["init", "scan", "help"]
             mock_installer.target_dir = Path("/tmp/sdlc")
@@ -699,8 +761,10 @@ class TestInstallPlaywright:
 
     def test_install_with_playwright_force(self, runner: CliRunner) -> None:
         """Test install with --with-playwright --force passes force flag."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+        with (
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup,
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.install.return_value = ["init", "scan", "help"]
             mock_installer.target_dir = Path("/tmp/sdlc")
@@ -712,8 +776,10 @@ class TestInstallPlaywright:
 
     def test_install_without_playwright_does_not_call_setup(self, runner: CliRunner) -> None:
         """Test install without --with-playwright does not invoke Playwright setup."""
-        with patch("a_sdlc.cli.Installer") as mock_installer_cls, \
-             patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup:
+        with (
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli._setup_playwright_mcp") as mock_setup,
+        ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.install.return_value = ["init", "scan", "help"]
             mock_installer.target_dir = Path("/tmp/sdlc")
@@ -735,12 +801,15 @@ class TestDoctorPlaywright:
 
     def test_doctor_playwright_pass(self, runner: CliRunner) -> None:
         """Test doctor reports PASS when Playwright is ready."""
-        with patch("a_sdlc.playwright_setup.verify_setup", return_value={
-            "ready": True,
-            "configured_in_settings": True,
-            "installer_available": True,
-            "installer_method": "npx",
-        }):
+        with patch(
+            "a_sdlc.playwright_setup.verify_setup",
+            return_value={
+                "ready": True,
+                "configured_in_settings": True,
+                "installer_available": True,
+                "installer_method": "npx",
+            },
+        ):
             result = runner.invoke(main, ["doctor"])
 
         assert "Playwright MCP" in result.output
@@ -748,12 +817,15 @@ class TestDoctorPlaywright:
 
     def test_doctor_playwright_warn_no_npx(self, runner: CliRunner) -> None:
         """Test doctor reports WARN when configured but npx missing."""
-        with patch("a_sdlc.playwright_setup.verify_setup", return_value={
-            "ready": False,
-            "configured_in_settings": True,
-            "installer_available": False,
-            "installer_method": "none",
-        }):
+        with patch(
+            "a_sdlc.playwright_setup.verify_setup",
+            return_value={
+                "ready": False,
+                "configured_in_settings": True,
+                "installer_available": False,
+                "installer_method": "none",
+            },
+        ):
             result = runner.invoke(main, ["doctor"])
 
         assert "Playwright MCP" in result.output
@@ -761,12 +833,15 @@ class TestDoctorPlaywright:
 
     def test_doctor_playwright_warn_not_configured(self, runner: CliRunner) -> None:
         """Test doctor reports WARN when Playwright is not configured."""
-        with patch("a_sdlc.playwright_setup.verify_setup", return_value={
-            "ready": False,
-            "configured_in_settings": False,
-            "installer_available": True,
-            "installer_method": "npx",
-        }):
+        with patch(
+            "a_sdlc.playwright_setup.verify_setup",
+            return_value={
+                "ready": False,
+                "configured_in_settings": False,
+                "installer_available": True,
+                "installer_method": "npx",
+            },
+        ):
             result = runner.invoke(main, ["doctor"])
 
         assert "Playwright MCP" in result.output
@@ -785,7 +860,9 @@ class TestDoctorPersonas:
 
     def test_doctor_personas_pass(self, runner: CliRunner) -> None:
         """Test doctor reports PASS when all 7 personas are deployed."""
-        mock_personas = [{"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(7)]
+        mock_personas = [
+            {"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(7)
+        ]
         with patch("a_sdlc.cli.Installer") as mock_installer_cls:
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed_personas.return_value = mock_personas
@@ -800,7 +877,9 @@ class TestDoctorPersonas:
 
     def test_doctor_personas_warn_partial(self, runner: CliRunner) -> None:
         """Test doctor reports WARN when fewer than 7 personas deployed."""
-        mock_personas = [{"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(3)]
+        mock_personas = [
+            {"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(3)
+        ]
         with patch("a_sdlc.cli.Installer") as mock_installer_cls:
             mock_installer = mock_installer_cls.return_value
             mock_installer.list_installed_personas.return_value = mock_personas
@@ -838,115 +917,143 @@ class TestDoctorPersonas:
 class TestInstallPersonas:
     """Tests for persona deployment lifecycle."""
 
+    @staticmethod
+    def _make_target(agents_dir: Path) -> CLITarget:
+        """Create a CLITarget with a custom agents_dir for testing."""
+        return CLITarget(
+            name=CLAUDE_TARGET.name,
+            display_name=CLAUDE_TARGET.display_name,
+            home_dir=CLAUDE_TARGET.home_dir,
+            mcp_config_path=CLAUDE_TARGET.mcp_config_path,
+            settings_path=CLAUDE_TARGET.settings_path,
+            commands_dir=CLAUDE_TARGET.commands_dir,
+            agents_dir=agents_dir,
+            context_file=CLAUDE_TARGET.context_file,
+        )
+
+    @staticmethod
+    def _make_target_no_agents() -> CLITarget:
+        """Create a CLITarget with agents_dir=None for testing fallback."""
+        return CLITarget(
+            name=CLAUDE_TARGET.name,
+            display_name=CLAUDE_TARGET.display_name,
+            home_dir=CLAUDE_TARGET.home_dir,
+            mcp_config_path=CLAUDE_TARGET.mcp_config_path,
+            settings_path=CLAUDE_TARGET.settings_path,
+            commands_dir=CLAUDE_TARGET.commands_dir,
+            agents_dir=None,
+            context_file=CLAUDE_TARGET.context_file,
+        )
+
     def test_install_deploys_persona_files(self, tmp_path: Path) -> None:
         """Verify install_personas deploys files to target dir."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installed = installer.install_personas()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
+        installed = installer.install_personas()
         assert len(installed) >= 7
         for name in installed:
             assert (persona_target / f"{name}.md").exists()
 
     def test_install_personas_skip_existing_without_force(self, tmp_path: Path) -> None:
         """Existing persona files not overwritten without --force."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
         # Create a pre-existing file with distinct content
         existing = persona_target / "sdlc-product-manager.md"
         existing.write_text("old content")
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installer.install_personas(force=False)
+        installer.install_personas(force=False)
         assert existing.read_text() == "old content"
 
     def test_install_personas_force_overwrites(self, tmp_path: Path) -> None:
         """Force flag overwrites existing persona files."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
         existing = persona_target / "sdlc-product-manager.md"
         existing.write_text("old content")
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installer.install_personas(force=True)
+        installer.install_personas(force=True)
         assert existing.read_text() != "old content"
 
     def test_uninstall_personas_only_removes_sdlc_prefix(self, tmp_path: Path) -> None:
         """uninstall_personas only removes sdlc-*.md, not other files."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
         # Create sdlc persona file and non-sdlc file
         (persona_target / "sdlc-test.md").write_text("sdlc persona")
         (persona_target / "custom-agent.md").write_text("user agent")
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            count = installer.uninstall_personas()
+        count = installer.uninstall_personas()
         assert count == 1
         assert not (persona_target / "sdlc-test.md").exists()
         assert (persona_target / "custom-agent.md").exists()
 
     def test_uninstall_personas_returns_zero_when_dir_missing(self) -> None:
-        """uninstall_personas returns 0 when PERSONA_TARGET does not exist."""
-        installer = Installer()
-        with patch.object(Installer, "PERSONA_TARGET", Path("/nonexistent/agents")):
-            count = installer.uninstall_personas()
+        """uninstall_personas returns 0 when agents_dir does not exist."""
+        target = self._make_target(Path("/nonexistent/agents"))
+        installer = Installer(target=target)
+        count = installer.uninstall_personas()
         assert count == 0
 
     def test_list_installed_personas(self, tmp_path: Path) -> None:
         """list_installed_personas returns correct persona list."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installer.install_personas()
-            personas = installer.list_installed_personas()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
+        installer.install_personas()
+        personas = installer.list_installed_personas()
         assert len(personas) >= 7
         names = [p["name"] for p in personas]
         assert "sdlc-product-manager" in names
 
     def test_list_installed_personas_empty_when_dir_missing(self) -> None:
         """list_installed_personas returns empty list when dir does not exist."""
-        installer = Installer()
-        with patch.object(Installer, "PERSONA_TARGET", Path("/nonexistent/agents")):
-            personas = installer.list_installed_personas()
+        target = self._make_target(Path("/nonexistent/agents"))
+        installer = Installer(target=target)
+        personas = installer.list_installed_personas()
         assert personas == []
 
     def test_list_installed_personas_ignores_non_sdlc_files(self, tmp_path: Path) -> None:
         """list_installed_personas only returns sdlc-*.md files."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
         (persona_target / "sdlc-architect.md").write_text("# arch")
         (persona_target / "custom-agent.md").write_text("# custom")
         (persona_target / "readme.md").write_text("# readme")
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            personas = installer.list_installed_personas()
+        personas = installer.list_installed_personas()
         assert len(personas) == 1
         assert personas[0]["name"] == "sdlc-architect"
 
     def test_verify_persona_integrity_pass(self, tmp_path: Path) -> None:
         """verify_persona_integrity returns True when files match source."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installer.install_personas(force=True)
-            results = installer.verify_persona_integrity()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
+        installer.install_personas(force=True)
+        results = installer.verify_persona_integrity()
         assert all(results.values())
         assert len(results) >= 7
 
     def test_verify_persona_integrity_fail_modified(self, tmp_path: Path) -> None:
         """verify_persona_integrity detects modified files."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installer.install_personas(force=True)
-            # Modify one file
-            modified = persona_target / "sdlc-product-manager.md"
-            modified.write_text("tampered content")
-            results = installer.verify_persona_integrity()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
+        installer.install_personas(force=True)
+        # Modify one file
+        modified = persona_target / "sdlc-product-manager.md"
+        modified.write_text("tampered content")
+        results = installer.verify_persona_integrity()
         assert results["sdlc-product-manager"] is False
         # Other files should still pass
         non_modified = {k: v for k, v in results.items() if k != "sdlc-product-manager"}
@@ -954,14 +1061,14 @@ class TestInstallPersonas:
 
     def test_verify_persona_integrity_fail_missing(self, tmp_path: Path) -> None:
         """verify_persona_integrity detects missing files."""
-        installer = Installer()
         persona_target = tmp_path / "agents"
         persona_target.mkdir()
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installer.install_personas(force=True)
-            # Remove one file
-            (persona_target / "sdlc-architect.md").unlink()
-            results = installer.verify_persona_integrity()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
+        installer.install_personas(force=True)
+        # Remove one file
+        (persona_target / "sdlc-architect.md").unlink()
+        results = installer.verify_persona_integrity()
         assert results["sdlc-architect"] is False
 
     def test_persona_files_have_valid_yaml_frontmatter(self) -> None:
@@ -986,12 +1093,12 @@ class TestInstallPersonas:
             assert frontmatter["category"] == "sdlc", f"{pf.name} category must be 'sdlc'"
 
     def test_install_creates_target_dir_if_missing(self, tmp_path: Path) -> None:
-        """install_personas creates PERSONA_TARGET directory if it does not exist."""
-        installer = Installer()
+        """install_personas creates agents_dir directory if it does not exist."""
         persona_target = tmp_path / "new_agents_dir"
         assert not persona_target.exists()
-        with patch.object(Installer, "PERSONA_TARGET", persona_target):
-            installed = installer.install_personas()
+        target = self._make_target(persona_target)
+        installer = Installer(target=target)
+        installed = installer.install_personas()
         assert persona_target.exists()
         assert len(installed) >= 7
 
@@ -1001,8 +1108,7 @@ class TestInstallPersonas:
             mock_installer = mock_installer_cls.return_value
             mock_installer.install.return_value = ["init", "scan", "help"]
             mock_installer.list_installed_personas.return_value = [
-                {"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"}
-                for i in range(7)
+                {"name": f"sdlc-persona-{i}", "file": f"sdlc-persona-{i}.md"} for i in range(7)
             ]
             mock_installer.target_dir = Path("/tmp/sdlc")
 
@@ -1105,12 +1211,12 @@ class TestInstallAgentTeams:
         settings = json.loads(settings_file.read_text())
         assert "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" not in settings.get("environment", {})
 
-    def test_install_agent_teams_preserves_existing_env(self, runner: CliRunner, tmp_path: Path) -> None:
+    def test_install_agent_teams_preserves_existing_env(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
         """Agent Teams config preserves existing environment variables."""
         settings_file = tmp_path / "settings.json"
-        settings_file.write_text(json.dumps({
-            "environment": {"MY_EXISTING_VAR": "keep-me"}
-        }))
+        settings_file.write_text(json.dumps({"environment": {"MY_EXISTING_VAR": "keep-me"}}))
 
         with (
             patch("a_sdlc.cli.Installer") as MockInstaller,  # noqa: N806
@@ -1128,11 +1234,16 @@ class TestInstallAgentTeams:
         assert settings["environment"]["MY_EXISTING_VAR"] == "keep-me"
         assert settings["environment"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
 
-    def test_install_agent_teams_handles_settings_error(self, runner: CliRunner, tmp_path: Path) -> None:
+    def test_install_agent_teams_handles_settings_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
         """Agent Teams config shows warning when settings.json cannot be written."""
         with (
             patch("a_sdlc.cli.Installer") as MockInstaller,  # noqa: N806
-            patch("a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH", tmp_path / "nonexistent_dir" / "settings.json"),
+            patch(
+                "a_sdlc.mcp_setup.CLAUDE_SETTINGS_PATH",
+                tmp_path / "nonexistent_dir" / "settings.json",
+            ),
         ):
             mock_inst = MockInstaller.return_value
             mock_inst.install.return_value = ["template1"]
@@ -1181,9 +1292,7 @@ class TestInstallerUnderscorePrefixExclusion:
         installer.install(configure_mcp=False)
 
         target_dir = tmp_path / "sdlc"
-        underscore_files = [
-            f.name for f in target_dir.glob("_*.md")
-        ]
+        underscore_files = [f.name for f in target_dir.glob("_*.md")]
         assert underscore_files == [], (
             f"Underscore-prefixed files deployed but should be excluded: {underscore_files}"
         )
@@ -1289,9 +1398,7 @@ class TestTemplateGracefulDegradation:
         for template_name in self.FULL_ROUNDTABLE_TEMPLATES:
             content = self._read_template(template_name)
             has_section_ref = (
-                "Section A" in content
-                or "Section B" in content
-                or "Section C" in content
+                "Section A" in content or "Section B" in content or "Section C" in content
             )
             assert has_section_ref, (
                 f"{template_name} missing Section A/B/C reference from _round-table-blocks.md"
@@ -1309,20 +1416,14 @@ class TestTemplateGracefulDegradation:
         """Lightweight templates must reference --solo as a bypass flag."""
         for template_name in self.LIGHTWEIGHT_TEMPLATES:
             content = self._read_template(template_name)
-            assert "--solo" in content, (
-                f"{template_name} missing --solo bypass flag reference"
-            )
+            assert "--solo" in content, f"{template_name} missing --solo bypass flag reference"
 
     def test_lightweight_templates_have_persona_panel_reference(self) -> None:
         """Lightweight templates must contain Persona Panel references."""
         for template_name in self.LIGHTWEIGHT_TEMPLATES:
             content = self._read_template(template_name)
-            has_persona_panel = (
-                "Persona Panel" in content or "persona panel" in content
-            )
-            assert has_persona_panel, (
-                f"{template_name} missing Persona Panel reference"
-            )
+            has_persona_panel = "Persona Panel" in content or "persona panel" in content
+            assert has_persona_panel, f"{template_name} missing Persona Panel reference"
 
     def test_lightweight_templates_reference_blocks_file(self) -> None:
         """Lightweight templates must reference _round-table-blocks.md."""
@@ -1342,8 +1443,7 @@ class TestTemplateGracefulDegradation:
             content = self._read_template(template_name)
             # Templates should reference the false/disabled case explicitly
             has_false_gate = (
-                "round_table_enabled = false" in content
-                or "round_table_enabled = False" in content
+                "round_table_enabled = false" in content or "round_table_enabled = False" in content
             )
             assert has_false_gate, (
                 f"{template_name} missing explicit 'round_table_enabled = false' gate "
@@ -1381,3 +1481,429 @@ class TestTemplateGracefulDegradation:
             assert "round_table_enabled" in content, (
                 f"{template_name} has lost its round-table integration"
             )
+
+
+class TestBuildExtensionCommand:
+    """Tests for the build-extension CLI command."""
+
+    def test_build_extension_exists(self, runner: CliRunner) -> None:
+        """Command is registered and shows help."""
+        result = runner.invoke(main, ["build-extension", "--help"])
+        assert result.exit_code == 0
+        assert "Gemini CLI extension" in result.output
+
+    def test_build_extension_default_output(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Command calls build_extension_dir with resolved default path."""
+        with patch("a_sdlc.gemini_extension.build_extension_dir") as mock_build:
+            mock_build.return_value = tmp_path
+            # Create expected structure
+            (tmp_path / "commands" / "sdlc").mkdir(parents=True)
+            (tmp_path / "commands" / "sdlc" / "init.toml").touch()
+            (tmp_path / "commands" / "sdlc" / "prd-generate.toml").touch()
+            (tmp_path / "gemini-extension.json").touch()
+
+            result = runner.invoke(main, ["build-extension"])
+            assert result.exit_code == 0
+            assert "Extension built successfully" in result.output
+            assert "2 TOML files" in result.output
+
+    def test_build_extension_custom_output(self, runner: CliRunner, tmp_path: Path) -> None:
+        """--output option controls output directory."""
+        custom_dir = tmp_path / "custom-ext"
+        with patch("a_sdlc.gemini_extension.build_extension_dir") as mock_build:
+            mock_build.return_value = custom_dir
+            custom_dir.mkdir(parents=True)
+            (custom_dir / "commands" / "sdlc").mkdir(parents=True)
+            (custom_dir / "gemini-extension.json").touch()
+
+            result = runner.invoke(main, ["build-extension", "--output", str(custom_dir)])
+            assert result.exit_code == 0
+            mock_build.assert_called_once()
+            call_arg = mock_build.call_args[0][0]
+            assert str(custom_dir) in str(call_arg)
+
+    def test_build_extension_shows_install_instruction(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Output includes gemini extensions install command."""
+        with patch("a_sdlc.gemini_extension.build_extension_dir") as mock_build:
+            mock_build.return_value = tmp_path
+            (tmp_path / "commands" / "sdlc").mkdir(parents=True)
+            (tmp_path / "gemini-extension.json").touch()
+
+            result = runner.invoke(main, ["build-extension"])
+            assert result.exit_code == 0
+            assert "gemini extensions install" in result.output
+
+    def test_build_extension_handles_error(self, runner: CliRunner) -> None:
+        """Command handles errors gracefully."""
+        with patch(
+            "a_sdlc.gemini_extension.build_extension_dir", side_effect=RuntimeError("test error")
+        ):
+            result = runner.invoke(main, ["build-extension"])
+            assert result.exit_code != 0
+            assert "Error building extension" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Multi-CLI target integration
+# ---------------------------------------------------------------------------
+
+
+class TestCLITargetIntegration:
+    """Tests for --target CLI option on install and uninstall commands."""
+
+    @pytest.fixture(autouse=True)
+    def auto_mock_doctor(self):
+        """Mock slow checks for all tests in this class."""
+        with (
+            patch("a_sdlc.cli.verify_setup", return_value={"ready": False}),
+            patch("a_sdlc.cli.check_docker_available", return_value=False),
+            patch("a_sdlc.cli.verify_monitoring_setup", return_value={}),
+            patch("a_sdlc.cli.verify_sonarqube_setup", return_value={}),
+        ):
+            yield
+
+    def test_install_target_claude(self, runner: CliRunner) -> None:
+        """Test install --target claude resolves to Claude target."""
+        with (
+            patch("a_sdlc.cli.resolve_targets", return_value=[CLAUDE_TARGET]) as mock_resolve,
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+        ):
+            mock_inst = mock_installer_cls.return_value
+            mock_inst.install.return_value = ["init.md"]
+            mock_inst.list_installed_personas.return_value = []
+            result = runner.invoke(main, ["install", "--target", "claude"])
+            assert result.exit_code == 0
+            mock_resolve.assert_called_once_with("claude")
+
+    def test_install_target_gemini(self, runner: CliRunner) -> None:
+        """Test install --target gemini resolves to Gemini target."""
+        with (
+            patch("a_sdlc.cli.resolve_targets", return_value=[GEMINI_TARGET]) as mock_resolve,
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+        ):
+            mock_inst = mock_installer_cls.return_value
+            mock_inst.install.return_value = ["init.toml"]
+            mock_inst.list_installed_personas.return_value = []
+            result = runner.invoke(main, ["install", "--target", "gemini"])
+            assert result.exit_code == 0
+            mock_resolve.assert_called_once_with("gemini")
+
+    def test_install_target_auto_default(self, runner: CliRunner) -> None:
+        """Test install without --target defaults to auto."""
+        with (
+            patch("a_sdlc.cli.resolve_targets", return_value=[CLAUDE_TARGET]) as mock_resolve,
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+        ):
+            mock_inst = mock_installer_cls.return_value
+            mock_inst.install.return_value = ["init.md"]
+            mock_inst.list_installed_personas.return_value = []
+            result = runner.invoke(main, ["install"])
+            assert result.exit_code == 0
+            mock_resolve.assert_called_once_with("auto")
+
+    def test_install_no_targets_detected(self, runner: CliRunner) -> None:
+        """Test install exits with error when no targets detected."""
+        with patch("a_sdlc.cli.resolve_targets", return_value=[]):
+            result = runner.invoke(main, ["install"])
+            assert result.exit_code != 0
+            assert "No supported CLI" in result.output
+
+    def test_install_shows_target_names(self, runner: CliRunner) -> None:
+        """Test install output includes target display names."""
+        with (
+            patch("a_sdlc.cli.resolve_targets", return_value=[CLAUDE_TARGET, GEMINI_TARGET]),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+        ):
+            mock_inst = mock_installer_cls.return_value
+            mock_inst.install.return_value = ["init.md"]
+            mock_inst.list_installed_personas.return_value = []
+            result = runner.invoke(main, ["install"])
+            assert result.exit_code == 0
+            assert "Claude Code" in result.output
+            assert "Gemini CLI" in result.output
+
+    def test_uninstall_target_option(self, runner: CliRunner) -> None:
+        """Test uninstall --target claude passes targets to build_uninstall_plan."""
+        from a_sdlc.uninstall import UninstallPlan, UninstallResult
+
+        with (
+            patch("a_sdlc.cli.resolve_targets", return_value=[CLAUDE_TARGET]),
+            patch("a_sdlc.uninstall.build_uninstall_plan") as mock_plan,
+            patch("a_sdlc.uninstall.execute_uninstall") as mock_exec,
+        ):
+            mock_plan.return_value = UninstallPlan(
+                has_asdlc_mcp=False,
+                has_serena_mcp=False,
+                has_playwright_mcp=False,
+                skill_template_count=0,
+                persona_count=0,
+                has_data_dir=False,
+            )
+            mock_exec.return_value = UninstallResult(actions=[], warnings=[], errors=[])
+            result = runner.invoke(main, ["uninstall", "--target", "claude", "-y"])
+            assert result.exit_code == 0
+
+    def test_doctor_shows_cli_targets(self, runner: CliRunner) -> None:
+        """Test doctor command includes CLI Targets check."""
+        with (
+            patch("a_sdlc.cli.detect_targets", return_value=[CLAUDE_TARGET]),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_plugin_manager") as mock_pm,
+            patch("a_sdlc.cli.get_claude_settings_path", return_value=Path("/tmp/fake.json")),
+            patch("a_sdlc.playwright_setup.verify_setup", return_value={"ready": False}),
+        ):
+            mock_inst = mock_installer_cls.return_value
+            mock_inst.check_template_version.return_value = (True, "0.6.0", "0.6.0")
+            mock_inst.list_installed_personas.return_value = []
+            mock_pm.return_value.list_plugins.return_value = []
+            result = runner.invoke(main, ["doctor"])
+            assert "CLI Targets" in result.output
+
+
+class TestQualityCommands:
+    """Tests for the quality command group."""
+
+    def test_quality_group_exists(self, runner: CliRunner) -> None:
+        """Test that the quality command group is registered."""
+        result = runner.invoke(main, ["quality", "--help"])
+        assert result.exit_code == 0
+        assert "coverage" in result.output
+        assert "verify" in result.output
+        assert "gaps" in result.output
+
+    def test_quality_coverage_no_project(self, runner: CliRunner) -> None:
+        """Test coverage subcommand with no project."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_cls.return_value.get_most_recent_project.return_value = None
+            result = runner.invoke(main, ["quality", "coverage"])
+            assert result.exit_code == 0
+            assert "No project found" in result.output
+
+    def test_quality_coverage_with_prd(self, runner: CliRunner) -> None:
+        """Test coverage subcommand with a specific PRD."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.get_coverage_stats.return_value = {
+                "total": 10,
+                "linked": 8,
+                "orphaned": 2,
+                "by_type": {},
+            }
+            result = runner.invoke(main, ["quality", "coverage", "PROJ-P0001"])
+            assert result.exit_code == 0
+            assert "Requirement Coverage" in result.output
+            assert "PROJ-P0001" in result.output
+
+    def test_quality_coverage_all_prds(self, runner: CliRunner) -> None:
+        """Test coverage subcommand listing all PRDs."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.list_prds.return_value = [
+                {"id": "PROJ-P0001"},
+                {"id": "PROJ-P0002"},
+            ]
+            mock_storage.get_coverage_stats.return_value = {
+                "total": 5,
+                "linked": 5,
+                "orphaned": 0,
+                "by_type": {},
+            }
+            result = runner.invoke(main, ["quality", "coverage"])
+            assert result.exit_code == 0
+            assert "PROJ-P0001" in result.output
+            assert "PROJ-P0002" in result.output
+
+    def test_quality_verify_no_project(self, runner: CliRunner) -> None:
+        """Test verify subcommand with no project."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_cls.return_value.get_most_recent_project.return_value = None
+            result = runner.invoke(main, ["quality", "verify"])
+            assert result.exit_code == 0
+            assert "No project found" in result.output
+
+    def test_quality_verify_with_prd(self, runner: CliRunner) -> None:
+        """Test verify subcommand shows AC verification table."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.get_requirements.return_value = [
+                {
+                    "id": "REQ-001",
+                    "summary": "User can login",
+                    "depth": "behavioral",
+                    "req_number": "AC-001",
+                },
+            ]
+            mock_storage.get_requirement_tasks.return_value = [{"id": "T001"}]
+            mock_storage.get_ac_verifications.return_value = [
+                {"requirement_id": "REQ-001", "evidence_type": "test"},
+            ]
+            result = runner.invoke(main, ["quality", "verify", "PROJ-P0001"])
+            assert result.exit_code == 0
+            assert "AC Verification Status" in result.output
+            assert "REQ-001" in result.output
+            assert "Verified" in result.output
+
+    def test_quality_gaps_no_project(self, runner: CliRunner) -> None:
+        """Test gaps subcommand with no project."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_cls.return_value.get_most_recent_project.return_value = None
+            result = runner.invoke(main, ["quality", "gaps"])
+            assert result.exit_code == 0
+            assert "No project found" in result.output
+
+    def test_quality_gaps_pass(self, runner: CliRunner) -> None:
+        """Test gaps subcommand returns PASS when fully covered."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.list_sprints.return_value = [
+                {"id": "PROJ-S0001", "status": "active"},
+            ]
+            mock_storage.get_sprint_prds.return_value = [{"id": "PROJ-P0001"}]
+            mock_storage.get_coverage_stats.return_value = {
+                "total": 5,
+                "linked": 5,
+                "orphaned": 0,
+            }
+            mock_storage.get_orphaned_requirements.return_value = []
+            mock_storage.get_requirements.return_value = []
+            result = runner.invoke(main, ["quality", "gaps"])
+            assert result.exit_code == 0
+            assert "PASS" in result.output
+
+    def test_quality_gaps_fail(self, runner: CliRunner) -> None:
+        """Test gaps subcommand returns FAIL when orphaned requirements exist."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.list_sprints.return_value = [
+                {"id": "PROJ-S0001", "status": "active"},
+            ]
+            mock_storage.get_sprint_prds.return_value = [{"id": "PROJ-P0001"}]
+            mock_storage.get_coverage_stats.return_value = {
+                "total": 5,
+                "linked": 3,
+                "orphaned": 2,
+            }
+            mock_storage.get_orphaned_requirements.return_value = [
+                {"id": "R1", "req_number": "FR-001", "summary": "Missing", "prd_id": "PROJ-P0001"},
+            ]
+            mock_storage.get_requirements.return_value = []
+            result = runner.invoke(main, ["quality", "gaps"])
+            assert result.exit_code == 0
+            assert "FAIL" in result.output
+            assert "Orphaned" in result.output
+
+    def test_quality_reclassify(self, runner: CliRunner) -> None:
+        """Test reclassify subcommand updates depth."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_requirement.return_value = {
+                "id": "REQ-001",
+                "prd_id": "P001",
+                "req_type": "FR",
+                "req_number": "FR-001",
+                "summary": "Test req",
+                "depth": "structural",
+            }
+            result = runner.invoke(
+                main, ["quality", "reclassify", "REQ-001", "--depth", "behavioral"]
+            )
+            assert result.exit_code == 0
+            assert "structural -> behavioral" in result.output
+            mock_storage.upsert_requirement.assert_called_once()
+
+    def test_quality_reclassify_not_found(self, runner: CliRunner) -> None:
+        """Test reclassify when requirement does not exist."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_cls.return_value.get_requirement.return_value = None
+            result = runner.invoke(
+                main, ["quality", "reclassify", "NOPE", "--depth", "behavioral"]
+            )
+            assert result.exit_code == 0
+            assert "not found" in result.output
+
+    def test_quality_skip_challenge(self, runner: CliRunner) -> None:
+        """Test skip-challenge records audit log entry."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.update_challenge_round.return_value = {"status": "skipped"}
+            result = runner.invoke(
+                main,
+                ["quality", "skip-challenge", "prd:PROJ-P0001:1", "--reason", "time"],
+            )
+            assert result.exit_code == 0
+            assert "skipped" in result.output
+            mock_storage.append_audit_log.assert_called_once()
+            call_kwargs = mock_storage.append_audit_log.call_args
+            assert call_kwargs[0][1] == "challenge_skipped"
+
+    def test_quality_skip_challenge_bad_id(self, runner: CliRunner) -> None:
+        """Test skip-challenge with malformed ID."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_cls.return_value.get_most_recent_project.return_value = {"id": "PROJ"}
+            result = runner.invoke(
+                main,
+                ["quality", "skip-challenge", "bad-id", "--reason", "test"],
+            )
+            assert result.exit_code == 0
+            assert "Invalid challenge ID" in result.output
+
+    def test_quality_resolve_escalation(self, runner: CliRunner) -> None:
+        """Test resolve-escalation updates round and logs."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.update_challenge_round.return_value = {"status": "resolved"}
+            result = runner.invoke(
+                main,
+                [
+                    "quality",
+                    "resolve-escalation",
+                    "prd:PROJ-P0001:1",
+                    "--resolution",
+                    "accepted",
+                ],
+            )
+            assert result.exit_code == 0
+            assert "resolved" in result.output
+            mock_storage.append_audit_log.assert_called_once()
+
+    def test_quality_waive(self, runner: CliRunner) -> None:
+        """Test waive records audit log with reason."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.get_requirement.return_value = {
+                "id": "REQ-001",
+                "req_number": "FR-001",
+                "summary": "Test",
+            }
+            result = runner.invoke(
+                main,
+                ["quality", "waive", "REQ-001", "--reason", "deferred"],
+            )
+            assert result.exit_code == 0
+            assert "waived" in result.output
+            mock_storage.append_audit_log.assert_called_once()
+            call_args = mock_storage.append_audit_log.call_args
+            assert call_args[1]["details"]["reason"] == "deferred"
+
+    def test_quality_waive_not_found(self, runner: CliRunner) -> None:
+        """Test waive when requirement does not exist."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.get_most_recent_project.return_value = {"id": "PROJ"}
+            mock_storage.get_requirement.return_value = None
+            result = runner.invoke(
+                main,
+                ["quality", "waive", "NOPE", "--reason", "test"],
+            )
+            assert result.exit_code == 0
+            assert "not found" in result.output

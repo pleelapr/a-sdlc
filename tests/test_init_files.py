@@ -7,11 +7,14 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from a_sdlc.cli_targets import CLAUDE_TARGET, GEMINI_TARGET
 from a_sdlc.core.init_files import (
     _load_template,
     ensure_global_lesson_learn,
     generate_claude_md,
     generate_config_yaml,
+    generate_context_file,
+    generate_gemini_md,
     generate_init_files,
     generate_lesson_learn,
 )
@@ -54,6 +57,8 @@ class TestLoadTemplate:
         assert "testing:" in content
         assert "review:" in content
         assert "git:" in content
+        assert "daemon:" in content
+        assert "orchestrator:" in content
 
     def test_raises_for_missing_template(self):
         with pytest.raises(FileNotFoundError):
@@ -215,6 +220,25 @@ class TestGenerateConfigYaml:
         assert "auto_merge:" in content
         assert "worktree_enabled:" in content
 
+    def test_contains_daemon_section(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "daemon:" in content
+        assert "max_turns:" in content
+        assert "mode: session" in content
+        assert "supervised: false" in content
+        assert "schedules:" in content
+        assert "notifications:" in content
+
+    def test_daemon_section_has_sensible_defaults(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        daemon = parsed.get("daemon", {})
+        assert daemon["max_turns"] == 200
+        assert daemon["mode"] == "session"
+        assert daemon["supervised"] is False
+
     def test_has_yaml_comments(self, temp_project):
         generate_config_yaml(temp_project)
         content = (temp_project / ".sdlc" / "config.yaml").read_text()
@@ -227,6 +251,77 @@ class TestGenerateConfigYaml:
         assert "testing" in parsed
         assert "review" in parsed
         assert "git" in parsed
+        assert "daemon" in parsed
+
+    def test_contains_objective_section(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "objective:" in content
+
+    def test_objective_section_has_max_iterations(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        objective = parsed.get("objective", {})
+        assert objective["max_iterations"] == 5
+
+    def test_objective_section_has_max_turns(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        objective = parsed.get("objective", {})
+        assert objective["max_turns"] == 500
+
+    def test_objective_section_has_evaluation_commands(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        objective = parsed.get("objective", {})
+        evaluation = objective.get("evaluation", {})
+        assert evaluation["commands"] == []
+
+    def test_contains_orchestrator_section(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        assert "orchestrator:" in content
+
+    def test_orchestrator_section_has_enabled_flag(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        orchestrator = parsed.get("orchestrator", {})
+        assert orchestrator["enabled"] is True
+
+    def test_orchestrator_section_has_challenger_pairings(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        orchestrator = parsed.get("orchestrator", {})
+        pairings = orchestrator.get("challenger_pairings", {})
+        assert "prd" in pairings
+        assert "design" in pairings
+        assert "implementation" in pairings
+
+    def test_orchestrator_section_has_max_iterations(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        orchestrator = parsed.get("orchestrator", {})
+        assert orchestrator["max_iterations"] == 5
+
+    def test_orchestrator_section_has_polling_interval(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        orchestrator = parsed.get("orchestrator", {})
+        assert orchestrator["polling_interval"] == 30
+
+    def test_orchestrator_section_has_max_turns_per_phase(self, temp_project):
+        generate_config_yaml(temp_project)
+        content = (temp_project / ".sdlc" / "config.yaml").read_text()
+        parsed = yaml.safe_load(content)
+        orchestrator = parsed.get("orchestrator", {})
+        assert orchestrator["max_turns_per_phase"] == 200
 
 
 class TestEnsureGlobalLessonLearn:
@@ -252,7 +347,7 @@ class TestGenerateInitFiles:
     """Tests for generate_init_files orchestrator."""
 
     def test_generates_all_files(self, temp_project, temp_global_dir):
-        result = generate_init_files(temp_project, "My Project")
+        result = generate_init_files(temp_project, "My Project", targets=[CLAUDE_TARGET])
         assert len(result["results"]) == 4
 
         statuses = [r["status"] for r in result["results"]]
@@ -264,8 +359,8 @@ class TestGenerateInitFiles:
         assert (temp_global_dir / "lesson-learn.md").exists()
 
     def test_idempotent_on_second_run(self, temp_project, temp_global_dir):
-        generate_init_files(temp_project, "My Project")
-        result = generate_init_files(temp_project, "My Project")
+        generate_init_files(temp_project, "My Project", targets=[CLAUDE_TARGET])
+        result = generate_init_files(temp_project, "My Project", targets=[CLAUDE_TARGET])
 
         statuses = [r["status"] for r in result["results"]]
         assert statuses == ["exists", "exists", "exists", "exists"]
@@ -277,7 +372,85 @@ class TestGenerateInitFiles:
         sdlc_dir.mkdir()
         (sdlc_dir / "lesson-learn.md").write_text("# Custom lessons")
 
-        generate_init_files(temp_project, "My Project")
+        generate_init_files(temp_project, "My Project", targets=[CLAUDE_TARGET])
 
         assert (temp_project / "CLAUDE.md").read_text() == "# Custom CLAUDE"
         assert (sdlc_dir / "lesson-learn.md").read_text() == "# Custom lessons"
+
+
+class TestGenerateGeminiMd:
+    """Tests for generate_gemini_md()."""
+
+    def test_creates_gemini_md(self, tmp_path):
+        result = generate_gemini_md(tmp_path, "Test Project")
+        assert result["status"] == "created"
+        gemini_path = tmp_path / "GEMINI.md"
+        assert gemini_path.exists()
+
+    def test_replaces_project_overview(self, tmp_path):
+        generate_gemini_md(tmp_path, "My Project")
+        content = (tmp_path / "GEMINI.md").read_text()
+        assert "My Project" in content
+        assert "{{PROJECT_OVERVIEW}}" not in content
+
+    def test_replaces_dev_commands(self, tmp_path):
+        generate_gemini_md(tmp_path, "Test")
+        content = (tmp_path / "GEMINI.md").read_text()
+        assert "{{DEVELOPMENT_COMMANDS}}" not in content
+
+    def test_contains_managed_marker(self, tmp_path):
+        generate_gemini_md(tmp_path, "Test")
+        content = (tmp_path / "GEMINI.md").read_text()
+        assert "<!-- a-sdlc:managed -->" in content
+
+    def test_contains_gemini_reference(self, tmp_path):
+        generate_gemini_md(tmp_path, "Test")
+        content = (tmp_path / "GEMINI.md").read_text()
+        assert "Gemini CLI" in content
+
+    def test_skips_if_exists(self, tmp_path):
+        (tmp_path / "GEMINI.md").write_text("existing")
+        result = generate_gemini_md(tmp_path, "Test")
+        assert result["status"] == "exists"
+        assert (tmp_path / "GEMINI.md").read_text() == "existing"
+
+    def test_overwrites_if_flag_set(self, tmp_path):
+        (tmp_path / "GEMINI.md").write_text("old")
+        result = generate_gemini_md(tmp_path, "Test", overwrite=True)
+        assert result["status"] == "created"
+        assert "Gemini CLI" in (tmp_path / "GEMINI.md").read_text()
+
+
+class TestGenerateContextFile:
+    """Tests for generate_context_file()."""
+
+    def test_claude_target_generates_claude_md(self, tmp_path):
+        generate_context_file(tmp_path, "Test", CLAUDE_TARGET)
+        assert (tmp_path / "CLAUDE.md").exists()
+
+    def test_gemini_target_generates_gemini_md(self, tmp_path):
+        generate_context_file(tmp_path, "Test", GEMINI_TARGET)
+        assert (tmp_path / "GEMINI.md").exists()
+
+
+class TestGenerateInitFilesMultiTarget:
+    """Tests for multi-target generate_init_files()."""
+
+    def test_explicit_targets(self, tmp_path):
+        generate_init_files(
+            tmp_path, "Test", targets=[CLAUDE_TARGET, GEMINI_TARGET]
+        )
+        assert (tmp_path / "CLAUDE.md").exists()
+        assert (tmp_path / "GEMINI.md").exists()
+
+    def test_single_target(self, tmp_path):
+        generate_init_files(
+            tmp_path, "Test", targets=[GEMINI_TARGET]
+        )
+        assert not (tmp_path / "CLAUDE.md").exists()
+        assert (tmp_path / "GEMINI.md").exists()
+
+    def test_auto_detect_with_mock(self, tmp_path):
+        with patch("a_sdlc.core.init_files.detect_targets", return_value=[CLAUDE_TARGET]):
+            generate_init_files(tmp_path, "Test")
+            assert (tmp_path / "CLAUDE.md").exists()

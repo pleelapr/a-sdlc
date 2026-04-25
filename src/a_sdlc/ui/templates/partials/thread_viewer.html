@@ -1,0 +1,217 @@
+<!-- Thread Viewer Partial: displays artifact thread entries and comment form -->
+<div id="thread-viewer-container" data-artifact-type="{{ artifact_type }}" data-artifact-id="{{ artifact_id }}">
+    {% if entries %}
+    <div class="thread-entries" id="thread-entries">
+        {% for entry in entries %}
+        <div class="thread-entry thread-entry-{{ entry.entry_type }}" id="thread-entry-{{ entry.id }}">
+            <div class="thread-entry-header">
+                <div class="thread-entry-meta">
+                    <span class="thread-persona-badge thread-persona-{{ entry.entry_type }}">
+                        {% if entry.entry_type == 'creation' %}
+                            <span class="thread-icon">+</span>
+                        {% elif entry.entry_type == 'challenge' %}
+                            <span class="thread-icon">!</span>
+                        {% elif entry.entry_type == 'revision' %}
+                            <span class="thread-icon">~</span>
+                        {% elif entry.entry_type == 'approval' %}
+                            <span class="thread-icon">&#10003;</span>
+                        {% elif entry.entry_type == 'escalation' %}
+                            <span class="thread-icon">^</span>
+                        {% elif entry.entry_type == 'user_intervention' %}
+                            <span class="thread-icon">@</span>
+                        {% else %}
+                            <span class="thread-icon">#</span>
+                        {% endif %}
+                    </span>
+                    <span class="thread-agent-name">
+                        {% if entry.entry_type == 'user_intervention' %}
+                            User
+                        {% elif entry.agent_persona %}
+                            {{ entry.agent_persona }}
+                        {% elif entry.agent_id %}
+                            {{ entry.agent_id }}
+                        {% else %}
+                            System
+                        {% endif %}
+                    </span>
+                    <span class="thread-entry-type badge badge-{{ 'info' if entry.entry_type == 'creation' else 'danger' if entry.entry_type == 'challenge' else 'warning' if entry.entry_type in ['revision', 'escalation'] else 'success' if entry.entry_type == 'approval' else 'info' }}">
+                        {{ entry.entry_type.replace('_', ' ').title() }}
+                    </span>
+                    {% if entry.round_number and entry.round_number > 1 %}
+                    <span class="thread-round">Round {{ entry.round_number }}</span>
+                    {% endif %}
+                </div>
+                <div class="thread-entry-time">
+                    {{ entry.created_at[:16].replace('T', ' ') if entry.created_at else '' }}
+                </div>
+            </div>
+            <div class="thread-entry-content markdown" id="thread-content-{{ entry.id }}">
+                <!-- Rendered via JS -->
+            </div>
+            <script>
+                (function() {
+                    var raw = {{ entry.content | tojson | safe if entry.content else '""' }};
+                    var el = document.getElementById('thread-content-{{ entry.id }}');
+                    if (raw && typeof marked !== 'undefined') {
+                        el.innerHTML = marked.parse(raw);
+                    } else if (raw) {
+                        el.textContent = raw;
+                    } else {
+                        el.innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No content</span>';
+                    }
+                })();
+            </script>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding: 2rem;">
+        <p>No thread entries yet.</p>
+        <p style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--text-muted);">
+            Thread entries appear here when agents work on this artifact
+            during pipeline runs, or when you post a comment below.
+        </p>
+    </div>
+    {% endif %}
+
+    <!-- Comment Form -->
+    <div class="thread-comment-form" id="thread-comment-form">
+        <h4 style="margin-bottom: 0.75rem; font-size: 0.875rem; color: var(--text-muted);">Post a Comment</h4>
+        <textarea id="thread-comment-input"
+                  placeholder="Type your comment here (Markdown supported)..."
+                  rows="3"
+                  style="
+                      width: 100%;
+                      padding: 0.75rem;
+                      font-family: monospace;
+                      font-size: 0.875rem;
+                      background: var(--bg);
+                      border: 1px solid var(--border);
+                      border-radius: 6px;
+                      color: var(--text);
+                      resize: vertical;
+                  "></textarea>
+        <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; align-items: center;">
+            <button class="btn btn-primary" id="thread-post-btn"
+                    onclick="postThreadComment()">
+                Post Comment
+            </button>
+            <span id="thread-post-status" style="font-size: 0.8rem; color: var(--text-muted);"></span>
+        </div>
+    </div>
+</div>
+
+<style>
+    .thread-entries {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .thread-entry {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.75rem 1rem;
+        border-left: 3px solid var(--border);
+    }
+
+    .thread-entry-creation { border-left-color: var(--accent); }
+    .thread-entry-challenge { border-left-color: var(--danger); }
+    .thread-entry-revision { border-left-color: var(--warning); }
+    .thread-entry-approval { border-left-color: var(--success); }
+    .thread-entry-escalation { border-left-color: #f0883e; }
+    .thread-entry-user_intervention { border-left-color: #a371f7; }
+
+    .thread-entry-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .thread-entry-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .thread-persona-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+
+    .thread-persona-creation { background: rgba(88, 166, 255, 0.2); color: var(--accent); }
+    .thread-persona-challenge { background: rgba(248, 81, 73, 0.2); color: var(--danger); }
+    .thread-persona-revision { background: rgba(210, 153, 34, 0.2); color: var(--warning); }
+    .thread-persona-approval { background: rgba(63, 185, 80, 0.2); color: var(--success); }
+    .thread-persona-escalation { background: rgba(240, 136, 62, 0.2); color: #f0883e; }
+    .thread-persona-user_intervention { background: rgba(163, 113, 247, 0.2); color: #a371f7; }
+
+    .thread-icon {
+        font-size: 0.8rem;
+        line-height: 1;
+    }
+
+    .thread-agent-name {
+        font-weight: 600;
+        font-size: 0.875rem;
+    }
+
+    .thread-entry-type {
+        font-size: 0.7rem;
+    }
+
+    .thread-round {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        padding: 0.15rem 0.4rem;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+    }
+
+    .thread-entry-time {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        white-space: nowrap;
+    }
+
+    .thread-entry-content {
+        font-size: 0.875rem;
+        line-height: 1.6;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+
+    .thread-entry-content::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .thread-entry-content::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+    }
+
+    .thread-comment-form {
+        padding: 1rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+    }
+
+    @media (max-width: 768px) {
+        .thread-entry-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+    }
+</style>

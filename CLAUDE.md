@@ -182,16 +182,23 @@ Content editing pattern: `create_*()` returns `file_path` → agent writes conte
 ### Sprint Tools
 - `create_sprint(title, goal)` — Creates sprint
 - `get_sprint(sprint_id)` — Returns sprint with PRD count
-- `add_prd_to_sprint(prd_id, sprint_id)` — Links PRD to sprint
+- `update_sprint(sprint_id, title?, goal?, status?)` — Update sprint metadata (use `complete_sprint` for completion)
+- `complete_sprint(sprint_id)` — Complete sprint with quality gate checks
+- `manage_sprint_prds(action, prd_id, sprint_id?)` — Add/remove PRDs from sprint (action: "add"|"remove")
 - `get_sprint_prds(sprint_id)` — All PRDs in sprint
 - `get_sprint_tasks(sprint_id)` — All tasks (derived via PRDs)
 
 ### Sync Tools
-- `configure_linear(api_key, team_id)` / `configure_jira(url, email, api_token, project_key)`
+- `manage_integration(action, system?, config?)` — Manage integrations (action: "configure"|"list"|"remove")
 - `import_from_linear()` / `import_from_jira()` — Import cycles/sprints
-- `sync_sprint(sprint_id)` — Bidirectional sync
-- `sync_sprint_to(sprint_id)` / `sync_sprint_from(sprint_id)` — One-way sync
+- `sync_sprint(sprint_id, direction?)` — Sync sprint (direction: "bidirectional"|"push"|"pull")
+- `sync_prd(prd_id, direction?)` — Sync PRD (direction: "bidirectional"|"push"|"pull")
+- `manage_sync_mapping(action, entity_type, entity_id, system?, external_id?)` — Link/unlink sync mappings
 - `list_sync_mappings()` — View all mappings
+
+### Review Tools
+- `submit_review(task_id, reviewer_type, verdict, findings?, test_output?)` — Submit review (reviewer_type: "self"|"subagent")
+- `get_review_evidence(task_id)` — Get all review evidence for a task
 
 ### Quality Tools
 - `log_correction(context_type, context_id, category, description)` — Log a correction to `.sdlc/corrections.log`

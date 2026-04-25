@@ -482,6 +482,7 @@ After all PRDs are processed, display:
 - Design architecture: /sdlc:prd-architect "{prd-id}"  ← recommended before splitting
 - Split into tasks: /sdlc:prd-split "{prd-id}"
 - Investigate feasibility: /sdlc:prd-investigate "{prd-id}"
+- Run autonomous pipeline: `a-sdlc run goal "implement <PRD titles>"`
 ```
 
 ## ⛔ STOP HERE

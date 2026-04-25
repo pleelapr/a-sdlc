@@ -2,23 +2,23 @@
 
 ## Purpose
 
-Execute sprint tasks in parallel using multiple Claude Code Task agents. Automatically detects whether the sprint has **one PRD** (simple mode) or **multiple PRDs** (isolated mode with git worktrees). Independent tasks run concurrently while respecting dependency chains.
+Execute sprint tasks using subagent dispatch. Automatically detects whether the sprint has **one PRD** (simple mode) or **multiple PRDs** (isolated mode with git worktrees). Independent tasks run concurrently while respecting dependency chains.
 
 ---
 
 ## Agent Execution vs Task Management
 
-This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
+This skill launches subagents to execute a-sdlc tasks. Key distinction:
 
-- **Agent = Execution unit** (launched via Claude Code's `Task` tool)
+- **Agent = Execution unit** (launched via the orchestrator's `Task` tool)
 - **a-sdlc Task = Work item** (retrieved/updated via `mcp__asdlc__*` tools)
 
 **Each agent MUST:**
 1. Call `mcp__asdlc__get_task(task_id)` to fetch task details
 2. Execute the implementation steps from the task content
-3. Submit self-review evidence via `mcp__asdlc__submit_self_review()` — the **orchestrator** handles task completion after review
+3. Submit self-review evidence via `mcp__asdlc__submit_review(reviewer_type='self')` — the **orchestrator** handles task completion after review
 
-**Do NOT** create intermediate Claude Code tasks (TodoWrite/TaskCreate). The a-sdlc task IS the work item.
+**Do NOT** create intermediate task-tracking items (TodoWrite/TaskCreate). The a-sdlc task IS the work item.
 
 ---
 
@@ -51,7 +51,7 @@ This skill launches Claude Code agents to execute a-sdlc tasks. Key distinction:
 3. Use `mcp__asdlc__get_sprint_tasks(sprint_id, group_by_prd=True)` to load tasks grouped by PRD
 4. **Check git safety configuration** before deciding on isolated mode:
    ```
-   config = mcp__asdlc__get_git_safety_config()
+   config = mcp__asdlc__manage_git_safety("get")
    worktree_enabled = config["config"]["effective"]["worktree_enabled"]
    ```
 5. **Detect execution mode**:
@@ -78,7 +78,7 @@ PRD count: 2 → Using SIMPLE MODE (worktree isolation disabled)
 
   WARNING: Multiple PRDs will run sequentially in the working directory.
   Enable worktree isolation for parallel PRD execution:
-    mcp__asdlc__configure_git_safety(worktree_enabled=True)
+    mcp__asdlc__manage_git_safety("configure", worktree_enabled=True)
 
   PROJ-P0001 (Auth Feature): 3 tasks
   PROJ-P0002 (User Profile): 2 tasks
@@ -106,6 +106,145 @@ AskUserQuestion({
 ```
 
 If only 1 PRD is detected, or if `worktree_enabled` is False (even with multiple PRDs), skip ahead to **Step 3** (Simple Mode).
+
+### Step 1.7: Pre-Flight Quality Check
+
+**Config-gated**: Only runs if quality is enabled. If `.sdlc/config.yaml` does not exist, or `quality.enabled` is `false` or absent, skip this entire section (backward compatibility per AC-007).
+
+```python
+# Load quality config
+quality_config = load_quality_config()  # from quality_config.py
+
+if not quality_config.enabled:
+    # Quality system disabled — skip pre-flight quality check
+    pass
+else:
+    # 1. Run sprint quality report
+    report = mcp__asdlc__get_quality_report("sprint", sprint_id=sprint_id)
+
+    if report["status"] == "ok":
+        # 2. Display coverage summary
+        agg = report["aggregate"]
+        print(f"""
+Pre-Flight Quality Report for {sprint_id}:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Requirements: {agg["linked_requirements"]}/{agg["total_requirements"]} linked
+  Orphaned:     {agg["orphaned_requirements"]} requirements with no linked tasks
+  ACs:          {agg["verified_acs"]}/{agg["total_acs"]} verified
+  Scope drift:  {report["scope_drift"]["unlinked_count"]} tasks with no requirement links
+  Overall:      {"PASS" if report.get("pass", False) else "GAPS DETECTED"}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+
+        # 3. Check for unresolved PRD/design/split challenges
+        # Load challenge gate mode from quality config (default: "soft")
+        quality_cfg = {}
+        try:
+            cfg_path = Path(".sdlc/config.yaml")
+            if cfg_path.exists():
+                with open(cfg_path) as f:
+                    cfg = yaml.safe_load(f) or {}
+                quality_cfg = cfg.get("quality", {})
+        except Exception:
+            pass
+        challenge_cfg = quality_cfg.get("challenge", {}) if isinstance(quality_cfg, dict) else {}
+        challenge_gate_mode = challenge_cfg.get("gate", "soft") if isinstance(challenge_cfg, dict) else "soft"
+
+        for prd_report in report.get("prd_reports", []):
+            prd_id = prd_report["prd_id"]
+            for artifact_type in ["prd", "design", "split"]:
+                challenge_status = mcp__asdlc__get_challenge_status(
+                    artifact_type=artifact_type,
+                    artifact_id=prd_id
+                )
+                if challenge_status.get("challenge_status") not in ("resolved", "unchallenged"):
+                    if challenge_gate_mode == "hard":
+                        # BLOCK: unresolved challenge prevents sprint execution under hard gate
+                        print(f"  BLOCKED: {artifact_type} {prd_id} has unresolved challenge (hard gate) — status: {challenge_status['challenge_status']}")
+                        action = AskUserQuestion(
+                            f"Unresolved challenge on {artifact_type} {prd_id} blocks sprint execution (hard gate). How to proceed?",
+                            options=["Re-challenge now", "Waive and continue", "Abort sprint"]
+                        )
+                        if action == "Abort sprint":
+                            print("  Sprint aborted by user due to unresolved challenge.")
+                            return
+                        elif action == "Re-challenge now":
+                            print(f"  Re-challenge {artifact_type} {prd_id} before continuing.")
+                            mcp__asdlc__challenge_artifact(artifact_type=artifact_type, artifact_id=prd_id)
+                        else:
+                            print(f"  Waived challenge block on {artifact_type} {prd_id}. Continuing.")
+                    else:
+                        # Soft gate: warn and continue
+                        print(f"  WARNING (soft gate): {artifact_type} {prd_id} has unresolved challenge — status: {challenge_status['challenge_status']}")
+
+        # 4. If orphaned requirements or gaps exist, create remediation tasks (AC-021)
+        if agg["orphaned_requirements"] > 0 or not report.get("pass", True):
+            remediation_result = mcp__asdlc__create_remediation_tasks(sprint_id=sprint_id)
+            if remediation_result["status"] == "ok" and remediation_result.get("created_count", 0) > 0:
+                print(f"\n  Created {remediation_result['created_count']} remediation tasks:")
+                for rt in remediation_result.get("tasks", []):
+                    print(f"    {rt['task_id']}: {rt['title']}")
+                print("  Remediation tasks added to execution queue.")
+                # Re-fetch sprint tasks to include newly created remediation tasks
+                all_tasks = mcp__asdlc__get_sprint_tasks(sprint_id=sprint_id)
+                batches, unresolvable = build_batches(all_tasks["tasks"])
+                print(f"  Re-built execution plan: {len(batches)} batches with remediation tasks included.")
+            else:
+                print("  No remediation tasks needed or creation returned no tasks.")
+    else:
+        print(f"  Quality report failed: {report.get('message', 'unknown error')}. Proceeding without quality check.")
+```
+
+### Step 1.8: Agent Governance Integration
+
+**Config-gated**: Only runs if `governance.enabled` is `true` in `.sdlc/config.yaml`. If absent or `false`, skip this entire section (backward compatibility).
+
+```python
+# Load governance config
+from pathlib import Path
+import yaml
+
+config_path = Path(".sdlc/config.yaml")
+governance_enabled = False
+if config_path.exists():
+    with open(config_path) as f:
+        config = yaml.safe_load(f) or {}
+    governance_enabled = config.get("governance", {}).get("enabled", False)
+
+if governance_enabled:
+    # 1. Team health pre-flight
+    teams = mcp__asdlc__list_agent_teams(project_id=project_id)
+    for team in teams.get("teams", []):
+        health = mcp__asdlc__enforce_team_health(team_id=team["id"])
+        if health["status"] == "ok":
+            summary = health["summary"]
+            print(f"  Team '{health['team_name']}': "
+                  f"{summary['healthy']}/{summary['total_members']} healthy")
+            if summary["unhealthy"] > 0:
+                for action in health.get("actions_taken", []):
+                    print(f"    Action: {action['action']} on {action['agent_id']}: "
+                          f"{', '.join(action['issues'])}")
+
+    # 2. Auto-composition suggestion
+    compose = mcp__asdlc__auto_compose_team(sprint_id=sprint_id)
+    if compose["status"] == "ok" and compose.get("proposed_assignments"):
+        print(f"\n  Team composition suggestion for {sprint_id}:")
+        for assignment in compose["proposed_assignments"]:
+            print(f"    {assignment['display_name']} ({assignment['persona_type']}) "
+                  f"-> {assignment['assigned_component']} ({assignment['task_count']} tasks)")
+        if compose.get("coverage_gaps"):
+            print(f"    Coverage gaps: {compose['coverage_gaps']}")
+
+    # 3. Self-assessment for task routing
+    # During execution, before claiming each task, agents call:
+    #   assessment = mcp__asdlc__self_assess(agent_id=my_id, task_id=task_id)
+    #   if assessment["confidence"] < 40:
+    #       # Consider reassigning to a better-matched agent
+    print("\n  Governance pre-flight complete. Self-assessment enabled for task routing.")
+else:
+    # Governance disabled — skip all team health and composition checks
+    pass
+```
 
 ### 1.5. Resume from Checkpoint (if --resume)
 
@@ -320,18 +459,18 @@ Execution Plan ({B} batches, {M} tasks):
 **Concrete example:**
 ```
 Sprint: PROJ-S0001 — Week 4 Auth
-Mode: Simple (1 PRD)
+Mode: Simple (1 PRD), max_parallel=3
 Execution Plan (2 batches, 5 tasks):
 
   Batch 1 (3 tasks, independent):
-    PROJ-T00001: Set up OAuth config (auth)
-    PROJ-T00002: Create login endpoint (auth)
-    PROJ-T00003: Add user model fields (models)
+    PROJ-T00001: Set up OAuth config (auth) [light, 20 turns]
+    PROJ-T00002: Create login endpoint (auth) [medium, 50 turns]
+    PROJ-T00003: Add user model fields (models) [medium, 50 turns]
 
   Batch 2 (2 tasks, depend on Batch 1):
-    PROJ-T00004: Implement token refresh (auth)
+    PROJ-T00004: Implement token refresh (auth) [heavy, 80 turns]
       └─ depends on: PROJ-T00001
-    PROJ-T00005: Add logout endpoint (auth)
+    PROJ-T00005: Add logout endpoint (auth) [medium, 50 turns]
       └─ depends on: PROJ-T00002
 ```
 
@@ -465,263 +604,364 @@ AskUserQuestion({
 
 If `--dry-run` flag was passed, display the plan and stop here without asking for approval.
 
-### 3.5. Build Context Packages
+### 3.5. Build Dispatch Info
 
-Before launching task agents, the orchestrator builds a **context package** for each task. The context package is a single text block containing everything the subagent needs — the subagent never reads plan files directly.
+Before launching task agents, the orchestrator builds a **lightweight dispatch info** block for each task. The dispatch info contains ONLY identity and dependency data — the subagent loads its own content via MCP tools.
+
+**The orchestrator MUST NOT call** `get_task()`, `get_prd()`, `get_design()`, or `Read()` to build dispatch info. All data comes from the in-memory sprint task list already loaded in Step 1.
 
 ```python
-def build_context_package(task_id: str, completed_outcomes: dict[str, str]) -> str:
-    """Build an inline text context package for a task agent.
+def build_dispatch_info(task: dict, completed_outcomes: dict[str, dict]) -> str:
+    """Build a minimal dispatch info block for a task agent.
 
     The orchestrator calls this BEFORE dispatching each subagent.
-    Returns a single string that is injected into the agent prompt.
+    Returns a small string (~200-500 bytes) with task identity and
+    dependency outcomes only. The subagent self-loads full content.
+
+    When quality is enabled (FR-021), the dispatch info also includes
+    requirement context from get_task_requirements so the subagent
+    knows which FRs and ACs to verify during implementation.
 
     Args:
-        task_id: The task to build context for.
-        completed_outcomes: Map of {task_id: outcome_summary} for tasks
+        task: Task metadata from the sprint task list (already in memory).
+        completed_outcomes: Map of {task_id: outcome_dict} for tasks
             that have already finished in this sprint run.
     """
 
-    # --- 1. Task content (full) ---
-    task = mcp__asdlc__get_task(task_id=task_id)
-    task_content = task["content"]          # Complete markdown from file_path
-    task_meta = {
-        "id": task["id"],
-        "title": task["title"],
-        "status": task["status"],
-        "priority": task["priority"],
-        "component": task["component"],
-        "prd_id": task["prd_id"],
-    }
+    # --- 1. Task identity (from in-memory sprint task list) ---
+    info = f"""task_id: {task["id"]}
+title: {task["title"]}
+component: {task.get("component", "general")}
+priority: {task.get("priority", "medium")}
+prd_id: {task.get("prd_id", "none")}"""
 
-    # --- 2. Parent PRD content (filtered) ---
-    prd_section = ""
-    if task["prd_id"]:
-        prd = mcp__asdlc__get_prd(prd_id=task["prd_id"])
-        prd_section = filter_prd_for_task(prd["content"], task_meta)
+    # --- 2. Direct-dependency outcomes ONLY ---
+    deps = task.get("dependencies", [])
+    if deps:
+        dep_lines = []
+        for dep_id in deps:
+            if dep_id in completed_outcomes:
+                outcome = completed_outcomes[dep_id]
+                summary = outcome.get("summary", "completed") if isinstance(outcome, dict) else str(outcome)
+                dep_lines.append(f"  {dep_id}: {summary}")
+        if dep_lines:
+            info += "\ndependency_outcomes:\n" + "\n".join(dep_lines)
 
-    # --- 3. Design doc content (filtered) ---
-    design_section = ""
-    if task["prd_id"]:
-        try:
-            design = mcp__asdlc__get_design(prd_id=task["prd_id"])
-            design_section = filter_design_for_task(design["content"], task_meta)
-        except NotFound:
-            pass  # No design doc exists — skip
+    # --- 3. Requirement context injection (FR-021, quality-gated) ---
+    # Only when quality is enabled — adds linked requirements to dispatch info
+    # so the subagent knows which FRs/ACs to verify during implementation.
+    quality_config = load_quality_config()
+    if quality_config.enabled:
+        reqs = mcp__asdlc__get_task_requirements(task_id=task["id"])
+        if reqs.get("status") == "ok" and reqs.get("total", 0) > 0:
+            info += "\nlinked_requirements:"
+            for req_type, req_list in reqs.get("requirements", {}).items():
+                for req in req_list:
+                    req_id = req.get("req_id", req.get("id", "unknown"))
+                    summary = req.get("summary", "")
+                    depth = req.get("depth", "")
+                    verified = req.get("verified", False)
+                    depth_label = f" [{depth}]" if depth else ""
+                    verified_label = " (verified)" if verified else " (unverified)"
+                    info += f"\n  {req_type}: {req_id}{depth_label} — {summary}{verified_label}"
+            # Include required evidence types for ACs
+            ac_reqs = reqs.get("requirements", {}).get("ac", [])
+            if ac_reqs:
+                info += "\nac_evidence_required:"
+                for ac in ac_reqs:
+                    ac_id = ac.get("req_id", ac.get("id", "unknown"))
+                    depth = ac.get("depth", "structural")
+                    evidence = "test" if depth == "behavioral" else "manual"
+                    info += f"\n  {ac_id}: evidence_type={evidence} depth={depth}"
 
-    # --- 4. Codebase artifacts (concise) ---
-    codebase_section = ""
-    context = mcp__asdlc__get_context()
-    if context["artifacts"]["scan_status"] in ("complete", "partial"):
-        summary = Read(".sdlc/artifacts/codebase-summary.md")
-        workflows = Read(".sdlc/artifacts/key-workflows.md")
-        codebase_section = extract_relevant_sections(
-            summary, workflows, task_meta["component"]
-        )
-
-    # --- 5. Completed task outcomes (from this sprint run) ---
-    dependency_outcomes = ""
-    for dep_id in task.get("dependencies", []):
-        if dep_id in completed_outcomes:
-            dependency_outcomes += f"- {dep_id}: {completed_outcomes[dep_id]}\n"
-
-    # --- Assemble inline text package ---
-    return assemble_package(
-        task_content, task_meta, prd_section,
-        design_section, codebase_section, dependency_outcomes
-    )
+    return info
 ```
 
-#### Context Package Output Structure
+#### Dispatch Info Output Structure
 
-The assembled package is a single text block injected into the agent prompt. No file paths — all content is inline.
+The dispatch info is a compact block (~200-500 bytes) injected into the agent prompt. The subagent loads full content via MCP tools.
 
 ```
-## Task
-ID: PROJ-T00001
-Title: Set up OAuth config
-Priority: high | Component: auth | PRD: PROJ-P0001
-
-{full task markdown content}
-
-## Parent PRD (filtered)
-{PRD sections relevant to this task — see filtering rules below}
-
-## Design (filtered)
-{Design sections relevant to this task — see filtering rules below}
-
-## Codebase Context
-- Stack: Python 3.12, Click CLI, SQLite
-- Patterns: repository pattern, hybrid storage (DB + markdown files)
-- Conventions: snake_case, src/ layout, uv for dependency management
-- Key workflows: create_*() → file_path → Write content → update_*() for metadata
-
-## Prior Task Outcomes
-- PROJ-T00003: Added user model fields to src/models/user.py (migration 004)
+task_id: PROJ-T00004
+title: Implement token refresh
+component: auth
+priority: high
+prd_id: PROJ-P0001
+dependency_outcomes:
+  PROJ-T00001: Added OAuth config to src/auth/config.py
 ```
 
-#### Conciseness Rules
+> **Design rationale**: The orchestrator never pre-reads task/PRD/design content. Subagents self-load via `get_task()`, `get_prd()`, and `get_design()` MCP calls, which populate their own context window — not the orchestrator's. This reduces orchestrator context consumption by ~96% per task dispatch.
 
-PRD and design documents can be large. Filter them to include only what the task agent needs.
+#### Batch-Aware Shared Context
 
-**PRD filtering** (`filter_prd_for_task`):
+The orchestrator builds shared context **once per batch** and injects it into every subprocess via the `shared_context` parameter. This replaces ~20-50KB of per-agent file reads with a ~2-3KB pre-loaded summary.
 
-- **Always include**: Title, overview/summary, tech stack, constraints
-- **Include if matches task component**: The functional requirement section(s) that the task traces to (match via `### Traces To` entries in task content)
-- **Exclude**: Sections for unrelated components, full appendices, revision history, stakeholder lists
+```python
+def build_batch_shared_context() -> str:
+    """Build shared context once per batch, injected into every subprocess.
 
-**Design doc filtering** (`filter_design_for_task`):
+    Reads common files once and compresses them into a compact summary.
+    This prevents N subagents from each independently reading the same
+    ~20KB architecture.md, ~5KB config.yaml, and ~3KB lesson-learn.md.
 
-- **Always include**: Architecture overview, API contracts the task must conform to
-- **Include if matches task component**: Component-specific design decisions, data models the task touches
-- **Exclude**: Components the task does not interact with, deployment diagrams, full sequence diagrams for other flows
+    Target: ~2-3KB total (replaces ~20-50KB of per-agent reads).
 
-**Codebase artifact extraction** (`extract_relevant_sections`):
+    Returns:
+        Compact string with architecture summary, config flags, and lessons.
+    """
+    sections = []
 
-- From `codebase-summary.md`: Tech stack, naming conventions, architectural patterns
-- From `key-workflows.md`: Only workflows the task's component participates in
-- If no artifacts available: Omit section entirely (agents can still read files as needed)
+    # 1. Architecture summary (~1KB compressed from architecture.md)
+    try:
+        arch = Read(".sdlc/artifacts/architecture.md")
+        # Extract key sections only: project structure, conventions, patterns
+        # Compress to ~1KB — enough for agents to follow conventions
+        sections.append("### Architecture (compressed)\n" + compress_to_summary(arch, max_chars=1000))
+    except FileNotFoundError:
+        pass
 
-**Completed outcomes**: One-line summary per dependency — what changed and where. Omit tasks that are not direct dependencies.
+    # 2. Config flags as compact JSON (~200B — testing, git, review settings)
+    try:
+        config = Read(".sdlc/config.yaml")
+        # Extract only the flags agents need: testing.commands, git.auto_commit,
+        # review.enabled, quality.enabled
+        config_summary = extract_config_flags(config)
+        sections.append("### Config Flags\n```json\n" + json.dumps(config_summary, indent=0) + "\n```")
+    except FileNotFoundError:
+        pass
 
-> **Cross-reference**: `task-start.md` uses the same pattern for single-task context loading (component context from `architecture.md`, traceability display). The context package here extends that pattern for batch dispatch.
+    # 3. Top lessons from lesson-learn.md (~500B)
+    try:
+        lessons = Read(".sdlc/lesson-learn.md")
+        # Extract MUST rules only — agents need these for compliance
+        must_rules = [line for line in lessons.split("\n")
+                      if "MUST" in line or line.startswith("- **MUST")][:10]
+        if must_rules:
+            sections.append("### Key Lessons (MUST rules)\n" + "\n".join(must_rules))
+    except FileNotFoundError:
+        pass
 
-### 4. Dispatch Task Agents (Sequential Within Batch)
+    return "\n\n".join(sections)
+```
 
-Tasks within a batch execute **sequentially** — the orchestrator dispatches one subagent at a time, waits for it to complete, records the outcome, then dispatches the next. This ensures deterministic execution order and allows prior task outcomes to flow into subsequent context packages.
+#### Task Complexity Classification
+
+Tasks are classified by complexity to set appropriate `max_turns` — heavy tasks get more room, light tasks are capped early.
+
+```python
+def classify_max_turns(task: dict) -> int:
+    """Classify task complexity and return appropriate max_turns.
+
+    Classification (can be customized via .sdlc/config.yaml sprint.dispatch):
+    - Heavy (80 turns): critical priority, database/migration keywords, new modules
+    - Light (20 turns): test-only, config, docs, small additions
+    - Medium (50 turns): everything else
+
+    The orchestrator displays this classification in the execution plan.
+    """
+    title = task.get("title", "").lower()
+    component = task.get("component", "").lower()
+    priority = task.get("priority", "medium")
+
+    # Heavy indicators
+    heavy_keywords = ["migration", "schema", "refactor", "redesign", "architect"]
+    if priority == "critical" or any(kw in title for kw in heavy_keywords):
+        return 80
+
+    # Light indicators
+    light_keywords = ["test", "doc", "readme", "config", "typo", "comment", "lint"]
+    light_components = ["test", "qa", "docs", "documentation"]
+    if any(kw in title for kw in light_keywords) or component in light_components:
+        return 20
+
+    # Medium (default)
+    return 50
+```
+
+### 4. Dispatch Task Agents (Capped Parallelism Within Batch)
+
+Tasks within a batch dispatch up to `max_parallel` concurrently — the orchestrator fills available slots, polls all active subprocesses, and fills new slots as tasks complete. This balances throughput against API rate limits and token consumption.
 
 **Key principles:**
-- Each task gets a fresh subagent via Claude Code's `Task` tool with `run_in_background=false`
-- The subagent receives a curated context package (from Step 3.5) — it never reads plan files directly
-- The subagent submits self-review evidence via `submit_self_review()` and returns — it does NOT dispatch reviewer subagents or mark tasks complete
+- Each task gets a fresh subprocess via `mcp__asdlc__execute_task()`
+- The subagent receives lightweight dispatch info (from Step 3.5) plus pre-loaded shared context and self-loads task-specific content via MCP tools
+- The subagent submits self-review evidence via `submit_review(reviewer_type='self')` and returns — it does NOT dispatch reviewer subagents or mark tasks complete
 - **Review dispatch happens at the orchestrator level** (Step 4.4) — the orchestrator checks self-review, optionally dispatches a reviewer subagent, and handles the approve/reject flow
-- If the subagent encounters unresolvable questions, it surfaces them via `AskUserQuestion` — the orchestrator does NOT need to intercept these; they propagate to the user automatically
+- **Parallelism is capped** at `max_parallel` (default: 3) to prevent token overconsumption
+- **Fallback policy**: If `execute_task` returns `{"status": "error"}`, the task is marked BLOCKED — do NOT fall back to Task tool subagents (which share context and cause token bloat)
 
-#### Subagent Prompt Template
+#### Subprocess Dispatch via `execute_task` (Non-Blocking)
 
-For each task in the current batch, the orchestrator builds and dispatches:
+For each task in the current batch, the orchestrator dispatches a **memory-safe subprocess** via the `execute_task` MCP tool. The call is **non-blocking** — it returns immediately with a handle (`pid` + `log_path`). The orchestrator MUST then poll `check_execution()` every 30 seconds to monitor progress, detect stalls, and retrieve the final outcome.
 
-```
-Task(
-  description="Implement {task_id}: {task_title}",
-  prompt="""You are implementing task {task_id}: {task_title}
-
-{context_package}
-
-## Instructions
-
-1. Read the task content above — it contains everything you need
-2. Implement the task following the Implementation Steps section
-3. Write tests as specified in the Acceptance Criteria
-4. When you discover and fix issues during implementation, log them:
-   mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what was corrected and why}')
-   Categories: testing, code-quality, task-completeness, integration, documentation, architecture, security, performance, process
-5. Read .sdlc/config.yaml — check `git.auto_commit`:
-   - If `true`: git add <files> && git commit -m "[{task_id}] {task_title}"
-   - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
-6. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
-
-## Review Gates
-
-After completing implementation and tests:
-1. Self-review: Re-read the task spec, verify each acceptance criterion
-   - Read .sdlc/config.yaml — check `testing.relevance.enabled`
-   - If relevance detection is enabled:
-     a. Assess change scope based on files you modified:
-        - backend-logic: .py files with business logic → RUN unit tests
-        - api-endpoints: route handlers, middleware → RUN unit + integration
-        - database: models, migrations → RUN unit + integration
-        - documentation: .md files, docstrings, skill templates → SKIP all tests
-        - configuration: .yaml, .env, build configs → SKIP unit tests
-        - test-only: test files only → RUN unit tests
-     b. For SKIP verdicts, output rationale: "Skipping unit tests: documentation-only change (modified {file})"
-     c. For RUN verdicts, execute the command from `testing.commands.{type}` and capture output
-   - If relevance detection is disabled or absent:
-     Run ALL commands under `testing.commands` (e.g. pytest, lint, typecheck)
-   - If no config exists, run the project's default test command
-   - Capture and include ACTUAL test output for any tests run — no self-assertions without evidence
-   - If any executed test fails, fix the issues before proceeding
-2. Call `mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
-3. If self-review verdict is 'fail', fix the issues and re-submit until 'pass'
-4. Log corrections for EVERY finding discovered during implementation:
-   mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what_was_found_and_fixed}')
-5. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
-6. If you encounter questions you cannot resolve from the provided context, surface them via AskUserQuestion — do NOT guess
-
-## CRITICAL: Structured Output
-
-Your FINAL output MUST end with this exact block. The orchestrator parses it
-for progress tracking. Do NOT omit it. Do NOT add text after it.
-
----TASK-OUTCOME---
-verdict: PASS|FAIL|BLOCKED
-files_changed: file1.py, file2.py
-tests: {passed}/{total}
-review: APPROVE|REQUEST_CHANGES|ESCALATE
-summary: {one-line description of what was done}
-corrections: {number of corrections logged}
----END-OUTCOME---
-
-Replace the placeholders with actual values from your implementation:
-- verdict: PASS if task completed successfully, FAIL if it could not be completed, BLOCKED if dependencies are missing
-- files_changed: comma-separated list of files you modified
-- tests: number of tests passed / total tests run (e.g., "12/12")
-- review: the final review verdict (APPROVE, REQUEST_CHANGES, or ESCALATE)
-- summary: one sentence describing what you implemented
-- corrections: integer count of corrections logged via log_correction()
-""",
-  subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}"
+```python
+# Step 1: Launch (returns immediately)
+handle = mcp__asdlc__execute_task(
+    task_id=task["id"],
+    executor="claude",    # or read from .sdlc/config.yaml daemon.adapter
+    max_turns=classify_max_turns(task),  # heavy=80, medium=50, light=20
+    dispatch_info=dispatch_info,  # from build_dispatch_info() — ~200-500 bytes
+    shared_context=batch_shared_context,  # pre-loaded once per batch — ~2-3KB
 )
+# handle = {"status": "launched", "pid": 12345, "log_path": "~/.a-sdlc/exec-logs/PROJ-T00001.jsonl"}
+
+# IMPORTANT: If execute_task returns {"status": "error"}, mark task as BLOCKED
+# Do NOT fall back to Task tool subagents (causes context bloat)
+if handle.get("status") == "error":
+    mcp__asdlc__log_correction(
+        context_type="task", context_id=task["id"],
+        category="process", description=f"execute_task failed: {handle.get('error', 'unknown')}")
+    mcp__asdlc__update_task(task_id=task["id"], status="blocked")
+    record_outcome(task, {"verdict": "BLOCKED", "summary": f"Dispatch failed: {handle.get('error', '')[:100]}"}, outcomes)
+    continue  # Skip to next task
+
+# Step 2: Poll until completion (MANDATORY — never fire-and-forget)
+result = poll_until_completion(handle, task_id=task["id"])
+# result = {"status": "completed", "outcome": {"verdict": "PASS", ...}, "turns": 25, "cost_usd": 1.50}
 ```
 
-**IMPORTANT**: Do NOT use `run_in_background=true` — the orchestrator waits for each subagent to complete so it can:
-1. Record the outcome in `completed_outcomes` for downstream context packages
-2. Handle review failures via the Batch Failure Handler (Step 4.5)
-3. Proceed to the next task in the batch
+The subprocess prompt is built internally by `execute_task` and includes:
+- Pre-loaded shared context (architecture, config, lessons) — avoids ~20-50KB of redundant reads per agent
+- Self-loading instructions (get_task, get_prd, get_design via MCP) — only task-specific content
+- Full implementation instructions
+- Self-review gates with test evidence requirements
+- Correction logging instructions
+- Git config awareness (auto_commit, testing.runtime)
+- Structured `---TASK-OUTCOME---` output block
 
-#### Question Escalation (FR-004)
+The `dispatch_info` string (from `build_dispatch_info()`, Step 3.5) is injected into the subprocess prompt, providing dependency outcomes and batch context.
 
-When a subagent encounters an unresolvable question (missing information, ambiguous requirement, conflicting constraints), it uses `AskUserQuestion` directly. Because `run_in_background=false`, the question propagates to the user in the orchestrator's session. The user's response flows back to the subagent, which resumes execution.
+The `shared_context` string (from `build_batch_shared_context()`, see below) is built **once per batch** and injected into every subprocess, replacing ~20-50KB of per-agent file reads with a ~2-3KB pre-loaded summary.
 
-No special handling is needed in the orchestrator — the `AskUserQuestion` mechanism handles this transparently.
+**Note**: The subprocess runs autonomously — it cannot propagate `AskUserQuestion` back to the user. If the subprocess encounters unresolvable questions, it marks the task as `BLOCKED` in its outcome.
 
-#### Dispatch Sequence (Concrete Example)
+#### Polling and Stall Detection
 
+The orchestrator MUST continuously monitor every dispatched subprocess. **Never leave a subprocess running without active polling.**
+
+```python
+def poll_until_completion(handle: dict, task_id: str,
+                          max_stall_minutes: int = 5,
+                          poll_interval: int = 30) -> dict:
+    """Poll check_execution until task completes, with automatic stall detection.
+
+    CRITICAL: The orchestrator MUST call this after every execute_task dispatch.
+    Fire-and-forget is forbidden — a stuck subprocess wastes API credits and
+    blocks sprint progress.
+
+    Args:
+        handle: Non-blocking handle from execute_task: {status, pid, log_path}
+        task_id: For logging and diagnostics.
+        max_stall_minutes: Kill process if no activity for this long (default: 5).
+        poll_interval: Seconds between check_execution polls (default: 30).
+
+    Returns:
+        Completed status dict with outcome, or failure dict.
+    """
+    log_path = handle["log_path"]
+    pid = handle["pid"]
+    max_stall_seconds = max_stall_minutes * 60
+    last_turns = -1
+    last_tool = ""
+    stall_start = None  # timestamp when stall was first detected
+
+    while True:
+        sleep(poll_interval)
+        status = mcp__asdlc__check_execution(log_path=log_path, pid=pid)
+
+        # --- Terminal states: return immediately ---
+        if status["status"] == "completed":
+            return status  # Contains status["outcome"]
+        if status["status"] in ("failed", "error"):
+            return {
+                "status": "failed",
+                "outcome": {
+                    "verdict": "FAIL",
+                    "summary": status.get("message", "Process failed"),
+                },
+            }
+
+        # --- Running: check for stall ---
+        current_turns = status.get("turns", 0)
+        current_tool = status.get("last_tool", "")
+
+        if current_turns != last_turns or current_tool != last_tool:
+            # Progress detected — reset stall timer
+            last_turns = current_turns
+            last_tool = current_tool
+            stall_start = None
+        else:
+            # No progress — start or continue stall timer
+            if stall_start is None:
+                stall_start = current_time()
+            elapsed = current_time() - stall_start
+            if elapsed > max_stall_seconds:
+                # STALL: kill the subprocess
+                mcp__asdlc__stop_execution(pid=pid)
+                return {
+                    "status": "failed",
+                    "outcome": {
+                        "verdict": "FAIL",
+                        "summary": f"Process stalled ({elapsed}s no activity). Auto-killed.",
+                    },
+                }
 ```
-# Batch 1: 3 independent tasks — dispatched sequentially
+
+#### Dispatch Sequence (Capped Parallelism Example)
+
+```python
+# Batch 1: 5 tasks, max_parallel=3 — dispatch up to 3 concurrently
 outcomes = {}
+active_handles = {}  # {task_id: (task, handle)}
+pending = list(executable)  # tasks in this batch
 
-# Task 1: dispatch subagent → orchestrator review → complete
-update_task("PROJ-T00001", status="in_progress")
-context_1 = build_context_package("PROJ-T00001", outcomes)
-result_1 = Task(description="Implement PROJ-T00001: Set up OAuth config",
-                prompt=f"...{context_1}...", subagent_type="sdlc-backend-engineer")
-# Subagent returns after submitting self-review evidence
-# Orchestrator review dispatch (Step 4.4):
-review_result = orchestrator_review_dispatch("PROJ-T00001", review_config)
-if review_result == "approved":
-    update_task("PROJ-T00001", status="completed")
-outcomes["PROJ-T00001"] = "Added OAuth config to src/auth/config.py"
+# Build shared context ONCE for the entire batch
+batch_shared_context = build_batch_shared_context()
 
-# Task 2 (receives outcome of Task 1 in context if it's a dependency)
-update_task("PROJ-T00002", status="in_progress")
-context_2 = build_context_package("PROJ-T00002", outcomes)
-result_2 = Task(description="Implement PROJ-T00002: Create login endpoint",
-                prompt=f"...{context_2}...", subagent_type="sdlc-backend-engineer")
-review_result = orchestrator_review_dispatch("PROJ-T00002", review_config)
-if review_result == "approved":
-    update_task("PROJ-T00002", status="completed")
-outcomes["PROJ-T00002"] = "Created POST /auth/login endpoint in src/api/auth.py"
+while pending or active_handles:
+    # --- Fill up to max_parallel slots ---
+    while pending and len(active_handles) < max_parallel:
+        task = pending.pop(0)
+        update_task(task["id"], status="in_progress")
+        info = build_dispatch_info(task, outcomes)
+        handle = mcp__asdlc__execute_task(
+            task_id=task["id"],
+            executor=executor,
+            max_turns=classify_max_turns(task),
+            dispatch_info=info,
+            shared_context=batch_shared_context,
+        )
 
-# Task 3
-update_task("PROJ-T00003", status="in_progress")
-context_3 = build_context_package("PROJ-T00003", outcomes)
-result_3 = Task(description="Implement PROJ-T00003: Add user model fields",
-                prompt=f"...{context_3}...", subagent_type="sdlc-backend-engineer")
-review_result = orchestrator_review_dispatch("PROJ-T00003", review_config)
-if review_result == "approved":
-    update_task("PROJ-T00003", status="completed")
-outcomes["PROJ-T00003"] = "Added email, role fields to User model, migration 004"
+        # Error check: if dispatch failed, mark BLOCKED and skip
+        if handle.get("status") == "error":
+            mcp__asdlc__log_correction(
+                context_type="task", context_id=task["id"],
+                category="process",
+                description=f"execute_task failed: {handle.get('error', 'unknown')}")
+            mcp__asdlc__update_task(task_id=task["id"], status="blocked")
+            record_outcome(task, {"verdict": "BLOCKED",
+                "summary": f"Dispatch failed: {handle.get('error', '')[:100]}"}, outcomes)
+            continue
+
+        active_handles[task["id"]] = (task, handle)
+
+    # --- Poll all active handles ---
+    if not active_handles:
+        break
+    sleep(30)
+    for task_id, (task, handle) in list(active_handles.items()):
+        status = mcp__asdlc__check_execution(
+            log_path=handle["log_path"], pid=handle["pid"])
+
+        if status["status"] in ("completed", "failed", "error"):
+            del active_handles[task_id]
+            outcome = parse_task_outcome(status)
+            review_result = orchestrator_review_dispatch(task, review_config)
+            if review_result == "approved":
+                update_task(task_id, status="completed")
+            record_outcome(task, status, outcomes)
+            write_state_checkpoint(outcomes, batches, batch_num)
 
 # → Batch checkpoint (Step 4.5) → proceed to Batch 2
 ```
@@ -729,19 +969,62 @@ outcomes["PROJ-T00003"] = "Added email, role fields to User model, migration 004
 ### 4.3. Track Task Outcomes
 
 After each subagent completes, the orchestrator extracts an outcome summary and stores it. These outcomes serve two purposes:
-1. **Context for downstream tasks** — via `build_context_package()` (Step 3.5), which injects dependency outcomes into subsequent subagent prompts
+1. **Context for downstream tasks** — via `build_dispatch_info()` (Step 3.5), which injects dependency outcomes into subsequent subagent prompts
 2. **Batch checkpoint reports** — via `present_batch_results()` (Step 4.5), which shows per-task results
 
 #### Outcome Data Structure
 
 ```python
-# outcomes dict: {task_id: outcome_summary_string}
-# Populated after each subagent returns.
+# outcomes dict: {task_id: outcome_dict}
+# Each entry is ~200 bytes. Populated after each subagent returns.
 
 outcomes = {}  # Initialized at the start of run_simple_mode()
 
+def parse_task_outcome(result) -> dict:
+    """Extract the outcome dict from a completed check_execution result.
+
+    After polling with ``poll_until_completion()``, the completed status
+    dict contains an ``outcome`` key with the parsed result.
+
+    For backward compatibility, if the result is a raw string (e.g. from
+    a Task tool dispatch), it falls back to parsing the ---TASK-OUTCOME---
+    block.
+
+    Returns a compact dict (~200 bytes) that stays in orchestrator context.
+
+    Args:
+        result: Completed check_execution status dict (has "outcome" key)
+                or raw subagent result string.
+
+    Returns:
+        Structured outcome dict with verdict, summary, files, tests.
+    """
+    # Completed check_execution() result has outcome key
+    if isinstance(result, dict) and "outcome" in result:
+        return result["outcome"]
+
+    # Fallback: parse raw text (backward compat with Task tool dispatch)
+    text = str(result)
+
+    # Search for structured delimiters
+    start = text.find("---TASK-OUTCOME---")
+    end = text.find("---END-OUTCOME---")
+
+    if start >= 0 and end > start:
+        block = text[start:end]
+        outcome = {}
+        for line in block.split("\n"):
+            if ":" in line and not line.startswith("---"):
+                key, _, value = line.partition(":")
+                outcome[key.strip()] = value.strip()
+        return outcome
+
+    # Fallback for non-compliant subagents — minimal placeholder
+    return {"verdict": "UNKNOWN", "summary": "No structured outcome block returned"}
+
+
 def record_outcome(task: dict, result, outcomes: dict, reason: str = None):
-    """Extract and record a concise outcome summary after subagent completion.
+    """Record a compact outcome after subagent completion.
 
     Args:
         task: Task metadata dict.
@@ -750,62 +1033,33 @@ def record_outcome(task: dict, result, outcomes: dict, reason: str = None):
         reason: Override reason (for skipped/failed tasks).
     """
     if reason:
-        # Task was skipped or manually failed
-        outcomes[task["id"]] = f"[{reason}]"
+        outcomes[task["id"]] = {"verdict": "SKIPPED", "summary": reason}
         return
 
-    if result.success:
-        # Extract from subagent output:
-        #   - Files changed (from git diff summary or commit message)
-        #   - Key changes (1-2 sentences)
-        summary = extract_outcome_summary(result.output)
-        outcomes[task["id"]] = summary
-        # Example: "Added OAuth config to src/auth/config.py, 3 tests added"
-    else:
-        outcomes[task["id"]] = f"[failed: {result.error_summary}]"
+    outcomes[task["id"]] = parse_task_outcome(result)
 ```
 
-#### Outcome Summary Extraction
+#### Outcome Size Guarantee
 
-When a subagent completes successfully, extract a concise outcome summary from its output. The summary should be **1-2 sentences** covering:
+Each outcome entry is a compact dict (~200 bytes). The orchestrator **never** retains the full subagent output — only the parsed `---TASK-OUTCOME---` block.
 
-- **What was done**: Key changes or additions
-- **Where**: Primary files modified
-- **Test status**: Pass/fail count if available
+```python
+# Stored outcome — ~200 bytes:
+outcomes["PROJ-T00001"] = {
+    "verdict": "PASS",
+    "files_changed": "src/auth/config.py, src/auth/constants.py",
+    "tests": "3/3",
+    "review": "APPROVE",
+    "summary": "Added OAuth config with environment-based provider selection",
+    "corrections": "1"
+}
 
+# Fallback for non-compliant subagent — ~60 bytes:
+outcomes["PROJ-T00002"] = {
+    "verdict": "UNKNOWN",
+    "summary": "No structured outcome block returned"
+}
 ```
-# Good outcome summaries (concise):
-"Added OAuth config to src/auth/config.py and src/auth/constants.py. 3 unit tests added, all passing."
-"Created POST /auth/login endpoint in src/api/auth.py with JWT token generation. Integration test added."
-"Added email, role fields to User model (migration 004). Updated 2 existing tests."
-
-# Bad outcome summaries (too verbose — avoid):
-"I implemented the OAuth configuration by creating a new file at src/auth/config.py which contains..."
-```
-
-If the subagent output is too long to summarize automatically, fall back to the git commit message(s) produced during the task.
-
-#### Structured Outcome Parsing
-
-When a subagent returns, the orchestrator first attempts to extract the structured outcome block:
-
-1. Search the subagent result for `---TASK-OUTCOME---` and `---END-OUTCOME---` delimiters
-2. If found, parse the key-value pairs between the delimiters
-3. Store the parsed data in outcomes as a structured dict:
-   outcomes[task_id] = {
-       "verdict": "PASS",
-       "files_changed": ["file1.py", "file2.py"],
-       "tests": "12/12",
-       "review": "APPROVE",
-       "summary": "One-line description",
-       "corrections": 0
-   }
-4. If the delimiters are NOT found (subagent non-compliance), fall back to the existing
-   extract_outcome_summary() approach — extract a 1-2 sentence summary from raw text.
-   Store as: outcomes[task_id] = "free-form summary string"
-
-The orchestrator should handle both dict-style (structured) and string-style (fallback)
-outcomes gracefully in all downstream consumers (build_context_package, present_batch_results).
 
 ### 4.4. Review Dispatch (Orchestrator Level)
 
@@ -816,8 +1070,8 @@ After the implementing subagent returns for a task, the orchestrator runs the re
 #### Review Dispatch Sequence
 
 1. **Check self-review**: Call `mcp__asdlc__get_review_evidence(task_id='{task_id}')` — verify self-review was submitted
-   - If missing → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review not submitted')` — task cannot complete
-   - If present and verdict='fail' → `mcp__asdlc__block_task(task_id='{task_id}', reason='self-review failed')` — task cannot complete
+   - If missing → `mcp__asdlc__update_task(task_id='{task_id}', status='blocked')` — task cannot complete
+   - If present and verdict='fail' → `mcp__asdlc__update_task(task_id='{task_id}', status='blocked')` — task cannot complete
 
 2. **Check subagent review config**: Read `.sdlc/config.yaml` `review.subagent_review.enabled` (defaults to `true` when `review.enabled` is `true`)
    - If explicitly set to `false` → skip to step 5 (complete task)
@@ -833,7 +1087,7 @@ After the implementing subagent returns for a task, the orchestrator runs the re
 
             Evaluate: spec compliance, code quality, test coverage.
 
-            Call mcp__asdlc__submit_review_verdict(task_id='{task_id}', verdict='approve'|'request_changes'|'escalate', findings='...') with:
+            Call mcp__asdlc__submit_review(task_id='{task_id}', reviewer_type='subagent', verdict='approve'|'request_changes'|'escalate', findings='...') with:
             - 'approve' if implementation meets all criteria
             - 'request_changes' if issues found (list specific fixes needed)
             - 'escalate' if you cannot determine correctness
@@ -861,7 +1115,134 @@ After the implementing subagent returns for a task, the orchestrator runs the re
      ```
    - **ESCALATE** → AskUserQuestion immediately with the same options as above
 
-5. **Complete task**: Call `mcp__asdlc__update_task(task_id='{task_id}', status='completed')` — the hard gate in `update_task()` accepts this because approved review evidence now exists in the database
+5. **AC Verification Gate (FR-022, quality-gated)**: Before calling `update_task(status='completed')`, verify all linked acceptance criteria have evidence recorded. This step only runs when `quality.enabled` is `true` AND `quality.ac_gate` is `true`.
+
+   ```python
+   quality_config = load_quality_config()
+   if quality_config.enabled and quality_config.ac_gate:
+       # Get all requirements linked to this task
+       reqs = mcp__asdlc__get_task_requirements(task_id=task_id)
+       if reqs.get("status") == "ok":
+           ac_reqs = reqs.get("requirements", {}).get("ac", [])
+           unverified = [ac for ac in ac_reqs if not ac.get("verified", False)]
+
+           if unverified:
+               print(f"  AC Verification Gate: {len(unverified)} unverified acceptance criteria for {task_id}:")
+               for ac in unverified:
+                   ac_id = ac.get("req_id", ac.get("id", "unknown"))
+                   depth = ac.get("depth", "structural")
+                   print(f"    {ac_id} [{depth}] — not yet verified")
+
+               # Instruct the agent to verify each unverified AC
+               for ac in unverified:
+                   ac_id = ac.get("req_id", ac.get("id", "unknown"))
+                   depth = ac.get("depth", "structural")
+                   evidence_type = "test" if depth == "behavioral" else "manual"
+
+                   # AC-015: Behavioral ACs require test evidence, not structural-only code
+                   mcp__asdlc__verify_acceptance_criteria(
+                       task_id=task_id,
+                       ac_id=ac_id,
+                       evidence_type=evidence_type,
+                       evidence=f"Verified during task completion review"
+                   )
+
+               # Re-check after verification
+               reqs = mcp__asdlc__get_task_requirements(task_id=task_id)
+               ac_reqs = reqs.get("requirements", {}).get("ac", [])
+               still_unverified = [ac for ac in ac_reqs if not ac.get("verified", False)]
+               if still_unverified:
+                   print(f"  WARNING: {len(still_unverified)} ACs still unverified after verification attempt")
+   ```
+
+6. **Implementation Challenge Gate (FR-031, quality-gated)**: After AC verification, if `quality.challenge.gates.implementation` is enabled, spawn a challenger agent to challenge the task implementation. Independent task challenges can run in parallel per NFR-009.
+
+   ```python
+   quality_config = load_quality_config()
+   if quality_config.enabled and quality_config.challenge.is_gate_active("implementation"):
+       # Get or generate the challenge prompt
+       challenge = mcp__asdlc__challenge_artifact(
+           artifact_type="task",
+           artifact_id=task_id,
+           challenge_context=f"Post-implementation challenge for {task_id}"
+       )
+
+       if challenge.get("status") == "ok":
+           challenge_prompt = challenge["challenge_prompt"]
+           round_number = challenge.get("round_number", 1)
+
+           # Dispatch challenger subagent via Task tool
+           challenger_result = Task(
+               description=f"Challenge implementation of {task_id}",
+               prompt=f"""You are a challenger reviewing the implementation of task {task_id}.
+
+   {challenge_prompt}
+
+   Review the implementation critically. For each concern:
+   1. State the objection clearly
+   2. Reference specific code or acceptance criteria
+   3. Classify as: resolved (no action needed), accepted (must fix), or escalated (needs human decision)
+
+   Output your findings as structured objections.
+   """,
+               subagent_type="sdlc-qa-engineer"
+           )
+
+           # Parse challenger findings and record the round
+           objections = parse_challenge_objections(challenger_result)
+           mcp__asdlc__record_challenge_round(
+               artifact_type="task",
+               artifact_id=task_id,
+               round_number=round_number,
+               objections=objections,
+               verdict={"resolved": [], "accepted": [], "escalated": []}
+           )
+
+           # Check challenge status
+           challenge_status = mcp__asdlc__get_challenge_status(
+               artifact_type="task",
+               artifact_id=task_id
+           )
+
+           # AC-024: Accepted objections must be acted on
+           accepted = challenge_status.get("stats", {}).get("accepted", 0)
+           if accepted > 0:
+               print(f"  Implementation challenge: {accepted} accepted objections require fixes")
+               # These will be addressed in the post-flight remediation loop
+               # or the implementing agent must fix them before completion
+               mcp__asdlc__log_correction(
+                   context_type="task",
+                   context_id=task_id,
+                   category="code-quality",
+                   description=f"Implementation challenge: {accepted} accepted objections pending resolution"
+               )
+   ```
+
+   **Parallel challenges (NFR-009)**: When multiple tasks in a batch complete independently, their implementation challenges can be dispatched in parallel. The orchestrator should batch challenge dispatches for independent tasks:
+
+   ```python
+   # After all tasks in a batch complete and pass review:
+   challenge_tasks = [t for t in batch_completed_tasks
+                      if quality_config.challenge.is_gate_active("implementation")]
+
+   # Dispatch challengers in parallel for independent tasks
+   challenge_handles = {}
+   for task in challenge_tasks:
+       handle = Task(
+           description=f"Challenge {task['id']}",
+           prompt=f"...(challenge prompt for {task['id']})...",
+           subagent_type="sdlc-qa-engineer",
+           run_in_background=True  # Parallel dispatch
+       )
+       challenge_handles[task["id"]] = handle
+
+   # Collect results
+   for task_id, handle in challenge_handles.items():
+       result = wait_for(handle)
+       # Process and record challenge round
+   ```
+
+7. **Complete task**: Call `mcp__asdlc__update_task(task_id='{task_id}', status='completed')` — the hard gate in `update_task()` accepts this because approved review evidence now exists in the database
 
 #### Review Dispatch in Isolated Mode
 
@@ -874,14 +1255,14 @@ For isolated mode, the orchestrator:
 
 #### Integration with Context Package
 
-The `build_context_package()` function (Step 3.5) already accepts `completed_outcomes` and includes a `## Prior Task Outcomes` section. The `outcomes` dict populated here is passed directly:
+The `build_dispatch_info()` function (Step 3.5) already accepts `completed_outcomes` and includes a `## Prior Task Outcomes` section. The `outcomes` dict populated here is passed directly:
 
 ```python
-context = build_context_package(task["id"], outcomes)
+context = build_dispatch_info(task["id"], outcomes)
 # → outcomes for dependency tasks are included in the "## Prior Task Outcomes" section
 ```
 
-Only **direct dependency** outcomes are included in the context package (not all completed tasks). This keeps context concise per NFR-002.
+Only **direct dependency** outcomes are included in the dispatch info (not all completed tasks). This keeps context concise per NFR-002.
 
 ### 4.5. Batch Checkpoint
 
@@ -934,7 +1315,7 @@ AskUserQuestion({
 **Handling user responses:**
 - **"Continue"** — Proceed to the next batch. Tasks whose dependencies failed are automatically skipped (their unmet dependencies cannot be satisfied).
 - **"Skip tasks"** — Ask follow-up: "Which tasks to skip? Provide task IDs." Remove those tasks from subsequent batches. Re-evaluate downstream dependencies — any task that depends solely on skipped tasks is also flagged for the user.
-- **"Add clarification"** — Ask follow-up: "Enter clarification for upcoming tasks." The clarification text is appended to the context package for all tasks in the next batch under a `## User Clarification` section.
+- **"Add clarification"** — Ask follow-up: "Enter clarification for upcoming tasks." The clarification text is appended to the dispatch info for all tasks in the next batch under a `## User Clarification` section.
 - **"Abort"** — Stop execution. Mark remaining tasks as unchanged (keep current status). Generate the sprint summary with partial results.
 
 **Final batch checkpoint**: After the LAST batch completes, present a completion report instead of a next-batch prompt:
@@ -975,7 +1356,7 @@ AskUserQuestion({
 ```
 
 **Handling user responses:**
-- **"Retry with fresh agent"** — Dispatch a new subagent for this task with a fresh context package. The retry counts as an additional attempt but does NOT reset the review round counter for logging purposes. If the fresh agent also fails review, escalate again.
+- **"Retry with fresh agent"** — Dispatch a new subagent for this task with fresh dispatch info. The retry counts as an additional attempt but does NOT reset the review round counter for logging purposes. If the fresh agent also fails review, escalate again.
 - **"Skip and continue"** — Mark task status as `blocked` with reason "Skipped after review failure". Continue executing other tasks in the current batch. Downstream tasks that depend on this task will be flagged at the next batch checkpoint.
 - **"Abort batch"** — Stop all remaining tasks in the current batch. Proceed directly to the batch checkpoint report (Step 4.5) with partial results.
 - **"Implement manually"** — Mark task as `blocked` with reason "Deferred to manual implementation". Log a correction via `mcp__asdlc__log_correction()`. Continue with remaining batch tasks.
@@ -1152,9 +1533,9 @@ Overlap warnings: None
 Proceed with execution? [Y/n]
 ```
 
-### 9.5. Build Context Packages for All PRD Tasks
+### 9.5. Build Dispatch Info and Batch Groupings per PRD
 
-Before launching PRD agents, the orchestrator pre-builds context packages for **all tasks across all PRDs** and groups them into dependency-ordered batches per PRD. This is the same `build_context_package()` from Step 3.5.
+Before launching PRD agents, the orchestrator groups tasks into dependency-ordered batches per PRD and builds lightweight dispatch info for each task. The orchestrator does NOT pre-read task/PRD/design content.
 
 ```python
 for group in prd_groups:
@@ -1162,18 +1543,18 @@ for group in prd_groups:
     batches, unresolvable = build_batches(group["tasks"])
     group["batches"] = batches
 
-    # Pre-build context packages for all tasks in this PRD
-    group["context_packages"] = {}
+    # Build lightweight dispatch info per task (from in-memory task list only)
+    group["dispatch_info"] = {}
     for batch in batches:
         for task in batch:
-            group["context_packages"][task["id"]] = build_context_package(
-                task["id"], completed_outcomes={}  # No prior outcomes for fresh PRD agent
+            group["dispatch_info"][task["id"]] = build_dispatch_info(
+                task, completed_outcomes={}  # No prior outcomes for fresh PRD agent
             )
 ```
 
 ### 9.6. Launch PRD Agents
 
-**CRITICAL**: Launch one agent per PRD. Each agent receives ALL tasks with pre-built context packages organized by batch. The agent executes tasks sequentially within each batch, in batch order.
+**CRITICAL**: Launch one agent per PRD. Each agent receives task IDs organized by batch and self-loads full content via MCP tools. The agent executes tasks sequentially within each batch, in batch order.
 
 ```
 Task(
@@ -1197,36 +1578,32 @@ Use the generated override file:
 
 Execute tasks in batch order, sequentially within each batch.
 All tasks in Batch N must complete before starting Batch N+1.
-Each task's curated context package is provided below — you do NOT need to call get_task().
 
 For EACH task:
-1. Read the context package below
-2. Call mcp__asdlc__update_task(task_id, status="in_progress")
-3. Implement the task following the Implementation Steps in its context
-4. Read .sdlc/config.yaml — check `git.auto_commit`:
+1. Call `mcp__asdlc__get_task(task_id)` to load full task content
+2. Call `mcp__asdlc__get_prd(prd_id)` if you need PRD context
+3. Call `mcp__asdlc__get_design(prd_id)` if you need design context (may not exist)
+4. Read `.sdlc/artifacts/architecture.md` for codebase patterns (if it exists)
+5. Call mcp__asdlc__update_task(task_id, status="in_progress")
+6. Implement the task following the Implementation Steps from the task content
+7. Read .sdlc/config.yaml — check `git.auto_commit`:
    - If `true`: git add <files> && git commit -m "[{task_id}] {task_title}"
    - If `false` or not set: git add <files> only — do NOT commit. Leave changes staged for user review.
-5. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
-6. Run review gates (see below)
-7. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
+8. Read .sdlc/config.yaml — check `testing.runtime` for runtime test configuration
+9. Run review gates (see below)
+10. Do NOT call `update_task(status='completed')` — the orchestrator handles completion after review
 
 ## Batch 1 (independent tasks):
-
-### Task: PROJ-T00001 — Set up OAuth config
-{context_package_for_PROJ-T00001}
-
-### Task: PROJ-T00002 — Create login endpoint
-{context_package_for_PROJ-T00002}
+{dispatch_info_for_PROJ-T00001}
+{dispatch_info_for_PROJ-T00002}
 
 ## Batch 2 (depends on Batch 1):
-
-### Task: PROJ-T00003 — Add token validation
-{context_package_for_PROJ-T00003}
+{dispatch_info_for_PROJ-T00003}
 
 ## Review Gates (for EACH task)
 
 After completing implementation and tests for each task:
-1. Self-review: Re-read the task's Acceptance Criteria from its context package above, verify each criterion is satisfied
+1. Self-review: Re-read the task spec, verify each acceptance criterion is satisfied
    - Read .sdlc/config.yaml — check `testing.relevance.enabled`
    - If relevance detection is enabled:
      a. Assess change scope based on files you modified:
@@ -1243,7 +1620,7 @@ After completing implementation and tests for each task:
    - If no config exists, run the project's default test command
    - Capture and include ACTUAL test output for any tests run — no self-assertions without evidence
    - If any executed test fails, fix the issues before proceeding
-2. Call `mcp__asdlc__submit_self_review(task_id='{task_id}', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
+2. Call `mcp__asdlc__submit_review(task_id='{task_id}', reviewer_type='self', verdict='pass'|'fail', findings='...', test_output='...')` with actual test output
 3. If self-review verdict is 'fail', fix the issues and re-submit until 'pass'
 4. Log corrections for EVERY finding discovered during implementation:
    mcp__asdlc__log_correction(context_type='task', context_id='{task_id}', category='{category}', description='{what_was_found_and_fixed}')
@@ -1252,8 +1629,9 @@ After completing implementation and tests for each task:
 
 ## CRITICAL: Structured Output (per task)
 
-After completing EACH task in your batch, output a structured outcome block.
-Your output for each task MUST include:
+The orchestrator parses ONLY the ---TASK-OUTCOME--- blocks below.
+Everything else in your output is discarded by the orchestrator.
+After completing EACH task, output a structured outcome block:
 
 ---TASK-OUTCOME---
 task_id: {task_id}
@@ -1265,7 +1643,6 @@ summary: {one-line description of what was done}
 corrections: {number of corrections logged}
 ---END-OUTCOME---
 
-The orchestrator parses these blocks for progress tracking.
 Replace placeholders with actual values from your implementation.
 
 When ALL tasks are done:
@@ -1278,13 +1655,13 @@ When ALL tasks are done:
 
 Task(
   description="Execute PRD PROJ-P0002",
-  prompt="...(same pattern, different worktree/tasks/batches/context packages)...",
+  prompt="...(same pattern, different worktree/tasks/batches/dispatch info)...",
   subagent_type="general-purpose",
   run_in_background=true
 )
 ```
 
-**Note**: PRD agents use `run_in_background=true` because the orchestrator manages multiple PRDs concurrently. Within each PRD agent, tasks execute sequentially (no background dispatch).
+**Note**: PRD agents use `run_in_background=true` via the `Task` tool because the orchestrator manages multiple PRDs concurrently. Within each PRD agent, tasks execute sequentially (no background dispatch). Isolated mode keeps `Task()` dispatch because each PRD agent is a single long-running session (lower memory pressure than per-task subagents in simple mode). Optionally, each PRD agent can call `mcp__asdlc__execute_task()` per task within the PRD to get memory-safe per-task isolation — but MUST then poll `mcp__asdlc__check_execution()` every 30 seconds until completion (see `poll_until_completion()` pattern above).
 
 ---
 
@@ -1402,7 +1779,7 @@ Next Steps:
 After all PRD agents complete, present the branch completion workflow. The available actions depend on git safety configuration:
 
 ```
-config = mcp__asdlc__get_git_safety_config()
+config = mcp__asdlc__manage_git_safety("get")
 auto_pr = config["config"]["effective"]["auto_pr"]
 auto_merge = config["config"]["effective"]["auto_merge"]
 ```
@@ -1513,7 +1890,7 @@ def run_sprint(sprint_id: str, max_parallel: int = 3, base_branch: str = None,
             warn(f"No checkpoint found for {sprint_id}. Starting fresh.")
 
     # Check git safety config for worktree support
-    config = get_git_safety_config()
+    config = manage_git_safety("get")
     worktree_enabled = config["config"]["effective"]["worktree_enabled"]
 
     # MODE DETECTION — worktree_enabled gates isolated mode
@@ -1564,7 +1941,7 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
         batches = apply_user_adjustments(batches)  # Re-display and re-ask
         # Loop until user chooses "start" or "abort"
 
-    outcomes = {}  # {task_id: outcome_summary} — fed to build_context_package
+    outcomes = {}  # {task_id: outcome_summary} — fed to build_dispatch_info
     user_clarification = None  # Optional text from user, injected into context
 
     # --- State persistence setup (FR-001) ---
@@ -1595,17 +1972,22 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
     except:
         pass  # Use default
 
-    # --- Auto-compact thresholds (FR-005) ---
-    compact_threshold = 70   # Warn and pause at this percentage
-    urgent_threshold = 85    # Warn urgently
-    halt_threshold = 95      # Halt execution
+    # --- Context pressure thresholds (FR-005) ---
+    warn_threshold = 70      # Log notice + save checkpoint
+    urgent_threshold = 85    # Prompt user to halt or continue
+    compact_threshold = 95   # Auto-compact context and continue
 
     # Optional: read from .sdlc/config.yaml
     #   sprint:
-    #     compact_threshold: 70
+    #     context_thresholds:
+    #       warn: 70
+    #       urgent: 85
+    #       compact: 95
     try:
-        if "compact_threshold:" in config:
-            compact_threshold = int(config.sprint.compact_threshold)
+        if "context_thresholds:" in config:
+            warn_threshold = int(config.sprint.context_thresholds.warn)
+            urgent_threshold = int(config.sprint.context_thresholds.urgent)
+            compact_threshold = int(config.sprint.context_thresholds.compact)
     except:
         pass  # Use defaults
 
@@ -1671,19 +2053,23 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
         for t in skipped:
             record_outcome(t, "skipped", outcomes, reason="unmet dependency")
 
-        # --- Execute each task in the batch ---
+        # --- Build shared context ONCE per batch (token savings) ---
+        batch_shared_context = build_batch_shared_context()
+
+        # --- Execute tasks with capped parallelism ---
         batch_results = {}
         for task in executable:
             update_task(task["id"], status="in_progress")
-            context = build_context_package(task["id"], outcomes)
+            info = build_dispatch_info(task, outcomes)
             if user_clarification:
-                context += f"\n\n## User Clarification\n{user_clarification}"
-            result = dispatch_subagent(task, context)  # See dispatch_subagent() below
+                info += f"\n\n## User Clarification\n{user_clarification}"
+            result = dispatch_subagent(task, info,
+                                       shared_context=batch_shared_context)  # Non-blocking launch + poll
 
             # --- Track context consumption (FR-004) ---
-            context_chars_consumed += len(str(result))
-            # Estimate orchestrator output overhead (~500 chars per task for display)
-            context_chars_consumed += 500
+            # Only count what stays in orchestrator context: the parsed outcome dict
+            outcome_block = parse_task_outcome(result)  # Extracts result["outcome"]
+            context_chars_consumed += len(str(outcome_block)) + 300  # outcome + orchestrator overhead
 
             # --- Orchestrator Review Dispatch (Step 4.4) ---
             review_config = load_review_config()  # from .sdlc/config.yaml
@@ -1697,7 +2083,7 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
                     if rounds >= review_config.get("max_rounds", 3):
                         failure_decision = ask_failure_handler(task, review_result.feedback)
                         if failure_decision == "retry":
-                            result = dispatch_subagent(task, context, fresh=True)
+                            result = dispatch_subagent(task, info, fresh=True)  # Launches + polls
                             review_result = orchestrator_review_dispatch(task, review_config)
                         elif failure_decision == "skip":
                             update_task(task["id"], status="blocked", reason="review failure")
@@ -1724,11 +2110,12 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
             estimated_tokens = context_chars_consumed // 4
             budget_percentage = (estimated_tokens / budget_tokens) * 100
 
-            if budget_percentage >= halt_threshold:
+            if budget_percentage >= compact_threshold:
                 write_state_checkpoint(outcomes, batches, batch_num)
-                print(f"🛑 Context budget critical (~{budget_percentage:.0f}%). Halting mid-batch. State saved.")
-                print(f"Resume: /compact → /sdlc:sprint-run {sprint_id} --resume")
-                return  # Emergency exit
+                print(f"🔄 Context at ~{budget_percentage:.0f}%. Auto-compacting and continuing...")
+                # Auto-compact: summarize held context to minimal form
+                # The orchestrator drops verbose state, keeping only structured outcomes
+                # Execution continues — no halt, no user intervention needed
 
         # --- Batch checkpoint (Step 4.5) ---
         present_batch_results(batch_num, batch_results, skipped)
@@ -1752,70 +2139,51 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
 
         print(f"{budget_indicator} Context: ~{budget_percentage:.0f}% estimated ({estimated_tokens:,}/{budget_tokens:,} tokens)")
 
-        # --- Auto-compact guidance (FR-005) ---
-        if budget_percentage >= halt_threshold:
-            # HALT: Context critically high
+        # --- Context pressure management (FR-005) ---
+        if budget_percentage >= compact_threshold:
+            # AUTO-COMPACT: Context critically high — compact automatically and continue
             write_state_checkpoint(outcomes, batches, batch_num)
             print(f"""
-🛑 CONTEXT BUDGET CRITICAL: ~{budget_percentage:.0f}%
+🔄 AUTO-COMPACT: Context at ~{budget_percentage:.0f}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Execution halted to prevent context overflow.
-State saved to: {state_file}
-
-To resume after compacting:
-  1. Run /compact
-  2. Run /sdlc:sprint-run {sprint_id} --resume
+Checkpoint saved. Compacting context to minimal form...
+Dropping verbose state, keeping only structured outcomes.
+Execution continues.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             """)
-            break  # Exit the batch loop — halt execution
+            # Reset tracking — after compact, context consumption is reduced
+            context_chars_consumed = len(str(outcomes)) + 1000  # Re-baseline to current outcome size
 
         elif budget_percentage >= urgent_threshold:
-            # URGENT WARNING
-            write_state_checkpoint(outcomes, batches, batch_num)
-            print(f"""
-⚠️ CONTEXT BUDGET HIGH: ~{budget_percentage:.0f}%
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-State saved. Strongly recommend compacting NOW.
-
-To resume:
-  1. Run /compact
-  2. Run /sdlc:sprint-run {sprint_id} --resume
-
-Execution will HALT at {halt_threshold}%.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            """)
-            # Continue execution but user is warned
-
-        elif budget_percentage >= compact_threshold:
-            # PAUSE: Recommend compacting
+            # URGENT: Prompt user — halt or continue
             write_state_checkpoint(outcomes, batches, batch_num)
 
-            compact_decision = AskUserQuestion({
+            urgent_decision = AskUserQuestion({
                 questions: [{
-                    question: f"Context budget at ~{budget_percentage:.0f}%. State saved. Compact now?",
-                    header: "Context",
+                    question: f"Context budget at ~{budget_percentage:.0f}%. Auto-compact triggers at {compact_threshold}%.",
+                    header: "Context pressure",
                     options: [
-                        { label: "Compact & resume", description: f"Run /compact, then /sdlc:sprint-run {sprint_id} --resume" },
-                        { label: "Continue", description: f"Keep going (will warn again at {urgent_threshold}%, halt at {halt_threshold}%)" },
+                        { label: "Continue", description: f"Keep going (auto-compact at {compact_threshold}%)" },
+                        { label: "Halt and resume later", description: f"Save state, end session. Resume: /sdlc:sprint-run {sprint_id} --resume" },
                         { label: "Abort sprint", description: "Stop execution, state is saved" }
                     ],
                     multiSelect: false
                 }]
             })
 
-            if compact_decision == "Compact & resume":
-                print(f"""
-State saved to: {state_file}
-
-Next steps:
-  1. Run /compact
-  2. Run /sdlc:sprint-run {sprint_id} --resume
-                """)
-                return  # Exit run_simple_mode — user will compact and resume
-            elif compact_decision == "Abort sprint":
+            if urgent_decision == "Halt and resume later":
+                print(f"State saved to: {state_file}")
+                print(f"Resume: /sdlc:sprint-run {sprint_id} --resume")
+                return
+            elif urgent_decision == "Abort sprint":
                 print("Sprint execution aborted. State saved for later resume.")
                 return
             # "Continue" — proceed to next batch
+
+        elif budget_percentage >= warn_threshold:
+            # WARN: Log notice + save checkpoint (passive)
+            write_state_checkpoint(outcomes, batches, batch_num)
+            print(f"ℹ️ Context at ~{budget_percentage:.0f}%. Checkpoint saved. Continuing...")
 
         if batch_num < len(batches):
             next_batch = batches[batch_num]  # 0-indexed: batch_num is next
@@ -1829,6 +2197,128 @@ Next steps:
                 user_clarification = ask_for_clarification()
             # "continue" — no action needed, proceed to next batch
 
+    # =========================================================================
+    # Post-Flight Remediation Loop (FR-023, FR-038, AC-022, AC-025)
+    # =========================================================================
+    # Config-gated: Only runs when quality.enabled is true.
+    # After all batches complete, check for remaining quality gaps and
+    # create/execute remediation tasks in a loop up to max_remediation_passes.
+
+    quality_config = load_quality_config()
+    if quality_config.enabled:
+        max_passes = quality_config.max_remediation_passes  # default: 2
+        remediation_pass = 0
+
+        while remediation_pass < max_passes:
+            # 1. Get current sprint quality report
+            report = mcp__asdlc__get_quality_report("sprint", sprint_id=sprint_id)
+
+            if report.get("status") != "ok":
+                print(f"  Quality report failed: {report.get('message', 'unknown')}. Skipping remediation.")
+                break
+
+            # 2. Check if gaps exist
+            if report.get("pass", True):
+                print(f"  Post-flight quality check: PASS — no gaps remaining.")
+                break
+
+            remediation_pass += 1
+            agg = report["aggregate"]
+            print(f"""
+Post-Flight Remediation (Pass {remediation_pass}/{max_passes}):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Orphaned requirements: {agg["orphaned_requirements"]}
+  Unverified ACs:        {agg["total_acs"] - agg["verified_acs"]}
+  Scope drift tasks:     {report["scope_drift"]["unlinked_count"]}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """)
+
+            # 3. Check for accepted challenge objections (FR-039, AC-024)
+            # Accepted challenge objections become remediation items
+            for prd_report in report.get("prd_reports", []):
+                prd_id = prd_report["prd_id"]
+                for artifact_type in ["prd", "design", "split", "task"]:
+                    challenge_status = mcp__asdlc__get_challenge_status(
+                        artifact_type=artifact_type,
+                        artifact_id=prd_id
+                    )
+                    accepted = challenge_status.get("stats", {}).get("accepted", 0)
+                    if accepted > 0:
+                        print(f"  {artifact_type} {prd_id}: {accepted} accepted challenge objections pending")
+
+            # 4. Create remediation tasks for gaps
+            remediation_result = mcp__asdlc__create_remediation_tasks(sprint_id=sprint_id)
+            if remediation_result.get("status") != "ok" or remediation_result.get("created_count", 0) == 0:
+                print("  No remediation tasks could be created. Exiting remediation loop.")
+                break
+
+            created_count = remediation_result["created_count"]
+            print(f"  Created {created_count} remediation tasks.")
+
+            # 5. Execute remediation tasks as a new batch
+            remediation_tasks = []
+            for rt in remediation_result.get("tasks", []):
+                task_data = mcp__asdlc__get_task(task_id=rt["task_id"])
+                if task_data.get("status") != "error":
+                    remediation_tasks.append(task_data)
+
+            if not remediation_tasks:
+                print("  No executable remediation tasks. Exiting remediation loop.")
+                break
+
+            # Build and execute remediation batch
+            for task in remediation_tasks:
+                update_task(task["id"], status="in_progress")
+                info = build_dispatch_info(task, outcomes)
+                info += "\n\n## REMEDIATION CONTEXT\nThis is a remediation task created to close quality gaps."
+                result = dispatch_subagent(task, info)
+                outcome = parse_task_outcome(result)
+                record_outcome(task, result, outcomes)
+
+                # Run review dispatch for remediation tasks
+                review_config = load_review_config()
+                if review_config.get("enabled", False):
+                    review_result = orchestrator_review_dispatch(task, review_config)
+                    if review_result == "approved":
+                        update_task(task["id"], status="completed")
+                else:
+                    update_task(task["id"], status="completed")
+
+            # Checkpoint after remediation pass
+            write_state_checkpoint(outcomes, batches, len(batches))
+
+            # 6. Re-check quality (loop continues if gaps persist)
+
+        # AC-025: If gaps persist after max passes, exit with incomplete status
+        if remediation_pass >= max_passes:
+            final_report = mcp__asdlc__get_quality_report("sprint", sprint_id=sprint_id)
+            if final_report.get("status") == "ok" and not final_report.get("pass", True):
+                agg = final_report["aggregate"]
+                print(f"""
+Post-Flight Remediation: INCOMPLETE (max passes reached)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Remediation passes used: {remediation_pass}/{max_passes}
+  Remaining gaps:
+    Orphaned requirements: {agg["orphaned_requirements"]}
+    Unverified ACs:        {agg["total_acs"] - agg["verified_acs"]}
+    Scope drift tasks:     {final_report["scope_drift"]["unlinked_count"]}
+
+  WARNING: Sprint has unresolved quality gaps after {max_passes} remediation passes.
+  Use /sdlc:sprint-complete with force=True or mcp__asdlc__waive_sprint_quality()
+  to complete the sprint despite gaps.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                """)
+                mcp__asdlc__log_correction(
+                    context_type="sprint",
+                    context_id=sprint_id,
+                    category="process",
+                    description=f"Post-flight remediation incomplete after {max_passes} passes. "
+                                f"Gaps: {agg['orphaned_requirements']} orphaned, "
+                                f"{agg['total_acs'] - agg['verified_acs']} unverified ACs, "
+                                f"{final_report['scope_drift']['unlinked_count']} scope drift"
+                )
+    # End of post-flight remediation loop
+
     # --- Final completion report ---
     present_completion_summary(batches, outcomes)
     generate_report(sprint_id, outcomes)
@@ -1839,43 +2329,71 @@ Next steps:
     Bash(f"mv {state_file} {state_dir}/{sprint_id}-state.{timestamp}.json 2>/dev/null || true")
 
 
-def dispatch_subagent(task: dict, context_package: str, fresh: bool = False) -> Result:
-    """Dispatch a single task to a fresh subagent and wait for completion.
+def dispatch_subagent(task: dict, dispatch_info: str, fresh: bool = False,
+                      shared_context: str = "") -> dict:
+    """Dispatch a task to a memory-safe subprocess and poll until completion.
 
-    The subagent implements the task and submits self-review evidence via
-    submit_self_review(). It does NOT dispatch reviewer subagents or mark
-    the task as completed — that happens at the orchestrator level (Step 4.4).
+    Non-blocking: launches the subprocess via ``execute_task`` (returns
+    immediately), then polls ``check_execution`` every 30 seconds with
+    automatic stall detection.
+
+    The subprocess receives pre-loaded shared context to avoid redundant reads
+    of architecture.md, config.yaml, and lesson-learn.md (~20-50KB savings per
+    agent). It self-loads only task-specific content via MCP tools and submits
+    self-review evidence via submit_review(reviewer_type='self'). It does NOT dispatch reviewer
+    subagents or mark the task as completed — that happens at the orchestrator
+    level (Step 4.4).
 
     Args:
         task: Task metadata dict with id, title, etc.
-        context_package: Inline text from build_context_package().
-        fresh: If True, this is a retry — add retry context to prompt.
+        dispatch_info: Lightweight text from build_dispatch_info() (~200-500 bytes).
+        fresh: If True, this is a retry — add retry context to dispatch_info.
+        shared_context: Pre-loaded shared context from build_batch_shared_context().
 
     Returns:
-        Result with: success (bool), outcome_summary (str).
+        Completed status dict with ``outcome`` key from poll_until_completion(),
+        or error dict if dispatch failed.
     """
-    retry_note = ""
+    info = dispatch_info
     if fresh:
-        retry_note = (
+        info += (
             "\n\n## RETRY NOTE\n"
             "This is a retry attempt. A previous agent failed review.\n"
             "Pay extra attention to the review feedback from the prior attempt.\n"
         )
 
-    # Synchronous dispatch — orchestrator waits for completion
-    result = Task(
-        description=f"Implement {task['id']}: {task['title']}",
-        prompt=SUBAGENT_PROMPT_TEMPLATE.format(
-            task_id=task["id"],
-            task_title=task["title"],
-            context_package=context_package,
-            retry_note=retry_note,
-        ),
-        subagent_type="{resolve via Section D from _round-table-blocks.md using task.component}",
-        # run_in_background=false — orchestrator waits
-    )
+    # Read executor from .sdlc/config.yaml daemon.adapter (default: "claude")
+    executor = read_config_value("daemon.adapter", default="claude")
 
-    return parse_subagent_result(result)
+    # NON-BLOCKING MCP call — returns immediately with a handle
+    handle = mcp__asdlc__execute_task(
+        task_id=task["id"],
+        executor=executor,
+        max_turns=classify_max_turns(task),
+        dispatch_info=info,
+        shared_context=shared_context,
+    )
+    # handle = {"status": "launched", "pid": N, "log_path": "..."}
+
+    # ERROR CHECK: If dispatch failed, do NOT fall back to Task tool subagents
+    if handle.get("status") == "error":
+        mcp__asdlc__log_correction(
+            context_type="task", context_id=task["id"],
+            category="process",
+            description=f"execute_task failed: {handle.get('error', 'unknown')}")
+        return {
+            "status": "failed",
+            "outcome": {
+                "verdict": "BLOCKED",
+                "summary": f"Dispatch failed: {handle.get('error', '')[:200]}",
+            },
+        }
+
+    # MANDATORY: Poll until completion with stall detection
+    # Never fire-and-forget — always monitor the subprocess
+    result = poll_until_completion(handle, task_id=task["id"])
+
+    return result
 
 
 def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
@@ -1896,10 +2414,10 @@ def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
     # 1. Check self-review evidence
     evidence = mcp__asdlc__get_review_evidence(task_id=task_id)
     if not evidence.get("self_review"):
-        mcp__asdlc__block_task(task_id=task_id, reason="self-review not submitted")
+        mcp__asdlc__update_task(task_id=task_id, status="blocked")
         return "blocked"
     if evidence["self_review"]["verdict"] == "fail":
-        mcp__asdlc__block_task(task_id=task_id, reason="self-review failed")
+        mcp__asdlc__update_task(task_id=task_id, status="blocked")
         return "blocked"
 
     # 2. Check if subagent review is enabled (defaults to True when review.enabled is True)
@@ -1940,7 +2458,7 @@ def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:
     return "blocked"
 
 
-# record_outcome() and extract_outcome_summary() — see Step 4.3 above for full definitions
+# record_outcome() and parse_task_outcome() — see Step 4.3 above for full definitions
 
 
 def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
@@ -1967,17 +2485,22 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
     except:
         pass  # Use default
 
-    # --- Auto-compact thresholds (FR-005) ---
-    compact_threshold = 70   # Warn and pause at this percentage
-    urgent_threshold = 85    # Warn urgently
-    halt_threshold = 95      # Halt execution
+    # --- Context pressure thresholds (FR-005) ---
+    warn_threshold = 70      # Log notice + save checkpoint
+    urgent_threshold = 85    # Prompt user to halt or continue
+    compact_threshold = 95   # Auto-compact context and continue
 
     # Optional: read from .sdlc/config.yaml
     #   sprint:
-    #     compact_threshold: 70
+    #     context_thresholds:
+    #       warn: 70
+    #       urgent: 85
+    #       compact: 95
     try:
-        if "compact_threshold:" in config:
-            compact_threshold = int(config.sprint.compact_threshold)
+        if "context_thresholds:" in config:
+            warn_threshold = int(config.sprint.context_thresholds.warn)
+            urgent_threshold = int(config.sprint.context_thresholds.urgent)
+            compact_threshold = int(config.sprint.context_thresholds.compact)
     except:
         pass  # Use defaults
 
@@ -2039,19 +2562,19 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
         all_tasks = [t for g in prd_groups for t in g["tasks"]]
         persona_panel = detect_domains_and_assemble_panel(prd_groups, all_tasks)
 
-    # --- Pre-build context packages and batch groupings per PRD ---
+    # --- Build batch groupings and dispatch info per PRD ---
     for group in prd_groups:
         batches, unresolvable = build_batches(group["tasks"])
         group["batches"] = batches
         if unresolvable:
             warn_circular_deps(unresolvable)
 
-        # Build context packages for all tasks in this PRD
-        group["context_packages"] = {}
+        # Build lightweight dispatch info per task (from in-memory task list only)
+        group["dispatch_info"] = {}
         for batch in batches:
             for task in batch:
-                group["context_packages"][task["id"]] = build_context_package(
-                    task["id"], completed_outcomes={}
+                group["dispatch_info"][task["id"]] = build_dispatch_info(
+                    task, completed_outcomes={}
                 )
 
     # --- Round-Table: Isolated Execution Strategy (Step 8.6) ---
@@ -2069,7 +2592,7 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
     # User confirms execution (existing Step 9 confirmation flow)
 
     # --- Launch one agent per PRD (up to max_parallel) ---
-    # Each agent receives pre-built context packages organized by batch
+    # Each agent receives lightweight dispatch info and self-loads content
     active = {}
     queue = list(prd_groups)
 
@@ -2091,7 +2614,7 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
                 group,
                 worktree_path=f".worktrees/{group['prd_id']}/",
                 batches=group["batches"],
-                context_packages=group["context_packages"],
+                dispatch_info=group["dispatch_info"],
             )
             active[group["prd_id"]] = agent_id
 
@@ -2099,12 +2622,13 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
         del active[completed_prd]
 
         # --- Track context consumption (FR-004) ---
-        context_chars_consumed += len(str(prd_result))
-        context_chars_consumed += 500  # Orchestrator overhead estimate
+        # Only count what stays in orchestrator context: parsed outcome blocks
+        task_outcome_blocks = parse_prd_agent_task_outcomes(prd_result)
+        context_chars_consumed += len(str(task_outcome_blocks)) + 300  # outcomes + overhead
 
         # --- Orchestrator Review Dispatch for isolated mode (Step 4.4) ---
-        # Parse task outcomes from the PRD agent's structured output
-        task_outcomes = parse_prd_agent_task_outcomes(prd_result)
+        # task_outcome_blocks already parsed above for context tracking
+        task_outcomes = task_outcome_blocks
         review_config = load_review_config()  # from .sdlc/config.yaml
 
         for task_id, task_outcome in task_outcomes.items():
@@ -2139,74 +2663,106 @@ def run_isolated_mode(sprint_id, prd_groups, max_parallel, base_branch,
 
         print(f"{budget_indicator} Context: ~{budget_percentage:.0f}% estimated ({estimated_tokens:,}/{budget_tokens:,} tokens)")
 
-        # --- Auto-compact guidance (FR-005) ---
-        if budget_percentage >= halt_threshold:
-            # HALT: Context critically high
+        # --- Context pressure management (FR-005) ---
+        if budget_percentage >= compact_threshold:
+            # AUTO-COMPACT: Context critically high — compact automatically and continue
             write_state_checkpoint(outcomes, prd_groups)
             print(f"""
-🛑 CONTEXT BUDGET CRITICAL: ~{budget_percentage:.0f}%
+🔄 AUTO-COMPACT: Context at ~{budget_percentage:.0f}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Execution halted to prevent context overflow.
-State saved to: {state_file}
-
-To resume after compacting:
-  1. Run /compact
-  2. Run /sdlc:sprint-run {sprint_id} --resume
+Checkpoint saved. Compacting context to minimal form...
+Dropping verbose state, keeping only structured outcomes.
+Execution continues.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             """)
-            # Stop launching new PRD agents — exit the while loop
-            break
+            # Reset tracking — after compact, context consumption is reduced
+            context_chars_consumed = len(str(outcomes)) + 1000  # Re-baseline
 
         elif budget_percentage >= urgent_threshold:
-            # URGENT WARNING
-            write_state_checkpoint(outcomes, prd_groups)
-            print(f"""
-⚠️ CONTEXT BUDGET HIGH: ~{budget_percentage:.0f}%
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-State saved. Strongly recommend compacting NOW.
-
-To resume:
-  1. Run /compact
-  2. Run /sdlc:sprint-run {sprint_id} --resume
-
-Execution will HALT at {halt_threshold}%.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            """)
-            # Continue execution but user is warned
-
-        elif budget_percentage >= compact_threshold:
-            # PAUSE: Recommend compacting
+            # URGENT: Prompt user — halt or continue
             write_state_checkpoint(outcomes, prd_groups)
 
-            compact_decision = AskUserQuestion({
+            urgent_decision = AskUserQuestion({
                 questions: [{
-                    question: f"Context budget at ~{budget_percentage:.0f}%. State saved. Compact now?",
-                    header: "Context",
+                    question: f"Context budget at ~{budget_percentage:.0f}%. Auto-compact triggers at {compact_threshold}%.",
+                    header: "Context pressure",
                     options: [
-                        { label: "Compact & resume", description: f"Run /compact, then /sdlc:sprint-run {sprint_id} --resume" },
-                        { label: "Continue", description: f"Keep going (will warn again at {urgent_threshold}%, halt at {halt_threshold}%)" },
+                        { label: "Continue", description: f"Keep going (auto-compact at {compact_threshold}%)" },
+                        { label: "Halt and resume later", description: f"Save state, end session. Resume: /sdlc:sprint-run {sprint_id} --resume" },
                         { label: "Abort sprint", description: "Stop execution, state is saved" }
                     ],
                     multiSelect: false
                 }]
             })
 
-            if compact_decision == "Compact & resume":
-                print(f"""
-State saved to: {state_file}
-
-Next steps:
-  1. Run /compact
-  2. Run /sdlc:sprint-run {sprint_id} --resume
-                """)
-                return  # Exit run_isolated_mode — user will compact and resume
-            elif compact_decision == "Abort sprint":
+            if urgent_decision == "Halt and resume later":
+                print(f"State saved to: {state_file}")
+                print(f"Resume: /sdlc:sprint-run {sprint_id} --resume")
+                return
+            elif urgent_decision == "Abort sprint":
                 print("Sprint execution aborted. State saved for later resume.")
                 return
             # "Continue" — proceed to next PRD agent
 
+        elif budget_percentage >= warn_threshold:
+            # WARN: Log notice + save checkpoint (passive)
+            write_state_checkpoint(outcomes, prd_groups)
+            print(f"ℹ️ Context at ~{budget_percentage:.0f}%. Checkpoint saved. Continuing...")
+
+    # =========================================================================
+    # Post-Flight Remediation Loop — Isolated Mode (FR-023, FR-038, AC-022, AC-025)
+    # =========================================================================
+    # Same logic as simple mode. Config-gated: Only runs when quality.enabled is true.
+    quality_config = load_quality_config()
+    if quality_config.enabled:
+        max_passes = quality_config.max_remediation_passes
+        remediation_pass = 0
+
+        while remediation_pass < max_passes:
+            report = mcp__asdlc__get_quality_report("sprint", sprint_id=sprint_id)
+            if report.get("status") != "ok" or report.get("pass", True):
+                if report.get("pass", True):
+                    print("  Post-flight quality check: PASS — no gaps remaining.")
+                break
+
+            remediation_pass += 1
+            agg = report["aggregate"]
+            print(f"Post-Flight Remediation (Pass {remediation_pass}/{max_passes}): "
+                  f"{agg['orphaned_requirements']} orphaned, "
+                  f"{agg['total_acs'] - agg['verified_acs']} unverified ACs")
+
+            remediation_result = mcp__asdlc__create_remediation_tasks(sprint_id=sprint_id)
+            if remediation_result.get("status") != "ok" or remediation_result.get("created_count", 0) == 0:
+                break
+
+            # Execute remediation tasks
+            for rt in remediation_result.get("tasks", []):
+                task_data = mcp__asdlc__get_task(task_id=rt["task_id"])
+                if task_data.get("status") != "error":
+                    update_task(rt["task_id"], status="in_progress")
+                    info = build_dispatch_info(task_data, outcomes)
+                    info += "\n\n## REMEDIATION CONTEXT\nThis is a remediation task."
+                    result = dispatch_subagent(task_data, info)
+                    record_outcome(task_data, result, outcomes)
+                    update_task(rt["task_id"], status="completed")
+
+            write_state_checkpoint(outcomes, prd_groups)
+
+        # AC-025: Max passes reached with remaining gaps
+        if remediation_pass >= max_passes:
+            final_report = mcp__asdlc__get_quality_report("sprint", sprint_id=sprint_id)
+            if final_report.get("status") == "ok" and not final_report.get("pass", True):
+                agg = final_report["aggregate"]
+                print(f"Post-Flight Remediation: INCOMPLETE after {max_passes} passes. "
+                      f"Gaps: {agg['orphaned_requirements']} orphaned, "
+                      f"{agg['total_acs'] - agg['verified_acs']} unverified ACs")
+                mcp__asdlc__log_correction(
+                    context_type="sprint", context_id=sprint_id, category="process",
+                    description=f"Post-flight remediation incomplete after {max_passes} passes"
+                )
+
     # Branch completion — use complete_prd_worktree with config-aware options
-    config = get_git_safety_config()
+    config = manage_git_safety("get")
     for group in prd_groups:
         action = prompt_completion_action(group["prd_id"], config)
         complete_prd_worktree(prd_id=group["prd_id"], action=action)

@@ -1,11 +1,15 @@
 """Tests for MCP server tools."""
 
+import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from a_sdlc.core.quality_config import ChallengeConfig, QualityConfig
 
 
 @pytest.fixture
@@ -2016,8 +2020,8 @@ class TestDesignMCPTools:
 # =============================================================================
 
 
-class TestSubmitSelfReview:
-    """Test submit_self_review MCP tool."""
+class TestSubmitReviewSelf:
+    """Test submit_review MCP tool with reviewer_type='self'."""
 
     def _make_task(self):
         return {
@@ -2030,9 +2034,9 @@ class TestSubmitSelfReview:
         }
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_self_review_pass(self, mock_get_db):
+    def test_submit_review_self_pass(self, mock_get_db):
         """Self-review with 'pass' verdict creates review and returns ok."""
-        from a_sdlc.server import submit_self_review
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2049,7 +2053,7 @@ class TestSubmitSelfReview:
             "test_output": None,
         }
 
-        result = submit_self_review("TEST-T00001", "pass")
+        result = submit_review("TEST-T00001", "self", "pass")
 
         assert result["status"] == "ok"
         assert result["review_id"] == 1
@@ -2062,13 +2066,12 @@ class TestSubmitSelfReview:
             reviewer_type="self",
             verdict="pass",
             findings=None,
-            test_output=None,
         )
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_self_review_fail(self, mock_get_db):
+    def test_submit_review_self_fail(self, mock_get_db):
         """Self-review with 'fail' verdict is accepted."""
-        from a_sdlc.server import submit_self_review
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2085,8 +2088,9 @@ class TestSubmitSelfReview:
             "test_output": "FAILED test_auth.py::test_login",
         }
 
-        result = submit_self_review(
+        result = submit_review(
             "TEST-T00001",
+            "self",
             "fail",
             findings='[{"severity": "high", "description": "Test failure"}]',
             test_output="FAILED test_auth.py::test_login",
@@ -2105,38 +2109,38 @@ class TestSubmitSelfReview:
         )
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_self_review_task_not_found(self, mock_get_db):
+    def test_submit_review_self_task_not_found(self, mock_get_db):
         """Self-review on non-existent task returns not_found."""
-        from a_sdlc.server import submit_self_review
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_task.return_value = None
 
-        result = submit_self_review("NONEXISTENT", "pass")
+        result = submit_review("NONEXISTENT", "self", "pass")
 
         assert result["status"] == "not_found"
         mock_db.create_review.assert_not_called()
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_self_review_invalid_verdict(self, mock_get_db):
+    def test_submit_review_self_invalid_verdict(self, mock_get_db):
         """Self-review with invalid verdict (e.g. 'approve') returns error."""
-        from a_sdlc.server import submit_self_review
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_task.return_value = self._make_task()
 
-        result = submit_self_review("TEST-T00001", "approve")
+        result = submit_review("TEST-T00001", "self", "approve")
 
         assert result["status"] == "error"
         assert "Invalid verdict" in result["message"]
         mock_db.create_review.assert_not_called()
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_self_review_round_auto_increment(self, mock_get_db):
+    def test_submit_review_self_round_auto_increment(self, mock_get_db):
         """Submitting two self-reviews results in rounds 1 and 2."""
-        from a_sdlc.server import submit_self_review
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2148,7 +2152,7 @@ class TestSubmitSelfReview:
             "id": 1, "round": 1, "reviewer_type": "self", "verdict": "fail",
         }
 
-        result1 = submit_self_review("TEST-T00001", "fail")
+        result1 = submit_review("TEST-T00001", "self", "fail")
         assert result1["round"] == 1
 
         # Second call: one existing self-review
@@ -2159,13 +2163,13 @@ class TestSubmitSelfReview:
             "id": 2, "round": 2, "reviewer_type": "self", "verdict": "pass",
         }
 
-        result2 = submit_self_review("TEST-T00001", "pass")
+        result2 = submit_review("TEST-T00001", "self", "pass")
         assert result2["round"] == 2
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_self_review_empty_strings_become_none(self, mock_get_db):
+    def test_submit_review_self_empty_strings_become_none(self, mock_get_db):
         """Empty findings and test_output are stored as None."""
-        from a_sdlc.server import submit_self_review
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2173,7 +2177,7 @@ class TestSubmitSelfReview:
         mock_db.get_reviews_for_task.return_value = []
         mock_db.create_review.return_value = {"id": 1, "round": 1}
 
-        submit_self_review("TEST-T00001", "pass", findings="", test_output="")
+        submit_review("TEST-T00001", "self", "pass", findings="", test_output="")
 
         mock_db.create_review.assert_called_once_with(
             task_id="TEST-T00001",
@@ -2182,12 +2186,11 @@ class TestSubmitSelfReview:
             reviewer_type="self",
             verdict="pass",
             findings=None,
-            test_output=None,
         )
 
 
-class TestSubmitReviewVerdict:
-    """Test submit_review_verdict MCP tool."""
+class TestSubmitReviewSubagent:
+    """Test submit_review MCP tool with reviewer_type='subagent'."""
 
     def _make_task(self):
         return {
@@ -2200,9 +2203,9 @@ class TestSubmitReviewVerdict:
         }
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_approve(self, mock_get_db):
+    def test_submit_review_subagent_approve(self, mock_get_db):
         """Subagent review with 'approve' verdict succeeds."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2218,7 +2221,7 @@ class TestSubmitReviewVerdict:
             "findings": None,
         }
 
-        result = submit_review_verdict("TEST-T00001", "approve")
+        result = submit_review("TEST-T00001", "subagent", "approve")
 
         assert result["status"] == "ok"
         assert result["review_id"] == 1
@@ -2226,9 +2229,9 @@ class TestSubmitReviewVerdict:
         assert result["verdict"] == "approve"
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_request_changes(self, mock_get_db):
+    def test_submit_review_subagent_request_changes(self, mock_get_db):
         """Subagent review with 'request_changes' verdict succeeds."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2241,8 +2244,9 @@ class TestSubmitReviewVerdict:
             "verdict": "request_changes",
         }
 
-        result = submit_review_verdict(
+        result = submit_review(
             "TEST-T00001",
+            "subagent",
             "request_changes",
             findings='[{"description": "Missing error handling"}]',
         )
@@ -2251,9 +2255,9 @@ class TestSubmitReviewVerdict:
         assert result["verdict"] == "request_changes"
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_escalate(self, mock_get_db):
+    def test_submit_review_subagent_escalate(self, mock_get_db):
         """Subagent review with 'escalate' verdict succeeds."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2266,44 +2270,44 @@ class TestSubmitReviewVerdict:
             "verdict": "escalate",
         }
 
-        result = submit_review_verdict("TEST-T00001", "escalate")
+        result = submit_review("TEST-T00001", "subagent", "escalate")
 
         assert result["status"] == "ok"
         assert result["verdict"] == "escalate"
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_invalid_verdict(self, mock_get_db):
+    def test_submit_review_subagent_invalid_verdict(self, mock_get_db):
         """Subagent review with invalid verdict (e.g. 'pass') returns error."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_task.return_value = self._make_task()
 
-        result = submit_review_verdict("TEST-T00001", "pass")
+        result = submit_review("TEST-T00001", "subagent", "pass")
 
         assert result["status"] == "error"
         assert "Invalid verdict" in result["message"]
         mock_db.create_review.assert_not_called()
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_task_not_found(self, mock_get_db):
+    def test_submit_review_subagent_task_not_found(self, mock_get_db):
         """Subagent review on non-existent task returns not_found."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_task.return_value = None
 
-        result = submit_review_verdict("NONEXISTENT", "approve")
+        result = submit_review("NONEXISTENT", "subagent", "approve")
 
         assert result["status"] == "not_found"
         mock_db.create_review.assert_not_called()
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_round_auto_increment(self, mock_get_db):
+    def test_submit_review_subagent_round_auto_increment(self, mock_get_db):
         """Submitting two subagent reviews results in rounds 1 and 2."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2313,7 +2317,7 @@ class TestSubmitReviewVerdict:
         mock_db.get_reviews_for_task.return_value = []
         mock_db.create_review.return_value = {"id": 1, "round": 1}
 
-        result1 = submit_review_verdict("TEST-T00001", "request_changes")
+        result1 = submit_review("TEST-T00001", "subagent", "request_changes")
         assert result1["round"] == 1
 
         # Second call: one existing subagent review
@@ -2322,13 +2326,13 @@ class TestSubmitReviewVerdict:
         ]
         mock_db.create_review.return_value = {"id": 2, "round": 2}
 
-        result2 = submit_review_verdict("TEST-T00001", "approve")
+        result2 = submit_review("TEST-T00001", "subagent", "approve")
         assert result2["round"] == 2
 
     @patch("a_sdlc.server.get_db")
-    def test_submit_review_verdict_ignores_self_reviews_in_round_count(self, mock_get_db):
+    def test_submit_review_subagent_ignores_self_reviews_in_round_count(self, mock_get_db):
         """Subagent round count is independent of self-review rounds."""
-        from a_sdlc.server import submit_review_verdict
+        from a_sdlc.server import submit_review
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2341,7 +2345,7 @@ class TestSubmitReviewVerdict:
         ]
         mock_db.create_review.return_value = {"id": 3, "round": 1}
 
-        result = submit_review_verdict("TEST-T00001", "approve")
+        result = submit_review("TEST-T00001", "subagent", "approve")
 
         # First subagent review should be round 1, not 3
         assert result["round"] == 1
@@ -2498,12 +2502,14 @@ class TestUpdateTaskReviewGate:
             "component": None,
         }
 
+    @patch("a_sdlc.server.load_quality_config")
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
     def test_complete_with_review_disabled_succeeds(
-        self, mock_get_db, mock_load_review_config
+        self, mock_get_db, mock_load_review_config, mock_load_quality_config
     ):
         """update_task(status='completed') with review DISABLED succeeds normally."""
+        from a_sdlc.core.quality_config import QualityConfig
         from a_sdlc.core.review_config import ReviewConfig
         from a_sdlc.server import update_task
 
@@ -2513,6 +2519,7 @@ class TestUpdateTaskReviewGate:
         mock_db.update_task.return_value = {**self._make_task(), "status": "completed"}
 
         mock_load_review_config.return_value = ReviewConfig(enabled=False)
+        mock_load_quality_config.return_value = QualityConfig(enabled=False)
 
         result = update_task("TEST-T00001", status="completed")
 
@@ -2543,17 +2550,18 @@ class TestUpdateTaskReviewGate:
         assert result["status"] == "error"
         assert "Cannot complete TEST-T00001" in result["message"]
         assert "no approved review evidence" in result["message"]
-        assert "submit_self_review()" in result["message"]
-        assert "submit_review_verdict()" in result["message"]
+        assert "submit_review(" in result["message"]
         # Should NOT call update_task on db when gate blocks
         mock_db.update_task.assert_not_called()
 
+    @patch("a_sdlc.server.load_quality_config")
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
     def test_complete_with_review_enabled_approved_review_succeeds(
-        self, mock_get_db, mock_load_review_config
+        self, mock_get_db, mock_load_review_config, mock_load_quality_config
     ):
         """update_task(status='completed') with review ENABLED and approved review succeeds."""
+        from a_sdlc.core.quality_config import QualityConfig
         from a_sdlc.core.review_config import ReviewConfig
         from a_sdlc.server import update_task
 
@@ -2572,6 +2580,7 @@ class TestUpdateTaskReviewGate:
         mock_db.update_task.return_value = {**self._make_task(), "status": "completed"}
 
         mock_load_review_config.return_value = ReviewConfig(enabled=True)
+        mock_load_quality_config.return_value = QualityConfig(enabled=False)
 
         result = update_task("TEST-T00001", status="completed")
 
@@ -2581,12 +2590,12 @@ class TestUpdateTaskReviewGate:
 
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
-    def test_complete_task_inherits_gate_behavior(
+    def test_update_task_completed_inherits_gate_behavior(
         self, mock_get_db, mock_load_review_config
     ):
-        """complete_task() inherits the review gate since it delegates to update_task."""
+        """update_task(status='completed') triggers the review gate."""
         from a_sdlc.core.review_config import ReviewConfig
-        from a_sdlc.server import complete_task
+        from a_sdlc.server import update_task
 
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
@@ -2595,7 +2604,7 @@ class TestUpdateTaskReviewGate:
 
         mock_load_review_config.return_value = ReviewConfig(enabled=True)
 
-        result = complete_task("TEST-T00001")
+        result = update_task("TEST-T00001", status="completed")
 
         assert result["status"] == "error"
         assert "Cannot complete TEST-T00001" in result["message"]
@@ -2644,10 +2653,10 @@ class TestUpdateTaskReviewGate:
 
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
-    def test_error_message_mentions_both_review_tools(
+    def test_error_message_mentions_submit_review(
         self, mock_get_db, mock_load_review_config
     ):
-        """Error message references both submit_self_review() and submit_review_verdict()."""
+        """Error message references submit_review()."""
         from a_sdlc.core.review_config import ReviewConfig
         from a_sdlc.server import update_task
 
@@ -2661,16 +2670,17 @@ class TestUpdateTaskReviewGate:
         result = update_task("TEST-T00001", status="completed")
 
         msg = result["message"]
-        assert "submit_self_review()" in msg
-        assert "submit_review_verdict()" in msg
+        assert "submit_review(" in msg
         assert ".sdlc/config.yaml" in msg
 
+    @patch("a_sdlc.server.load_quality_config")
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
     def test_complete_with_review_enabled_pass_verdict_succeeds(
-        self, mock_get_db, mock_load_review_config
+        self, mock_get_db, mock_load_review_config, mock_load_quality_config
     ):
         """update_task(status='completed') with a 'pass' verdict also succeeds."""
+        from a_sdlc.core.quality_config import QualityConfig
         from a_sdlc.core.review_config import ReviewConfig
         from a_sdlc.server import update_task
 
@@ -2689,8 +2699,461 @@ class TestUpdateTaskReviewGate:
         mock_db.update_task.return_value = {**self._make_task(), "status": "completed"}
 
         mock_load_review_config.return_value = ReviewConfig(enabled=True)
+        mock_load_quality_config.return_value = QualityConfig(enabled=False)
 
         result = update_task("TEST-T00001", status="completed")
 
         assert result["status"] == "updated"
         mock_db.update_task.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# MCP server singleton (PID file lock)
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServerSingleton:
+    """Tests for the MCP server singleton PID file mechanism."""
+
+    def test_run_server_stdio_skips_singleton(self, tmp_path):
+        """Stdio transport skips singleton check — each session needs its own process."""
+        from a_sdlc.server import run_server
+
+        with (
+            patch("a_sdlc.server._mcp_is_running") as mock_is_running,
+            patch("a_sdlc.server._mcp_write_pid") as mock_write,
+            patch("a_sdlc.server._start_ui_server"),
+            patch("a_sdlc.server.mcp") as mock_mcp,
+            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
+            patch("a_sdlc.server.signal.signal"),
+            patch("a_sdlc.server.atexit.register"),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            os.environ.pop("A_SDLC_CHILD", None)
+            run_server(transport="stdio")
+
+        mock_is_running.assert_not_called()
+        mock_write.assert_not_called()
+        mock_mcp.run.assert_called_once_with(transport="stdio")
+
+    def test_run_server_http_writes_pid_for_primary(self, tmp_path):
+        """HTTP transport writes a PID file for singleton enforcement."""
+        from a_sdlc.server import run_server
+
+        pid_file = tmp_path / "mcp.pid"
+
+        with (
+            patch("a_sdlc.server._MCP_PID_FILE", pid_file),
+            patch("a_sdlc.server._mcp_is_running", return_value=False),
+            patch("a_sdlc.server._start_ui_server"),
+            patch("a_sdlc.server.mcp") as mock_mcp,
+            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
+            patch("a_sdlc.server.signal.signal"),
+            patch("a_sdlc.server.atexit.register"),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            os.environ.pop("A_SDLC_CHILD", None)
+            with patch("a_sdlc.server._mcp_write_pid") as mock_write:
+                run_server(transport="streamable-http")
+            mock_write.assert_called_once()
+            mock_mcp.run.assert_called_once_with(transport="streamable-http")
+
+    def test_run_server_http_exits_if_primary_running(self, tmp_path):
+        """Second HTTP instance exits silently when another is running."""
+        from a_sdlc.server import run_server
+
+        with (
+            patch("a_sdlc.server._mcp_is_running", return_value=True),
+            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
+            patch("a_sdlc.server.signal.signal"),
+            patch("a_sdlc.server.atexit.register"),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+            patch.dict("os.environ", {}, clear=False),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            os.environ.pop("A_SDLC_CHILD", None)
+            run_server(transport="streamable-http")
+
+        assert exc_info.value.code == 0
+
+    def test_run_server_skips_pid_for_child(self, tmp_path):
+        """Child instance (A_SDLC_CHILD=1) skips PID file and UI server."""
+        from a_sdlc.server import run_server
+
+        with (
+            patch("a_sdlc.server._mcp_is_running") as mock_is_running,
+            patch("a_sdlc.server._mcp_write_pid") as mock_write,
+            patch("a_sdlc.server._start_ui_server") as mock_ui,
+            patch("a_sdlc.server.mcp") as mock_mcp,
+            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
+            patch("a_sdlc.server.signal.signal"),
+            patch("a_sdlc.server.atexit.register"),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+            patch.dict("os.environ", {"A_SDLC_CHILD": "1"}, clear=False),
+        ):
+            run_server()
+
+        mock_is_running.assert_not_called()
+        mock_write.assert_not_called()
+        mock_ui.assert_not_called()
+        mock_mcp.run.assert_called_once_with(transport="stdio")
+
+
+# ---------------------------------------------------------------------------
+# Server lifecycle: crash logging, signal handling, UI PID management
+# ---------------------------------------------------------------------------
+
+
+class TestServerLifecycle:
+    """Tests for crash logging, signal handling, and UI PID management."""
+
+    def test_run_server_logs_exception_on_crash(self, tmp_path):
+        """mcp.run() crash calls _stop_ui_server and sys.exit(1)."""
+        from a_sdlc.server import run_server
+
+        with (
+            patch("a_sdlc.server._start_ui_server"),
+            patch("a_sdlc.server._stop_ui_server") as mock_stop,
+            patch("a_sdlc.server.mcp") as mock_mcp,
+            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
+            patch("a_sdlc.server.signal.signal"),
+            patch("a_sdlc.server.atexit.register"),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+            patch.dict("os.environ", {}, clear=False),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            os.environ.pop("A_SDLC_CHILD", None)
+            mock_mcp.run.side_effect = RuntimeError("transport broken")
+            run_server(transport="stdio")
+
+        assert exc_info.value.code == 1
+        mock_stop.assert_called()
+
+    def test_signal_handler_cleans_pid(self):
+        """Signal handler calls both _stop_ui_server and _mcp_remove_pid."""
+        from a_sdlc.server import _signal_handler
+
+        with (
+            patch("a_sdlc.server._stop_ui_server") as mock_stop,
+            patch("a_sdlc.server._mcp_remove_pid") as mock_remove,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _signal_handler(15, None)
+
+        assert exc_info.value.code == 0
+        mock_stop.assert_called_once()
+        mock_remove.assert_called_once()
+
+    def test_start_ui_server_writes_pid_file(self, tmp_path):
+        """_start_ui_server writes the UI PID to _UI_PID_FILE."""
+        from a_sdlc.server import _start_ui_server
+
+        pid_file = tmp_path / "ui.pid"
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+
+        with (
+            patch("a_sdlc.server._UI_PID_FILE", pid_file),
+            patch("a_sdlc.server._cleanup_stale_ui"),
+            patch("a_sdlc.server._is_port_in_use", return_value=False),
+            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
+            patch("a_sdlc.server.subprocess.Popen", return_value=mock_proc),
+            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+        ):
+            # Mock the fastapi/uvicorn imports
+            import sys as _sys
+
+            _sys.modules.setdefault("fastapi", MagicMock())
+            _sys.modules.setdefault("uvicorn", MagicMock())
+            try:
+                result = _start_ui_server()
+            finally:
+                _sys.modules.pop("fastapi", None)
+                _sys.modules.pop("uvicorn", None)
+
+        assert result is mock_proc
+        assert pid_file.exists()
+        assert pid_file.read_text() == "12345"
+
+    def test_cleanup_stale_ui_removes_dead_pid(self, tmp_path):
+        """_cleanup_stale_ui removes PID file when process is dead."""
+        from a_sdlc.server import _cleanup_stale_ui
+
+        pid_file = tmp_path / "ui.pid"
+        pid_file.write_text("999999")  # Very unlikely to be a real PID
+
+        with (
+            patch("a_sdlc.server._UI_PID_FILE", pid_file),
+            patch("os.kill", side_effect=ProcessLookupError),
+        ):
+            _cleanup_stale_ui()
+
+        assert not pid_file.exists()
+
+    def test_stop_ui_server_removes_pid_file(self, tmp_path):
+        """_stop_ui_server removes the UI PID file."""
+        import a_sdlc.server as srv
+
+        pid_file = tmp_path / "ui.pid"
+        pid_file.write_text("12345")
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        original = srv._ui_process
+
+        try:
+            srv._ui_process = mock_proc
+            with patch("a_sdlc.server._UI_PID_FILE", pid_file):
+                srv._stop_ui_server()
+            mock_proc.terminate.assert_called_once()
+            assert not pid_file.exists()
+        finally:
+            srv._ui_process = original
+
+    def test_ui_stderr_captured_to_file(self, tmp_path):
+        """UI subprocess stderr goes to a file, not DEVNULL."""
+        from a_sdlc.server import _start_ui_server
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+
+        with (
+            patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
+            patch("a_sdlc.server._cleanup_stale_ui"),
+            patch("a_sdlc.server._is_port_in_use", return_value=False),
+            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
+            patch("a_sdlc.server.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+        ):
+            import sys as _sys
+
+            _sys.modules.setdefault("fastapi", MagicMock())
+            _sys.modules.setdefault("uvicorn", MagicMock())
+            try:
+                _start_ui_server()
+            finally:
+                _sys.modules.pop("fastapi", None)
+                _sys.modules.pop("uvicorn", None)
+
+        call_kwargs = mock_popen.call_args
+        # stderr should NOT be DEVNULL — it should be a file object
+        assert call_kwargs.kwargs.get("stderr") is not subprocess.DEVNULL or (
+            len(call_kwargs.args) > 0
+            and call_kwargs[1].get("stderr") is not subprocess.DEVNULL
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: build_execute_task_prompt quality section tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildExecuteTaskPromptQuality:
+    """Verify quality verification section is conditionally included."""
+
+    def test_includes_quality_section_when_enabled(self):
+        from a_sdlc.server import build_execute_task_prompt
+
+        qcfg = QualityConfig(
+            enabled=True,
+            ac_gate=True,
+            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
+        )
+        with patch(
+            "a_sdlc.core.quality_config.load_quality_config",
+            return_value=qcfg,
+        ):
+            prompt = build_execute_task_prompt(
+                "PROJ-T00001",
+                {"title": "Test task", "prd_id": None},
+            )
+        assert "## Quality Verification" in prompt
+        assert "verify_acceptance_criteria" in prompt
+        assert "get_task_requirements" in prompt
+        assert "may be challenged after completion" in prompt
+
+    def test_skips_quality_section_when_disabled(self):
+        from a_sdlc.server import build_execute_task_prompt
+
+        qcfg = QualityConfig(enabled=False)
+        with patch(
+            "a_sdlc.core.quality_config.load_quality_config",
+            return_value=qcfg,
+        ):
+            prompt = build_execute_task_prompt(
+                "PROJ-T00001",
+                {"title": "Test task", "prd_id": None},
+            )
+        assert "## Quality Verification" not in prompt
+        assert "verify_acceptance_criteria" not in prompt
+
+
+class TestGetPrdIncludeContent:
+    """Test include_content parameter on get_prd()."""
+
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_include_content_true_by_default(self, mock_get_db, mock_get_cm):
+        """Default behavior: content is read and returned."""
+        from a_sdlc.server import get_prd
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_prd.return_value = {
+            "id": "TEST-P0001",
+            "project_id": "test",
+            "title": "Test PRD",
+            "file_path": "/tmp/test.md",
+            "status": "draft",
+            "version": 1,
+            "updated_at": "2025-01-01",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_cm.read_content.return_value = "# PRD Content"
+
+        result = get_prd("TEST-P0001")
+
+        assert result["status"] == "ok"
+        assert result["prd"]["content"] == "# PRD Content"
+        mock_cm.read_content.assert_called_once()
+
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_include_content_false_skips_read(self, mock_get_db, mock_get_cm):
+        """When include_content=False, skip file read and return empty content."""
+        from a_sdlc.server import get_prd
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_prd.return_value = {
+            "id": "TEST-P0001",
+            "project_id": "test",
+            "title": "Test PRD",
+            "file_path": "/tmp/test.md",
+            "status": "draft",
+            "version": 1,
+            "updated_at": "2025-01-01",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+
+        result = get_prd("TEST-P0001", include_content=False)
+
+        assert result["status"] == "ok"
+        assert result["prd"]["content"] == ""
+        assert result["prd"]["file_path"] == "/tmp/test.md"
+        mock_cm.read_content.assert_not_called()
+        mock_cm.read_prd.assert_not_called()
+
+
+class TestGetTaskIncludeContent:
+    """Test include_content parameter on get_task()."""
+
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_include_content_true_by_default(self, mock_get_db, mock_get_cm):
+        """Default behavior: content, description, and data are populated."""
+        from a_sdlc.server import get_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = {
+            "id": "TEST-T00001",
+            "project_id": "test",
+            "title": "Test Task",
+            "file_path": "/tmp/task.md",
+            "status": "pending",
+            "priority": "medium",
+            "component": None,
+            "prd_id": None,
+            "updated_at": "2025-01-01",
+        }
+        mock_db.get_active_claim.return_value = None
+
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_cm.read_content.return_value = "# Task\n\nSome description"
+        mock_cm.parse_task_content.return_value = {
+            "description": "Some description",
+        }
+
+        result = get_task("TEST-T00001")
+
+        assert result["status"] == "ok"
+        assert result["task"]["content"] == "# Task\n\nSome description"
+        assert result["task"]["description"] == "Some description"
+        mock_cm.read_content.assert_called_once()
+
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_include_content_false_skips_read(self, mock_get_db, mock_get_cm):
+        """When include_content=False, skip file read and return empty fields."""
+        from a_sdlc.server import get_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = {
+            "id": "TEST-T00001",
+            "project_id": "test",
+            "title": "Test Task",
+            "file_path": "/tmp/task.md",
+            "status": "pending",
+            "priority": "medium",
+            "component": None,
+            "prd_id": None,
+            "updated_at": "2025-01-01",
+        }
+        mock_db.get_active_claim.return_value = None
+
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+
+        result = get_task("TEST-T00001", include_content=False)
+
+        assert result["status"] == "ok"
+        assert result["task"]["content"] == ""
+        assert result["task"]["description"] == ""
+        assert result["task"]["data"] is None
+        assert result["task"]["file_path"] == "/tmp/task.md"
+        assert result["task"]["sprint_id"] is None
+        mock_cm.read_content.assert_not_called()
+        mock_cm.parse_task_content.assert_not_called()
+
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_include_content_false_still_derives_sprint(self, mock_get_db, mock_get_cm):
+        """Even with include_content=False, sprint_id is still derived from PRD."""
+        from a_sdlc.server import get_task
+
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = {
+            "id": "TEST-T00001",
+            "project_id": "test",
+            "title": "Test Task",
+            "file_path": "/tmp/task.md",
+            "status": "pending",
+            "priority": "medium",
+            "component": None,
+            "prd_id": "TEST-P0001",
+            "updated_at": "2025-01-01",
+        }
+        mock_db.get_prd.return_value = {
+            "id": "TEST-P0001",
+            "sprint_id": "TEST-S0001",
+        }
+        mock_db.get_active_claim.return_value = None
+
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+
+        result = get_task("TEST-T00001", include_content=False)
+
+        assert result["status"] == "ok"
+        assert result["task"]["sprint_id"] == "TEST-S0001"
+        assert result["task"]["content"] == ""

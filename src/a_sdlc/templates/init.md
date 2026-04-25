@@ -248,20 +248,16 @@ After initialization, the following MCP tools are available:
 - `mcp__asdlc__list_tasks()` - List tasks (filterable)
 - `mcp__asdlc__get_task(task_id)` - Get task details with file_path
 - `mcp__asdlc__create_task(title, prd_id?, priority?)` - Create task (returns file_path → Write content)
-- `mcp__asdlc__update_task(task_id, status?, priority?)` - Update task metadata
-- `mcp__asdlc__start_task(task_id)` - Mark as in_progress
-- `mcp__asdlc__complete_task(task_id)` - Mark as completed
-- `mcp__asdlc__block_task(task_id)` - Mark as blocked
+- `mcp__asdlc__update_task(task_id, status?, priority?)` - Update task metadata (use status="in_progress"/"completed"/"blocked")
 - `mcp__asdlc__delete_task(task_id)` - Delete task
 
 ### Sprint Management
 - `mcp__asdlc__list_sprints()` - List sprints
 - `mcp__asdlc__get_sprint(sprint_id)` - Get sprint with tasks
 - `mcp__asdlc__create_sprint(title, goal)` - Create sprint
-- `mcp__asdlc__start_sprint(sprint_id)` - Activate sprint
+- `mcp__asdlc__update_sprint(sprint_id, status?, title?, goal?)` - Update sprint metadata (use status="active" to start)
 - `mcp__asdlc__complete_sprint(sprint_id)` - Complete sprint
-- `mcp__asdlc__add_tasks_to_sprint(sprint_id, task_ids)` - Add tasks
-- `mcp__asdlc__remove_tasks_from_sprint(sprint_id, task_ids)` - Remove tasks
+- `mcp__asdlc__manage_sprint_prds(action, prd_id, sprint_id?)` - Add/remove PRDs from sprint
 
 ## Output
 
