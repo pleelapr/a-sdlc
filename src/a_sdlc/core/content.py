@@ -642,6 +642,20 @@ class ContentManager:
             return []
         return sorted(task_dir.glob("*.md"))
 
+    def list_design_files(self, project_id: str) -> list[Path]:
+        """List all design files for a project.
+
+        Args:
+            project_id: Project identifier
+
+        Returns:
+            List of design file paths
+        """
+        design_dir = self.base_path / project_id / "designs"
+        if not design_dir.exists():
+            return []
+        return sorted(design_dir.glob("*.md"))
+
 
 # Global content manager instance
 _content_manager: ContentManager | None = None

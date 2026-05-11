@@ -1298,7 +1298,7 @@ class Database:
         name: str,
         path: str,
         shortname: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new project.
 
         Args:
@@ -1498,7 +1498,7 @@ class Database:
         status: str = "draft",
         source: str | None = None,
         sprint_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new PRD.
 
         Args:
@@ -1621,7 +1621,7 @@ class Database:
         priority: str = "medium",
         prd_id: str | None = None,
         component: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new task.
 
         Args:
@@ -1810,7 +1810,7 @@ class Database:
         title: str,
         goal: str = "",
         status: str = "planned",
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new sprint."""
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
@@ -2006,7 +2006,7 @@ class Database:
         prd_id: str,
         project_id: str,
         file_path: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new design document.
 
         Args:
@@ -2138,7 +2138,7 @@ class Database:
         path: str,
         sprint_id: str | None = None,
         status: str = "active",
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new worktree record.
 
         Args:
@@ -2510,7 +2510,7 @@ class Database:
 
     def set_external_config(
         self, project_id: str, system: str, config: dict[str, Any]
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Set external system configuration for a project.
 
         Args:
@@ -2589,7 +2589,7 @@ class Database:
         status: str = "active",
         permissions_profile: str | None = None,
         approved_by: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a new agent record.
 
         Args:
@@ -2958,7 +2958,7 @@ class Database:
         governance_config: str | None = None,
         total_budget_cents: int | None = None,
         agent_count: int = 0,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create an execution run record.
 
         Args:
@@ -3209,7 +3209,7 @@ class Database:
         depends_on: str | None = None,
         assigned_agent_id: str | None = None,
         config: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a work queue item.
 
         Args:
@@ -3296,7 +3296,7 @@ class Database:
         depends_on: list[str] | str | None = None,
         config: dict[str, Any] | str | None = None,
         retry_count: int = 0,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create a work queue item with auto-generated ID.
 
         Args:
@@ -3499,7 +3499,7 @@ class Database:
             completed_ids = {row["id"] for row in completed_rows}
 
             # Filter: item is dispatchable if depends_on is empty or all deps completed
-            dispatchable = []
+            dispatchable: list[dict[str, Any]] = []
             for row in pending_rows:
                 if len(dispatchable) >= available_slots:
                     break
@@ -3542,7 +3542,7 @@ class Database:
     # Work Queue Per-Item Control
     # =========================================================================
 
-    def pause_work_item(self, item_id: str) -> dict[str, Any]:
+    def pause_work_item(self, item_id: str) -> dict[str, Any] | None:
         """Pause a work item (pending/in_progress -> paused).
 
         Args:
@@ -3564,7 +3564,7 @@ class Database:
             )
         return self.update_work_item(item_id, status="paused")
 
-    def cancel_work_item(self, item_id: str) -> dict[str, Any]:
+    def cancel_work_item(self, item_id: str) -> dict[str, Any] | None:
         """Cancel a work item (non-terminal -> cancelled).
 
         Args:
@@ -3589,7 +3589,7 @@ class Database:
 
     def skip_work_item(
         self, item_id: str, reason: str | None = None
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Skip a work item (pending/blocked -> skipped).
 
         Args:
@@ -3615,7 +3615,7 @@ class Database:
             kwargs["result"] = reason
         return self.update_work_item(item_id, **kwargs)
 
-    def force_approve_work_item(self, item_id: str) -> dict[str, Any]:
+    def force_approve_work_item(self, item_id: str) -> dict[str, Any] | None:
         """Force-approve a work item (any state -> completed with result='force_approved').
 
         Args:
@@ -3634,7 +3634,7 @@ class Database:
             item_id, status="completed", result="force_approved"
         )
 
-    def retry_work_item(self, item_id: str) -> dict[str, Any]:
+    def retry_work_item(self, item_id: str) -> dict[str, Any] | None:
         """Retry a work item (failed/blocked -> pending, increment retry, clear error).
 
         Args:
@@ -3663,7 +3663,7 @@ class Database:
             completed_at=None,
         )
 
-    def answer_work_item(self, item_id: str, answer: str) -> dict[str, Any]:
+    def answer_work_item(self, item_id: str, answer: str) -> dict[str, Any] | None:
         """Answer a question work item (question items only -> completed with result=answer).
 
         Args:

@@ -7,6 +7,7 @@ shell commands, and skill templates -- identical to interactive sessions.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -16,6 +17,11 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]  # Windows
 
 from a_sdlc.storage import get_storage
 
@@ -524,7 +530,7 @@ def execute_work_loop(
                     storage.increment_agent_budget(
                         agent_id,
                         tokens_delta=turns * 4000,
-                        cost_delta=int(cost_usd * 100),
+                        cost_delta_cents=int(cost_usd * 100),
                     )
                 except Exception as budget_exc:
                     logger.warning(
@@ -631,29 +637,93 @@ def _run_path(run_id: str) -> Path:
 def _read_run(run_id: str) -> dict[str, Any]:
     """Read a run's state from its JSON file.
 
-    Returns an empty dict if the file does not exist.
+    Acquires a shared lock (``LOCK_SH``) before reading to prevent
+    reading a partially-written file.
+
+    Returns an empty dict if the file does not exist or contains
+    invalid JSON.
     """
     path = _run_path(run_id)
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    if not path.exists():
+        return {}
+    fd = None
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+        if fcntl:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+        raw = os.read(fd, 10_000_000)  # 10 MB ceiling
+        return json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("Failed to read run %s: %s", run_id, exc)
+        return {}
+    finally:
+        if fd is not None:
+            if fcntl:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 def _write_run(run_id: str, data: dict[str, Any]) -> None:
-    """Write a run's state to its JSON file."""
+    """Write a run's state to its JSON file.
+
+    Acquires an exclusive lock (``LOCK_EX``) before writing to prevent
+    concurrent writes from corrupting the file.
+    """
     path = _run_path(run_id)
-    path.write_text(json.dumps(data, indent=2, default=str))
+    fd = None
+    try:
+        fd = os.open(
+            str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644
+        )
+        if fcntl:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, json.dumps(data, indent=2, default=str).encode())
+    finally:
+        if fd is not None:
+            if fcntl:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 def _update_run(run_id: str, **kwargs: Any) -> dict[str, Any]:
-    """Merge *kwargs* into the run's existing state and persist."""
-    data = _read_run(run_id)
-    data.update(kwargs)
-    _write_run(run_id, data)
-    return data
+    """Merge *kwargs* into the run's existing state and persist.
+
+    Acquires an exclusive lock (``LOCK_EX``) for the entire
+    read-modify-write cycle to guarantee atomicity.
+    """
+    path = _run_path(run_id)
+    fd = None
+    try:
+        fd = os.open(
+            str(path), os.O_RDWR | os.O_CREAT, 0o644
+        )
+        if fcntl:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+
+        # Read existing data
+        raw = os.read(fd, 10_000_000)
+        try:
+            data: dict[str, Any] = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            data = {}
+
+        # Merge updates
+        data.update(kwargs)
+
+        # Write back: seek to start, truncate, then write
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, json.dumps(data, indent=2, default=str).encode())
+
+        return data
+    finally:
+        if fd is not None:
+            if fcntl:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 # ---------------------------------------------------------------------------
@@ -1642,7 +1712,7 @@ summary: <one paragraph>
         text: str,
         start_marker: str,
         end_marker: str,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """Parse a structured outcome block from session output text.
 
         The block is expected to be in YAML-like ``key: value`` format
@@ -1663,7 +1733,7 @@ summary: <one paragraph>
             return {}
 
         block = match.group(1).strip()
-        parsed: dict[str, str] = {}
+        parsed: dict[str, Any] = {}
         for line in block.splitlines():
             line = line.strip()
             if ":" in line:

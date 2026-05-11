@@ -1182,6 +1182,31 @@ If the PRD affects 2+ components, verify:
 **5.5.5: Present Results**
 
 If gaps found (including traceability gaps):
+
+First, check quality configuration:
+```
+Read: .sdlc/config.yaml → check quality.enabled
+```
+
+**If quality.enabled is true:** Traceability gaps are hard blockers. The "Acknowledged" bypass is NOT available — tasks without traces-to entries cannot proceed. The user must either add tasks, fix traceability, or cancel.
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Quality gate found traceability gaps. These are blocking — all tasks must have traces-to entries. How to proceed?",
+    header: "Quality gate",
+    options: [
+      { label: "Add tasks", description: "Go back and add missing tasks to cover the gaps" },
+      { label: "Fix traceability", description: "Go back to Step 5 to add missing traces_to or acceptance criteria" },
+      { label: "Cancel", description: "Abort and rethink the breakdown" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+**If quality.enabled is false or absent (or .sdlc/config.yaml does not exist):** Keep current behavior with bypass option.
+
 ```
 AskUserQuestion({
   questions: [{
@@ -1201,7 +1226,71 @@ AskUserQuestion({
 If no gaps found, display:
 > Quality gate passed. All requirements covered, traceability complete, tests included, integration tasks present.
 
-**5.5.6: Log Quality Gate Corrections**
+**5.5.6: Granularity Check**
+
+Verify that the number of proposed tasks is proportionate to the number of functional requirements in the PRD. This catches under-split PRDs (too few tasks for the requirement complexity) and over-split PRDs (excessive task granularity).
+
+**5.5.6.1: Compute Counts**
+
+From the approved task breakdown and `requirement_list` (extracted in Step 1.5b):
+- `task_count` = number of proposed tasks
+- `fr_count` = number of items in `requirement_list` with type "Functional" (FR-xxx entries)
+
+If `fr_count` is 0, skip this check (no functional requirements to compare against).
+
+**5.5.6.2: Evaluate Ratios**
+
+- **Under-split flag**: `task_count < fr_count * 0.5` — Many functional requirements lack dedicated tasks. The breakdown may be too coarse.
+- **Over-split flag**: `task_count > fr_count * 3` — Tasks are excessively granular relative to the requirement complexity.
+
+If neither flag triggers, display:
+```
+Granularity check passed. Task count ({task_count}) is within expected range for {fr_count} functional requirements.
+```
+Proceed to Step 5.5.7.
+
+**5.5.6.3: Handle Flagged Granularity**
+
+If either flag triggers:
+
+First, check quality configuration:
+```
+Read: .sdlc/config.yaml → check quality.enabled
+```
+
+**If quality.enabled is true:** Granularity mismatch is a blocking gate. The user must adjust tasks or explicitly override.
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Granularity check flagged: {task_count} tasks for {fr_count} functional requirements ({flag_type}). How to proceed?",
+    header: "Granularity",
+    options: [
+      { label: "Adjust tasks", description: "Return to Step 3 to redesign the task breakdown with better granularity" },
+      { label: "Override", description: "Keep current split — the granularity is intentional (NFR-003)" }
+    ],
+    multiSelect: false
+  }]
+})
+```
+
+Where `{flag_type}` is:
+- `"under-split: ratio {task_count}/{fr_count} < 0.5"` if under-split
+- `"over-split: ratio {task_count}/{fr_count} > 3.0"` if over-split
+
+If "Adjust tasks" selected: Return to Step 3 (Plan Agent) with granularity feedback.
+If "Override" selected: Record the override and proceed to Step 5.5.7.
+
+**If quality.enabled is false or absent (or .sdlc/config.yaml does not exist):** Advisory note only — no blocking.
+
+```
+⚠️ Granularity advisory: {task_count} tasks for {fr_count} functional requirements ({flag_type}).
+Consider adjusting the breakdown granularity. Proceeding without blocking.
+```
+
+Proceed to Step 5.5.7.
+
+**5.5.7: Log Quality Gate Corrections**
 
 If the quality gate found gaps that were addressed (tasks added/modified), log the corrections:
 

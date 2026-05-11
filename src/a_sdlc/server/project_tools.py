@@ -47,7 +47,7 @@ def get_context() -> dict[str, Any]:
     prds = db.list_prds(project_id)
 
     # Calculate statistics
-    task_stats = {}
+    task_stats: dict[str, int] = {}
     for task in tasks:
         status = task["status"]
         task_stats[status] = task_stats.get(status, 0) + 1

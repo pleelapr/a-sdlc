@@ -34,9 +34,9 @@ review:
 
 # Quality Gates & Challenge System (SDLC-P0029)
 quality:
-  # Master toggle — set to true to enable quality gates
-  # When false, all quality gates are bypassed (backward compatible)
-  enabled: false
+  # Master toggle — quality gates are enabled by default
+  # Set to false to disable all quality gates (opt-out)
+  enabled: true
 
   # Block task completion when acceptance criteria are unverified
   ac_gate: true

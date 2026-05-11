@@ -590,7 +590,7 @@ async def add_prd_to_sprint(sprint_id: str, request: Request):
     storage = get_storage()
     form = await request.form()
     prd_id = form.get("prd_id")
-    if prd_id:
+    if prd_id and isinstance(prd_id, str):
         storage.assign_prd_to_sprint(prd_id, sprint_id)
     return RedirectResponse(url=f"/sprints/{sprint_id}", status_code=303)
 
@@ -1086,8 +1086,9 @@ def _list_pipeline_runs(status_filter: str | None = None) -> list[dict[str, Any]
     runs = storage.list_execution_runs(project["id"], status=status_filter)
     for run in runs:
         # Compatibility fields expected by tests
+        pid = run.get("pid")
         run["pid_alive"] = (
-            _is_process_running(run.get("pid")) if run.get("pid") else False
+            _is_process_running(pid) if isinstance(pid, int) else False
         )
         run["display_status"] = run.get("status", "unknown")
     return runs
@@ -1176,6 +1177,8 @@ async def run_detail_page(request: Request, run_id: str):
     thread_entries = storage.get_recent_thread_entries(run_id, limit=30)
 
     # Active run count for nav
+    if not current_project:
+        return HTMLResponse(content="<h1>Project not found</h1>", status_code=404)
     active_runs = storage.list_execution_runs(current_project["id"], status="active")
     active_count = len(active_runs)
 
@@ -1219,8 +1222,10 @@ async def start_run(request: Request):
 
     storage = get_storage()
     form = await request.form()
-    sprint_id = form.get("sprint_id")
-    goal = form.get("goal", "").strip()
+    sprint_id_val = form.get("sprint_id")
+    sprint_id = str(sprint_id_val) if sprint_id_val and isinstance(sprint_id_val, str) else None
+    goal_val = form.get("goal", "")
+    goal = str(goal_val).strip() if isinstance(goal_val, str) else ""
 
     # We need project context - find most recent
     project = storage.get_most_recent_project()
@@ -1235,9 +1240,6 @@ async def start_run(request: Request):
         project_id=project["id"],
         sprint_id=sprint_id if sprint_id else None,
         status="active",
-        run_type="sprint" if sprint_id else "objective",
-        goal=goal,
-        current_phase="planning"
     )
 
     # Spawn background executor process
@@ -1301,7 +1303,8 @@ async def run_action(run_id: str, request: Request, action: str | None = None):
     storage = get_storage()
     if not action:
         form = await request.form()
-        action = form.get("action")
+        action_val = form.get("action")
+        action = str(action_val) if isinstance(action_val, str) else None
 
     if action == "pause":
         storage.update_execution_run(run_id, status="paused")
@@ -1311,7 +1314,8 @@ async def run_action(run_id: str, request: Request, action: str | None = None):
         storage.update_execution_run(run_id, status="cancelled")
     elif action == "answer":
         form = await request.form()
-        answer = form.get("answer", "").strip()
+        answer_val = form.get("answer", "")
+        answer = str(answer_val).strip() if isinstance(answer_val, str) else ""
         if answer:
             storage.update_execution_run(
                 run_id,
@@ -1342,7 +1346,8 @@ async def work_item_action(item_id: str, request: Request, action: str | None = 
     # Support action from query param (HTMX) or form data (legacy tests)
     if not action:
         form = await request.form()
-        action = form.get("action")
+        action_val = form.get("action")
+        action = str(action_val) if isinstance(action_val, str) else None
 
     item = storage.get_work_queue_item(item_id)
     if not item:
@@ -1384,7 +1389,8 @@ async def post_thread_comment(
         content = (data.get("content") or "").strip()
     except Exception:
         form = await request.form()
-        content = (form.get("content") or "").strip()
+        content_val = form.get("content") or ""
+        content = str(content_val).strip() if isinstance(content_val, str) else ""
 
     if not content:
         return HTMLResponse(content="Comment cannot be empty", status_code=400)

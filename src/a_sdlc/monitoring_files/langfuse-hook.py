@@ -309,8 +309,8 @@ def process_transcript(langfuse, session_id: str, transcript_path: str, state: d
     # Group messages into turns (user -> assistant(s) -> tool_results)
     turns = 0
     current_user = None
-    current_assistants = []
-    current_assistant_parts = []
+    current_assistants: list[Any] = []
+    current_assistant_parts: list[Any] = []
     current_msg_id = None
     current_tool_results = []
 

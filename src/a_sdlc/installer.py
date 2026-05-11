@@ -238,7 +238,7 @@ class Installer:
         """
         # Use importlib.resources for Python 3.9+
         try:
-            with resources.files("a_sdlc").joinpath("templates") as template_path:
+            with resources.as_file(resources.files("a_sdlc").joinpath("templates")) as template_path:
                 return Path(template_path)
         except (TypeError, AttributeError):
             # Fallback for development
@@ -251,7 +251,7 @@ class Installer:
             Path to personas directory.
         """
         try:
-            with resources.files("a_sdlc").joinpath("personas") as persona_path:
+            with resources.as_file(resources.files("a_sdlc").joinpath("personas")) as persona_path:
                 return Path(persona_path)
         except (TypeError, AttributeError):
             # Fallback for development

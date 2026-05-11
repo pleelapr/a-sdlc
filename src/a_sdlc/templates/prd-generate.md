@@ -370,9 +370,6 @@ If flags are found:
 **Acceptance Criteria:**
 - [FLAG] AC-002: "System performs well under load" — not testable as stated
   → Needs specific threshold from user (e.g., "handles 100 req/s")
-
-These flags will be highlighted during the section-by-section review.
-Flagged items are candidates for removal or revision.
 ```
 
 If no flags are found:
@@ -381,7 +378,64 @@ If no flags are found:
 ✅ Anti-Fluff Validation Passed — all content traces to user answers.
 ```
 
-Proceed to Step 4 (section-by-section review) regardless of flag count. Flags are informational — the user decides what to keep or remove during review.
+Proceed to Step 3.5.1 (Quality Gate Check).
+
+#### 3.5.1: Quality Gate Check
+
+After presenting validation results, check whether vague language flags should block progression:
+
+```
+Read: .sdlc/config.yaml → check quality.enabled
+```
+
+**If `quality.enabled` is `false`, absent, or `.sdlc/config.yaml` does not exist:**
+
+Flags are informational only — the user decides what to keep or remove during the section-by-section review in Step 4. Proceed to Step 4 directly.
+
+```
+ℹ️ Flags are informational — proceeding to section review.
+```
+
+**If `quality.enabled` is `true` AND flags were found:**
+
+Vague language flags are **blocking** — the user must take action before the PRD can proceed to section review.
+
+Present via AskUserQuestion:
+
+```
+AskUserQuestion([
+  {
+    question: "Anti-Fluff Validation found {N} issues. Vague language must be resolved before proceeding. How would you like to handle the flagged items?",
+    header: "Vague flags",
+    options: [
+      { label: "Revise flagged items", description: "Go back and fix the flagged vague language in the generated content" },
+      { label: "Override (accept vague language)", description: "Proceed with current wording — override will be logged" }
+    ]
+  }
+])
+```
+
+- If **Revise flagged items**: Return to the generated PRD content and revise each flagged item — replace vague language with specific, measurable alternatives. After revision, re-run the validation rules from Step 3.5. Repeat until no flags remain or user selects Override.
+- If **Override (accept vague language)**: Log the override and proceed:
+
+```
+mcp__asdlc__log_correction(
+    context_type="prd",
+    context_id="<prd_id or 'draft'>",
+    category="vague-language-override",
+    description="User accepted {N} vague language flags without revision: {list of flagged items}"
+)
+```
+
+```
+⚠️ Vague language override logged. Proceeding to section review.
+```
+
+Proceed to Step 4.
+
+**If `quality.enabled` is `true` AND no flags were found:**
+
+No gate needed — proceed to Step 4 directly.
 
 #### Flag Integration with Section Review
 
@@ -464,11 +518,95 @@ AskUserQuestion([
 ])
 ```
 
-- If **Save**: Proceed to Step 5
+- If **Save**: Proceed to Step 4.5
 - If **Re-review**: Loop back to Step 4.2
 - If **Cancel**: Discard and stop
 
 **Wait for explicit user approval before saving.**
+
+### 4.5. Open Question Gate
+
+**This gate operates independently of the challenge system. It requires only `quality.enabled` to be true.**
+
+#### 4.5.1: Check Quality Config
+
+```
+Read: .sdlc/config.yaml → look for quality.enabled
+```
+
+**Skip this entire step if ANY of these are true:**
+- `.sdlc/config.yaml` does not exist
+- `quality.enabled` is `false` or absent
+
+If skipping:
+```
+Open question gate: skipped (quality not enabled)
+```
+Proceed to Step 5.
+
+#### 4.5.2: Scan for Unresolved Open Questions
+
+Scan the assembled PRD content for the "## Open Questions" section:
+
+1. Look for a `## Open Questions` heading in the assembled content from Step 4.3
+2. Extract all non-empty bullet points (lines starting with `- `) under that heading
+3. If no "## Open Questions" section exists, or the section is empty (no bullet items): proceed to Step 5
+
+```
+open_questions = [list of non-empty bullet items under ## Open Questions]
+```
+
+If `open_questions` is empty:
+```
+✅ Open Question Gate passed — no unresolved open questions.
+```
+Proceed to Step 5.
+
+#### 4.5.3: Block on Unresolved Open Questions
+
+If unresolved open questions are found, present them to the user and block progression:
+
+```
+⚠️ Open Question Gate — {N} unresolved open questions found
+
+The following open questions must be resolved before this PRD can proceed:
+{list each open question}
+
+PRDs with unresolved open questions cannot be set to status "ready" or proceed to design.
+```
+
+Ask via AskUserQuestion:
+
+```
+AskUserQuestion([
+  {
+    question: "This PRD has {N} unresolved open questions. How would you like to proceed?",
+    header: "Open Qs",
+    options: [
+      { label: "Resolve now", description: "Edit the Open Questions section to resolve items" },
+      { label: "Override", description: "Save PRD with open questions (cannot be set to 'ready' until resolved)" }
+    ]
+  }
+])
+```
+
+- If **Resolve now**: Loop back to Step 4.2 with the "Open Questions" section focused for editing. After editing, re-run Step 4.5.2 to check if all questions are resolved.
+- If **Override**: Log the override and proceed to Step 5:
+
+```
+mcp__asdlc__log_correction(
+    context_type="prd",
+    context_id="<prd_title_or_slug>",
+    category="open-question-override",
+    description="User overrode open question gate with {N} unresolved questions: {list of questions}"
+)
+```
+
+```
+⚠️ Open question override logged. PRD will be saved as draft but cannot be set to "ready" until open questions are resolved.
+```
+
+Proceed to Step 5.
 
 ### 5. Save PRD
 

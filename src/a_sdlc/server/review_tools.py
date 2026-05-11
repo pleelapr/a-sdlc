@@ -46,7 +46,7 @@ def submit_review(
 
     # Validate verdict based on reviewer type
     if reviewer_type == "self":
-        valid_verdicts = ("pass", "fail")
+        valid_verdicts: tuple[str, ...] = ("pass", "fail")
     else:
         valid_verdicts = ("approve", "request_changes", "escalate")
 

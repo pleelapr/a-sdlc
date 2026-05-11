@@ -433,17 +433,34 @@ class TestResolveSprintId:
 
     def test_auto_resolves_active_sprint(self, logger: logging.Logger) -> None:
         mock_storage = MagicMock()
-        mock_storage.list_sprints.return_value = [{"id": "PROJ-S0002"}]
+        mock_storage.get_most_recent_project.return_value = {"id": "proj-1"}
+        mock_storage.list_sprints.return_value = [
+            {"id": "PROJ-S0001", "status": "completed"},
+            {"id": "PROJ-S0002", "status": "active"},
+        ]
 
         with patch("a_sdlc.storage.get_storage", return_value=mock_storage):
             result = _resolve_sprint_id("auto", logger)
 
         assert result == "PROJ-S0002"
-        mock_storage.list_sprints.assert_called_once_with(status="active")
+        mock_storage.get_most_recent_project.assert_called_once()
+        mock_storage.list_sprints.assert_called_once_with("proj-1")
 
     def test_auto_returns_none_when_no_active_sprint(self, logger: logging.Logger) -> None:
         mock_storage = MagicMock()
-        mock_storage.list_sprints.return_value = []
+        mock_storage.get_most_recent_project.return_value = {"id": "proj-1"}
+        mock_storage.list_sprints.return_value = [
+            {"id": "PROJ-S0001", "status": "completed"},
+        ]
+
+        with patch("a_sdlc.storage.get_storage", return_value=mock_storage):
+            result = _resolve_sprint_id("auto", logger)
+
+        assert result is None
+
+    def test_auto_returns_none_when_no_project(self, logger: logging.Logger) -> None:
+        mock_storage = MagicMock()
+        mock_storage.get_most_recent_project.return_value = None
 
         with patch("a_sdlc.storage.get_storage", return_value=mock_storage):
             result = _resolve_sprint_id("auto", logger)

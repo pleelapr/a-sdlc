@@ -67,6 +67,9 @@ def check_sonarqube_reachable(host_url: str, token: str) -> tuple[bool, str]:
     if not success:
         return False, f"Cannot reach SonarQube at {host_url}: {result}"
 
+    if not isinstance(result, dict):
+        return False, f"Unexpected response from SonarQube at {host_url}"
+
     status = result.get("status", "UNKNOWN")
     if status == "UP":
         return True, f"SonarQube is running at {host_url} (status: {status})"
@@ -364,6 +367,9 @@ def get_quality_gate_status(
     if not success:
         return False, {"error": result}
 
+    if not isinstance(result, dict):
+        return False, {"error": "Unexpected response format"}
+
     return True, result.get("projectStatus", result)
 
 
@@ -406,6 +412,9 @@ def get_issues(
         params=params,
     )
     if not success:
+        return False, []
+
+    if not isinstance(result, dict):
         return False, []
 
     return True, result.get("issues", [])
@@ -454,6 +463,9 @@ def get_metrics(
     if not success:
         return False, {"error": result}
 
+    if not isinstance(result, dict):
+        return False, {"error": "Unexpected response format"}
+
     # Flatten measures into a simple dict
     measures = {}
     component = result.get("component", {})
@@ -486,9 +498,9 @@ def generate_code_quality_artifact(
         project_dir = Path.cwd()
 
     config = load_sonarqube_config(project_dir)
-    host_url = config.get("host_url")
-    token = config.get("token")
-    project_key = config.get("project_key")
+    host_url: str = str(config.get("host_url") or "")
+    token: str = str(config.get("token") or "")
+    project_key: str = str(config.get("project_key") or "")
 
     if not all([host_url, token, project_key]):
         return False, "SonarQube not fully configured. Run: a-sdlc sonarqube configure"

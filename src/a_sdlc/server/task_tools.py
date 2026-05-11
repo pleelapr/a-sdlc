@@ -272,7 +272,7 @@ def update_task(
             pass
 
     # Build update kwargs for database
-    db_kwargs = {}
+    db_kwargs: dict[str, str | None] = {}
     if title is not None:
         db_kwargs["title"] = title
     if status is not None:

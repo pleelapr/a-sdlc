@@ -148,6 +148,36 @@ For any extra functionality beyond scope:
   })
 ```
 
+**Step 3.5: Design Compliance Review**
+
+If the task has a `prd_id`, check whether a design document exists for that PRD:
+
+1. Call `mcp__asdlc__get_design(prd_id='{prd_id}')` to retrieve the design document
+2. If no design document exists (tool returns error or empty), skip this step entirely — not all PRDs have design docs
+3. If a design document exists, scan it for design decisions (DD-N format, e.g., DD-1, DD-2, DD-3)
+4. For each design decision, assess whether it is relevant to this task's implementation scope
+5. For each relevant design decision, verify the implementation follows the decision and cite the specific code location as evidence
+
+Build design compliance findings:
+```
+design_refs = []  # list of DD-N ids that were followed
+
+For each relevant design decision (DD-N):
+  if implementation follows decision:
+    design_refs.append("DD-N")
+  else:
+    findings.append({
+      dimension: "design_compliance",
+      severity: "warning",
+      item: "DD-N",
+      detail: "Implementation does not follow design decision DD-N: {decision summary}"
+    })
+```
+
+Note: Design compliance is an audit trail, not a hard gate. Findings use severity `warning` (not `critical`) and do not block task completion. Design compliance findings map to the `"architecture"` category for `log_correction()`.
+
+The collected `design_refs` list (e.g., `DD-1,DD-3`) will be included in the `---TASK-OUTCOME---` block.
+
 **Step 4: Code Quality & Test Coverage Review**
 
 Assess the implementation against code quality standards:
@@ -213,6 +243,10 @@ Self-Review Summary for {task_id}:
 Spec Compliance:
   {count} requirements verified ✅
   {count} acceptance criteria met ✅
+
+Design Compliance:
+  {if design doc exists: "{count} design decisions verified, refs: {design_refs}"}
+  {if no design doc: "No design document — skipped"}
 
 Code Quality:
   Lint: ✅ passing
@@ -522,6 +556,7 @@ Category mapping for `log_correction()`:
 - `spec_compliance` dimension → category `"task-completeness"`
 - `code_quality` dimension → category `"code-quality"`
 - `test_coverage` dimension → category `"testing"`
+- `design_compliance` dimension → category `"architecture"`
 
 Additionally, log a process-level summary:
 ```

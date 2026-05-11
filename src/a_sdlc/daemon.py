@@ -470,11 +470,16 @@ def _resolve_sprint_id(
         from a_sdlc.storage import get_storage
 
         storage = get_storage()
-        sprints = storage.list_sprints(status="active")
-        if not sprints:
+        project = storage.get_most_recent_project()
+        if not project:
+            logger.warning("No project found for 'auto' sprint resolution")
+            return None
+        all_sprints = storage.list_sprints(project["id"])
+        active = [s for s in all_sprints if s.get("status") == "active"]
+        if not active:
             logger.warning("No active sprint found for 'auto' schedule")
             return None
-        return sprints[0]["id"]
+        return active[0]["id"]
     except Exception as exc:
         logger.error("Failed to resolve auto sprint_id: %s", exc)
         return None

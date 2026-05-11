@@ -1634,7 +1634,7 @@ After creating the page manually, the link will be tracked on next sync.
                 # Create new page under PRDs folder
                 prds_folder_id = self._get_prds_folder_id()
 
-                page_data: dict[str, Any] = {
+                new_page_data: dict[str, Any] = {
                     "type": "page",
                     "title": title,
                     "space": {"key": self.space_key},
@@ -1647,7 +1647,7 @@ After creating the page manually, the link will be tracked on next sync.
                     },
                 }
 
-                response = client.post("/wiki/rest/api/content", page_data)
+                response = client.post("/wiki/rest/api/content", new_page_data)
 
             if response and isinstance(response, dict) and "id" in response:
                 prd.external_id = response["id"]

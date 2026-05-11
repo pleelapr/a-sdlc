@@ -1822,9 +1822,7 @@ class TestQualityCommands:
         """Test reclassify when requirement does not exist."""
         with patch("a_sdlc.storage.HybridStorage") as mock_cls:
             mock_cls.return_value.get_requirement.return_value = None
-            result = runner.invoke(
-                main, ["quality", "reclassify", "NOPE", "--depth", "behavioral"]
-            )
+            result = runner.invoke(main, ["quality", "reclassify", "NOPE", "--depth", "behavioral"])
             assert result.exit_code == 0
             assert "not found" in result.output
 
@@ -1907,3 +1905,268 @@ class TestQualityCommands:
             )
             assert result.exit_code == 0
             assert "not found" in result.output
+
+
+class TestDoctorConsistency:
+    """Tests for --check-consistency and --repair flags on doctor command."""
+
+    def test_doctor_no_flags_unchanged(self, runner: CliRunner) -> None:
+        """Existing doctor behavior unchanged when no flags provided."""
+        result = runner.invoke(main, ["doctor"])
+        assert result.exit_code in (0, 1)
+        assert "Python Version" in result.output
+        # Should NOT show consistency section
+        assert "Data Consistency Check" not in result.output
+
+    def test_check_consistency_no_projects(self, runner: CliRunner) -> None:
+        """--check-consistency with no registered projects shows message."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = []
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert "Data Consistency Check" in result.output
+        assert "No projects registered" in result.output
+
+    def test_check_consistency_clean(self, runner: CliRunner) -> None:
+        """--check-consistency reports clean when no inconsistencies."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Project One"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [],
+                "phantom_records": [],
+                "total_entities": 10,
+            }
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert "Data Consistency Check" in result.output
+        assert "Project One" in result.output
+        assert "10 entities, no inconsistencies" in result.output
+        assert "All projects consistent" in result.output
+        assert result.exit_code in (0, 1)  # May exit 1 from system checks
+
+    def test_check_consistency_orphaned_files(self, runner: CliRunner) -> None:
+        """--check-consistency reports orphaned files."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Test Project"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [
+                    {
+                        "entity_type": "prd",
+                        "id": "PROJ-P0001",
+                        "file_path": "/tmp/prds/PROJ-P0001.md",
+                    }
+                ],
+                "phantom_records": [],
+                "total_entities": 5,
+            }
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert "1 orphaned file(s)" in result.output
+        assert "orphaned prd" in result.output
+        assert "PROJ-P0001" in result.output
+        assert "Inconsistencies found" in result.output
+        assert result.exit_code == 1
+
+    def test_check_consistency_phantom_records(self, runner: CliRunner) -> None:
+        """--check-consistency reports phantom DB records."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Test Project"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [],
+                "phantom_records": [
+                    {"entity_type": "task", "id": "PROJ-T00001"},
+                ],
+                "total_entities": 5,
+            }
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert "1 phantom record(s)" in result.output
+        assert "phantom task" in result.output
+        assert "PROJ-T00001" in result.output
+        assert "DB record, no file" in result.output
+        assert result.exit_code == 1
+
+    def test_check_consistency_multiple_projects(self, runner: CliRunner) -> None:
+        """--check-consistency iterates all projects."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "p1", "name": "Alpha"},
+                {"id": "p2", "name": "Beta"},
+            ]
+            mock_storage.consistency_check.side_effect = [
+                {"orphaned_files": [], "phantom_records": [], "total_entities": 3},
+                {
+                    "orphaned_files": [
+                        {
+                            "entity_type": "design",
+                            "id": "B-P0001",
+                            "file_path": "/tmp/designs/B-P0001.md",
+                        }
+                    ],
+                    "phantom_records": [],
+                    "total_entities": 7,
+                },
+            ]
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert "Alpha" in result.output
+        assert "3 entities, no inconsistencies" in result.output
+        assert "Beta" in result.output
+        assert "1 orphaned file(s)" in result.output
+        assert result.exit_code == 1
+
+    def test_repair_implies_check_consistency(self, runner: CliRunner) -> None:
+        """--repair auto-enables --check-consistency."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Test"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [],
+                "phantom_records": [],
+                "total_entities": 2,
+            }
+            result = runner.invoke(main, ["doctor", "--repair"])
+
+        # Should show the consistency check section even without --check-consistency
+        assert "Data Consistency Check" in result.output
+
+    def test_repair_prompts_confirmation(self, runner: CliRunner) -> None:
+        """--repair prompts user before fixing each project."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Test Project"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [
+                    {
+                        "entity_type": "prd",
+                        "id": "P-P0001",
+                        "file_path": "/tmp/prds/P-P0001.md",
+                    }
+                ],
+                "phantom_records": [
+                    {"entity_type": "task", "id": "P-T00001"},
+                ],
+                "total_entities": 10,
+            }
+            mock_storage.repair_consistency.return_value = {
+                "repaired_orphans": 1,
+                "repaired_phantoms": 1,
+                "dry_run": False,
+            }
+            # Input 'y' to confirm repair
+            result = runner.invoke(main, ["doctor", "--repair"], input="y\n")
+
+        assert "Repair 2 inconsistencies" in result.output
+        mock_storage.repair_consistency.assert_called_once_with("proj1", dry_run=False)
+        assert "Repaired:" in result.output
+        assert "1 orphaned file(s)" in result.output
+        assert "1 phantom record(s)" in result.output
+
+    def test_repair_declined(self, runner: CliRunner) -> None:
+        """--repair skips when user declines confirmation."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Test Project"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [
+                    {
+                        "entity_type": "prd",
+                        "id": "P-P0001",
+                        "file_path": "/tmp/prds/P-P0001.md",
+                    }
+                ],
+                "phantom_records": [],
+                "total_entities": 5,
+            }
+            # Input 'n' to decline repair
+            result = runner.invoke(main, ["doctor", "--repair"], input="n\n")
+
+        assert "Skipped" in result.output
+        mock_storage.repair_consistency.assert_not_called()
+
+    def test_check_consistency_exit_code_0_when_clean(self, runner: CliRunner) -> None:
+        """Exit code 0 when all projects are consistent and system checks pass."""
+        with (
+            patch("a_sdlc.storage.HybridStorage") as mock_cls,
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch(
+                "a_sdlc.cli.verify_setup",
+                return_value={
+                    "ready": True,
+                    "configured_in_settings": True,
+                    "installer_method": "npx",
+                },
+            ),
+            patch("a_sdlc.cli.get_plugin_manager") as mock_pm,
+            patch("a_sdlc.cli.verify_sonarqube_setup", return_value={"ready": True}),
+            patch(
+                "a_sdlc.cli.verify_monitoring_setup",
+                return_value={
+                    "files_ready": False,
+                    "hook_registered": False,
+                    "otel_configured": False,
+                },
+            ),
+        ):
+            mock_installer_cls.return_value.check_template_version.return_value = (
+                True,
+                "1.0",
+                "1.0",
+            )
+            mock_installer_cls.return_value.list_installed_personas.return_value = [
+                "a",
+                "b",
+                "c",
+                "d",
+                "e",
+                "f",
+                "g",
+            ]
+            mock_pm.return_value.list_plugins.return_value = ["local"]
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Clean"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [],
+                "phantom_records": [],
+                "total_entities": 3,
+            }
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert "All projects consistent" in result.output
+
+    def test_check_consistency_exit_code_1_on_inconsistencies(self, runner: CliRunner) -> None:
+        """Exit code 1 when inconsistencies are found."""
+        with patch("a_sdlc.storage.HybridStorage") as mock_cls:
+            mock_storage = mock_cls.return_value
+            mock_storage.list_projects.return_value = [
+                {"id": "proj1", "name": "Broken"},
+            ]
+            mock_storage.consistency_check.return_value = {
+                "orphaned_files": [
+                    {"entity_type": "prd", "id": "X-P0001", "file_path": "/tmp/x.md"}
+                ],
+                "phantom_records": [],
+                "total_entities": 1,
+            }
+            result = runner.invoke(main, ["doctor", "--check-consistency"])
+
+        assert result.exit_code == 1

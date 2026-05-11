@@ -251,7 +251,7 @@ def extract_sections(markdown: str) -> dict[str, str]:
     """
     sections = {}
     current_section = None
-    current_content = []
+    current_content: list[str] = []
 
     for line in markdown.split("\n"):
         if line.startswith("## "):

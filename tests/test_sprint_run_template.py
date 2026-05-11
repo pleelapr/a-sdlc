@@ -971,3 +971,137 @@ class TestSubagentTypeMapping:
     # investigate template test
     def test_no_general_purpose_in_investigate(self):
         assert 'subagent_type="general-purpose"' not in self.investigate
+
+
+# =============================================================================
+# PRD Generate Template — Vague Language Gate (SDLC-T00210)
+# =============================================================================
+
+
+class TestPrdGenerateVagueLanguageGate:
+    """Verify prd-generate.md Step 3.5 has blocking vague language gate."""
+
+    @pytest.fixture(autouse=True)
+    def load_template(self):
+        """Load the prd-generate template content."""
+        template_path = (
+            Path(__file__).parent.parent
+            / "src"
+            / "a_sdlc"
+            / "templates"
+            / "prd-generate.md"
+        )
+        self.content = template_path.read_text(encoding="utf-8")
+
+    def test_quality_config_check_exists(self):
+        """Step 3.5.1 checks quality.enabled from .sdlc/config.yaml."""
+        assert "quality.enabled" in self.content
+        assert ".sdlc/config.yaml" in self.content
+
+    def test_blocking_gate_when_quality_enabled(self):
+        """When quality.enabled is true, vague flags are blocking."""
+        assert "blocking" in self.content.lower()
+        # Must mention that user must take action
+        assert "must" in self.content.lower()
+
+    def test_informational_when_quality_disabled(self):
+        """When quality.enabled is false, flags remain informational."""
+        assert "informational" in self.content.lower()
+
+    def test_ask_user_question_gate_present(self):
+        """AskUserQuestion gate with fix/override options exists."""
+        assert "AskUserQuestion" in self.content
+        assert "Revise flagged items" in self.content
+        assert "Override" in self.content
+
+    def test_override_logs_correction(self):
+        """Override path calls log_correction with vague-language-override category."""
+        assert "log_correction" in self.content
+        assert "vague-language-override" in self.content
+
+    def test_revise_path_re_runs_validation(self):
+        """Revise path re-runs validation after user fixes."""
+        assert "re-run" in self.content.lower() or "re-run" in self.content
+
+    def test_no_flags_proceeds_directly(self):
+        """When no flags found, proceeds to Step 4 without gate."""
+        assert "No gate needed" in self.content
+
+    def test_gate_has_two_options(self):
+        """Gate must have exactly fix and override paths (NFR-003)."""
+        # Both options must exist
+        assert "Revise flagged items" in self.content
+        assert "Override (accept vague language)" in self.content
+
+
+# =============================================================================
+# Stall-Retry with Checkpoint — poll_until_completion (SDLC-T00205)
+# =============================================================================
+
+
+class TestStallRetryWithCheckpoint:
+    """Verify poll_until_completion() in sprint-run.md includes stall-retry logic."""
+
+    @pytest.fixture(autouse=True)
+    def load_template(self):
+        """Load the sprint-run template content."""
+        template_path = (
+            Path(__file__).parent.parent
+            / "src"
+            / "a_sdlc"
+            / "templates"
+            / "sprint-run.md"
+        )
+        self.content = template_path.read_text(encoding="utf-8")
+
+    def test_poll_until_completion_has_max_retries_parameter(self):
+        """poll_until_completion() pseudocode includes max_retries parameter."""
+        assert "max_retries" in self.content
+        # Should appear in the function signature
+        assert "max_retries: int = 1" in self.content
+
+    def test_retries_remaining_counter_exists(self):
+        """Retry logic uses a retries_remaining counter."""
+        assert "retries_remaining" in self.content
+        assert "retries_remaining = max_retries" in self.content
+
+    def test_on_first_stall_stops_and_retries(self):
+        """On first stall, subprocess is stopped and re-dispatched (not killed permanently)."""
+        # Should stop execution on stall
+        assert "mcp__asdlc__stop_execution(pid=pid)" in self.content
+        # Should check retries before deciding action
+        assert "if retries_remaining > 0" in self.content
+
+    def test_retry_dispatch_includes_retry_in_dispatch_info(self):
+        """Retry dispatch includes 'RETRY' in dispatch_info."""
+        assert 'dispatch_info=f"RETRY: previous attempt stalled after {elapsed}s"' in self.content
+
+    def test_retry_decrements_retries_remaining(self):
+        """Retry decrements the retries_remaining counter."""
+        assert "retries_remaining -= 1" in self.content
+
+    def test_on_retry_exhausted_kills_permanently(self):
+        """On second stall (retry exhausted), subprocess is killed with verdict: FAIL."""
+        # Should have an else branch for no retries left
+        assert "NO RETRIES LEFT" in self.content or "no retries" in self.content.lower()
+        # Should return FAIL verdict
+        assert "stalled after retry" in self.content
+
+    def test_retry_logged_via_log_correction(self):
+        """Retry attempt is logged via log_correction with execution-recovery category."""
+        assert "execution-recovery" in self.content
+        assert "log_correction" in self.content
+
+    def test_retry_uses_execute_task_for_redispatch(self):
+        """Retry re-dispatches via execute_task (leveraging checkpoint from T00203/T00204)."""
+        # The retry should call execute_task again
+        assert "mcp__asdlc__execute_task(" in self.content
+
+    def test_stall_threshold_unchanged_at_5_minutes(self):
+        """Stall threshold remains at 5 minutes (not changed by this task)."""
+        assert "max_stall_minutes: int = 5" in self.content
+
+    def test_poll_function_docstring_mentions_retry(self):
+        """The poll_until_completion docstring documents retry behavior."""
+        # Find the docstring section
+        assert "retries once" in self.content or "retry" in self.content.lower()

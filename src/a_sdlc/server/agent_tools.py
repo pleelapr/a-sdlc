@@ -461,7 +461,7 @@ def check_permission_compliance(
     db = _server.get_db()
     project_id = _server._get_current_project_id()
     try:
-        violations: list[dict[str, str]] = []
+        violations: list[dict[str, str | bool]] = []
         checked = 0
 
         for action in actions:

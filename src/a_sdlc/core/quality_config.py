@@ -4,11 +4,11 @@ Quality and challenge configuration layer for a-sdlc.
 Provides layered configuration for quality gates and the challenge system
 with safe defaults that ensure backward compatibility.
 
-Global config (~/.config/a-sdlc/config.yaml) defines defaults (all off).
-Project config (.sdlc/config.yaml) can override to enable quality features.
+Global config (~/.config/a-sdlc/config.yaml) defines defaults.
+Project config (.sdlc/config.yaml) can override quality feature settings.
 
 Configuration keys under the 'quality' section:
-    enabled: bool                    - Master toggle (default: False)
+    enabled: bool                    - Master toggle (default: True)
     ac_gate: bool                    - Require AC verification (default: True)
     behavioral_test_required: bool   - Require behavioral tests (default: True)
     coverage_warnings: bool          - Emit coverage warnings (default: True)
@@ -20,8 +20,9 @@ Configuration keys under the 'quality' section:
         max_rounds: int              - Max challenge rounds (default: 3)
         gates: dict                  - Per-lifecycle-point toggles
 
-The master toggle ``enabled`` defaults to False so that projects without
-explicit configuration see zero behavioural change (NFR-005 / AC-007).
+The master toggle ``enabled`` defaults to True so that new projects get
+quality gates active by default (FR-001 / AC-001). Projects can opt out
+by setting ``quality.enabled: false`` in their ``.sdlc/config.yaml``.
 """
 
 from dataclasses import dataclass, field
@@ -52,9 +53,9 @@ _CHALLENGE_DEFAULTS: dict[str, Any] = {
     "gates": _DEFAULT_CHALLENGE_GATES.copy(),
 }
 
-# Default quality settings -- master toggle OFF for backward compatibility
+# Default quality settings -- master toggle ON for quality-first development
 _QUALITY_DEFAULTS: dict[str, Any] = {
-    "enabled": False,
+    "enabled": True,
     "ac_gate": True,
     "behavioral_test_required": True,
     "coverage_warnings": True,
@@ -122,13 +123,14 @@ class ChallengeConfig:
 class QualityConfig:
     """Immutable quality configuration.
 
-    The master toggle ``enabled`` defaults to False so that projects without
-    explicit configuration see zero behavioural change (NFR-005 / AC-007).
-    All other fields carry sensible defaults that take effect once quality
+    The master toggle ``enabled`` defaults to True so that new projects get
+    quality gates active by default (FR-001 / AC-001). Projects can opt out
+    by setting ``quality.enabled: false`` in their ``.sdlc/config.yaml``.
+    All other fields carry sensible defaults that take effect when quality
     is enabled.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     ac_gate: bool = True
     behavioral_test_required: bool = True
     coverage_warnings: bool = True
@@ -184,11 +186,12 @@ def load_quality_config(project_dir: Path | None = None) -> QualityConfig:
     Priority (highest to lowest):
     1. Project config (.sdlc/config.yaml quality section)
     2. Global config (~/.config/a-sdlc/config.yaml quality section)
-    3. Built-in defaults (enabled=False)
+    3. Built-in defaults (enabled=True)
 
     When the quality section is absent from all config files, returns
-    a QualityConfig with enabled=False, ensuring zero behaviour change
-    for projects that have not opted in (NFR-005 / AC-007).
+    a QualityConfig with enabled=True, ensuring new projects get quality
+    gates active by default (FR-001 / AC-001). Projects can opt out
+    by setting ``quality.enabled: false`` in their config.
 
     Args:
         project_dir: Project directory. Defaults to current working directory.
@@ -223,7 +226,7 @@ def load_quality_config(project_dir: Path | None = None) -> QualityConfig:
     challenge = _build_challenge_config(raw_challenge)
 
     return QualityConfig(
-        enabled=bool(merged.get("enabled", False)),
+        enabled=bool(merged.get("enabled", True)),
         ac_gate=bool(merged.get("ac_gate", True)),
         behavioral_test_required=bool(merged.get("behavioral_test_required", True)),
         coverage_warnings=bool(merged.get("coverage_warnings", True)),

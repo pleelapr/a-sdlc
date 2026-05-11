@@ -23,7 +23,7 @@ def _load_template(template_name: str) -> str:
         Template content as string.
     """
     try:
-        ref = resources.files("a_sdlc").joinpath("artifact_templates", template_name)
+        ref = resources.files("a_sdlc").joinpath("artifact_templates").joinpath(template_name)
         return ref.read_text(encoding="utf-8")
     except (TypeError, AttributeError, FileNotFoundError):
         # Fallback for development

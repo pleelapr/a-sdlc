@@ -64,6 +64,16 @@ quality:
       split: true
       implementation: true
 
+git:
+  # Allow agent to commit changes automatically (default: false — agent stages only)
+  auto_commit: false
+  # Allow agent to create pull requests
+  auto_pr: false
+  # Allow agent to merge branches
+  auto_merge: false
+  # Use git worktree isolation for PRD execution
+  worktree_enabled: false
+
 # Sprint Orchestration Context Management
 sprint:
   # Context budget for the orchestrator agent (estimated tokens)

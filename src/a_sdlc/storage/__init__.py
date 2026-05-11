@@ -9,10 +9,14 @@ The HybridStorage class provides the same interface as the old FileStorage
 to minimize changes in CLI and UI code.
 """
 
+import contextlib
+import logging
 import os
 import platform
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def get_data_dir() -> Path:
@@ -178,20 +182,29 @@ class HybridStorage:
         sprint_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new PRD with skeleton file."""
-        # Write skeleton file (just title header)
+        # Step 1: Write skeleton file (just title header, no real content yet)
         file_path = self._content_mgr.write_prd(project_id, prd_id, title, "")
 
-        # Register in database
-        prd = self._db.create_prd(
-            prd_id=prd_id,
-            project_id=project_id,
-            title=title,
-            file_path=str(file_path),
-            status=status,
-            source=source,
-            sprint_id=sprint_id,
-        )
+        try:
+            # Step 2: Register in database
+            prd = self._db.create_prd(
+                prd_id=prd_id,
+                project_id=project_id,
+                title=title,
+                file_path=str(file_path),
+                status=status,
+                source=source,
+                sprint_id=sprint_id,
+            )
+        except Exception:
+            # Compensate: remove orphaned skeleton file
+            # Safe because agent hasn't written real content yet
+            with contextlib.suppress(OSError):
+                file_path.unlink()
+            raise
 
+        if prd is None:
+            return {"file_path": str(file_path)}
         prd_result = dict(prd)
         prd_result["file_path"] = str(file_path)
         return prd_result
@@ -259,11 +272,17 @@ class HybridStorage:
         if not prd:
             return False
 
-        # Delete content file
-        self._content_mgr.delete_prd(prd["project_id"], prd_id)
+        # DB first (source of truth for existence)
+        if not self._db.delete_prd(prd_id):
+            return False
 
-        # Delete from database
-        return self._db.delete_prd(prd_id)
+        # Then file (best-effort cleanup — orphaned files caught by doctor --repair)
+        try:
+            self._content_mgr.delete_prd(prd["project_id"], prd_id)
+        except OSError as e:
+            logger.warning("Failed to delete PRD content file for %s: %s", prd_id, e)
+
+        return True
 
     # =========================================================================
     # Task Operations
@@ -281,7 +300,7 @@ class HybridStorage:
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new task with skeleton file."""
-        # Write skeleton file
+        # Step 1: Write skeleton file (no real content yet)
         file_path = self._content_mgr.write_task(
             project_id=project_id,
             task_id=task_id,
@@ -294,18 +313,27 @@ class HybridStorage:
             data=data,
         )
 
-        # Register in database
-        task = self._db.create_task(
-            task_id=task_id,
-            project_id=project_id,
-            title=title,
-            file_path=str(file_path),
-            status=status,
-            priority=priority,
-            prd_id=prd_id,
-            component=component,
-        )
+        try:
+            # Step 2: Register in database
+            task = self._db.create_task(
+                task_id=task_id,
+                project_id=project_id,
+                title=title,
+                file_path=str(file_path),
+                status=status,
+                priority=priority,
+                prd_id=prd_id,
+                component=component,
+            )
+        except Exception:
+            # Compensate: remove orphaned skeleton file
+            # Safe because agent hasn't written real content yet
+            with contextlib.suppress(OSError):
+                file_path.unlink()
+            raise
 
+        if task is None:
+            return {"file_path": str(file_path)}
         task_result = dict(task)
         task_result["file_path"] = str(file_path)
         return task_result
@@ -446,11 +474,17 @@ class HybridStorage:
         if not task:
             return False
 
-        # Delete content file
-        self._content_mgr.delete_task(task["project_id"], task_id)
+        # DB first (source of truth for existence)
+        if not self._db.delete_task(task_id):
+            return False
 
-        # Delete from database
-        return self._db.delete_task(task_id)
+        # Then file (best-effort cleanup — orphaned files caught by doctor --repair)
+        try:
+            self._content_mgr.delete_task(task["project_id"], task_id)
+        except OSError as e:
+            logger.warning("Failed to delete task content file for %s: %s", task_id, e)
+
+        return True
 
     def get_next_task_id(self, project_id: str) -> str:
         """Generate next task ID."""
@@ -481,17 +515,26 @@ class HybridStorage:
         Returns:
             Dict with metadata and file_path for content writing
         """
-        # Write empty file
+        # Step 1: Write empty file (no real content yet)
         file_path = self._content_mgr.write_design(project_id, prd_id, "")
 
-        # Create DB record (design_id = prd_id for 1:1 relationship)
-        design = self._db.create_design(
-            design_id=prd_id,
-            prd_id=prd_id,
-            project_id=project_id,
-            file_path=str(file_path),
-        )
+        try:
+            # Step 2: Create DB record (design_id = prd_id for 1:1 relationship)
+            design = self._db.create_design(
+                design_id=prd_id,
+                prd_id=prd_id,
+                project_id=project_id,
+                file_path=str(file_path),
+            )
+        except Exception:
+            # Compensate: remove orphaned skeleton file
+            # Safe because agent hasn't written real content yet
+            with contextlib.suppress(OSError):
+                file_path.unlink()
+            raise
 
+        if design is None:
+            return {"file_path": str(file_path)}
         design_result = dict(design)
         design_result["file_path"] = str(file_path)
         return design_result
@@ -544,11 +587,17 @@ class HybridStorage:
         if not design:
             return False
 
-        # Delete content file first
-        self._content_mgr.delete_design(design["project_id"], prd_id)
+        # DB first (source of truth for existence)
+        if not self._db.delete_design(prd_id):
+            return False
 
-        # Delete from database
-        return self._db.delete_design(prd_id)
+        # Then file (best-effort cleanup — orphaned files caught by doctor --repair)
+        try:
+            self._content_mgr.delete_design(design["project_id"], prd_id)
+        except OSError as e:
+            logger.warning("Failed to delete design content file for %s: %s", prd_id, e)
+
+        return True
 
     # =========================================================================
     # Sprint Operations
@@ -787,14 +836,27 @@ class HybridStorage:
         project_id: str,
         sprint_id: str | None = None,
         status: str = "pending",
+        run_type: str = "sprint",
+        goal: str | None = None,
+        current_phase: str | None = None,
+        config: str | None = None,
         governance_config: str | None = None,
         total_budget_cents: int | None = None,
         agent_count: int = 0,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Create an execution run record."""
         return self._db.create_execution_run(
-            run_id, project_id, sprint_id, status,
-            governance_config, total_budget_cents, agent_count,
+            run_id=run_id,
+            project_id=project_id,
+            sprint_id=sprint_id,
+            status=status,
+            run_type=run_type,
+            goal=goal,
+            current_phase=current_phase,
+            config=config,
+            governance_config=governance_config,
+            total_budget_cents=total_budget_cents,
+            agent_count=agent_count,
         )
 
     def get_execution_run(self, run_id: str) -> dict[str, Any] | None:
@@ -1314,6 +1376,141 @@ class HybridStorage:
     ) -> dict[str, Any]:
         """Get summary status of challenge rounds for an artifact."""
         return self._db.get_challenge_status(artifact_type, artifact_id)
+
+    # =========================================================================
+    # Consistency Check & Repair Operations
+    # =========================================================================
+
+    def consistency_check(self, project_id: str) -> dict[str, Any]:
+        """Detect inconsistencies between content files and the database.
+
+        Compares file IDs extracted from ``~/.a-sdlc/content/{project_id}/``
+        against DB records for PRDs, tasks, and designs.
+
+        Args:
+            project_id: Project identifier to check.
+
+        Returns:
+            Dict with keys:
+                orphaned_files  – list of dicts ``{"entity_type", "id", "file_path"}``
+                    for files that have no matching DB record.
+                phantom_records – list of dicts ``{"entity_type", "id"}``
+                    for DB records whose content file is missing.
+                total_entities  – total number of unique entity IDs found
+                    across both sources.
+        """
+        orphaned_files: list[dict[str, str]] = []
+        phantom_records: list[dict[str, str]] = []
+        all_ids: set[str] = set()
+
+        entity_types = [
+            ("prd", self._content_mgr.list_prd_files, self._db.list_prds),
+            ("task", self._content_mgr.list_task_files, self._db.list_tasks),
+            ("design", self._content_mgr.list_design_files, self._db.list_designs),
+        ]
+
+        for entity_type, list_files_fn, list_db_fn in entity_types:
+            # File IDs: extract stem (filename without .md)
+            file_paths = list_files_fn(project_id)
+            file_ids = {p.stem: p for p in file_paths}
+
+            # DB IDs
+            db_records = list_db_fn(project_id)
+            db_ids = {r["id"] for r in db_records}
+
+            all_ids.update(file_ids.keys())
+            all_ids.update(db_ids)
+
+            # Orphaned files: file exists but no DB record
+            for fid, fpath in file_ids.items():
+                if fid not in db_ids:
+                    orphaned_files.append({
+                        "entity_type": entity_type,
+                        "id": fid,
+                        "file_path": str(fpath),
+                    })
+
+            # Phantom records: DB record exists but no file
+            for did in db_ids:
+                if did not in file_ids:
+                    phantom_records.append({
+                        "entity_type": entity_type,
+                        "id": did,
+                    })
+
+        return {
+            "orphaned_files": orphaned_files,
+            "phantom_records": phantom_records,
+            "total_entities": len(all_ids),
+        }
+
+    def repair_consistency(
+        self,
+        project_id: str,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Repair inconsistencies between content files and the database.
+
+        - **Orphaned files** (file exists, no DB record): deleted.
+        - **Phantom records** (DB record, no file): DB record deleted.
+
+        Args:
+            project_id: Project identifier to repair.
+            dry_run: If ``True`` (default), report what *would* be done
+                without making changes.
+
+        Returns:
+            Dict with keys:
+                repaired_orphans  – number of orphaned files removed.
+                repaired_phantoms – number of phantom DB records removed.
+                dry_run           – echo of the dry_run flag.
+        """
+        check = self.consistency_check(project_id)
+        repaired_orphans = 0
+        repaired_phantoms = 0
+
+        # Repair orphaned files
+        for orphan in check["orphaned_files"]:
+            if dry_run:
+                repaired_orphans += 1
+            else:
+                try:
+                    Path(orphan["file_path"]).unlink()
+                    repaired_orphans += 1
+                except OSError as e:
+                    logger.warning(
+                        "Failed to delete orphaned file %s: %s",
+                        orphan["file_path"], e,
+                    )
+
+        # Repair phantom records
+        delete_fns = {
+            "prd": self._db.delete_prd,
+            "task": self._db.delete_task,
+            "design": self._db.delete_design,
+        }
+
+        for phantom in check["phantom_records"]:
+            delete_fn = delete_fns.get(phantom["entity_type"])
+            if delete_fn is None:
+                continue
+            if dry_run:
+                repaired_phantoms += 1
+            else:
+                try:
+                    if delete_fn(phantom["id"]):
+                        repaired_phantoms += 1
+                except Exception as e:
+                    logger.warning(
+                        "Failed to delete phantom %s record %s: %s",
+                        phantom["entity_type"], phantom["id"], e,
+                    )
+
+        return {
+            "repaired_orphans": repaired_orphans,
+            "repaired_phantoms": repaired_phantoms,
+            "dry_run": dry_run,
+        }
 
 
 # Backward compatibility aliases

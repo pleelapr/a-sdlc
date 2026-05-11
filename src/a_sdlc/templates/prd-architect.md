@@ -71,6 +71,81 @@ If round_table_enabled = true:
 2. Assemble persona panel — Architect always included as lead for design phase
 3. Display panel to user
 
+### 1.5. Codebase Scan Gate [FR-006, AC-006]
+
+**This gate ensures codebase artifacts exist before design begins. Behavior depends on quality configuration.**
+
+#### 1.5.1: Check for Codebase Artifacts
+
+Check whether `.sdlc/artifacts/` directory exists and contains scan output (e.g., `architecture.md`, `codebase-summary.md`).
+
+```
+Use Glob to check: .sdlc/artifacts/*.md
+```
+
+If artifacts exist (at least one `.md` file found): proceed to Step 2.
+
+If artifacts do NOT exist (directory missing or empty):
+
+#### 1.5.2: Check Quality Config
+
+```
+Read: .sdlc/config.yaml → look for quality.enabled
+```
+
+**If `quality.enabled` is `false`, absent, or `.sdlc/config.yaml` does not exist:**
+
+Keep the existing soft warning behavior:
+```
+Warn: No codebase artifacts found. Run `/sdlc:scan` first for best results.
+      Proceeding with direct codebase analysis...
+```
+Proceed to Step 2.
+
+**If `quality.enabled` is `true`:**
+
+#### 1.5.3: Prompt User [NFR-003]
+
+Present an AskUserQuestion gate:
+
+```
+AskUserQuestion([
+  {
+    question: "No codebase scan artifacts found. A scan provides architecture context that significantly improves design quality. How would you like to proceed?",
+    header: "Scan Gate",
+    multiSelect: false,
+    options: [
+      { label: "Run /sdlc:scan first (Recommended)", description: "Stop here and run /sdlc:scan to generate codebase artifacts before designing" },
+      { label: "Continue without scan", description: "Override: proceed with direct codebase analysis only (not recommended)" }
+    ]
+  }
+])
+```
+
+**If user selects "Run /sdlc:scan first":**
+```
+Please run `/sdlc:scan` to generate codebase artifacts, then re-run `/sdlc:prd-architect "{prd_id}"`.
+```
+**STOP HERE. Do not proceed.**
+
+**If user selects "Continue without scan" (override):**
+
+Log the override:
+```
+mcp__asdlc__log_correction(
+    context_type="prd",
+    context_id="{prd_id}",
+    category="scan-skip-override",
+    description="User chose to proceed with prd-architect without codebase scan artifacts"
+)
+```
+
+```
+Warn: Proceeding without codebase scan artifacts. Design quality may be reduced.
+      Direct codebase analysis will be used instead.
+```
+Proceed to Step 2.
+
 ### 2. Codebase Analysis
 
 **This step MUST read actual code. Do NOT skip or approximate.**
@@ -91,10 +166,9 @@ Parallel Read (all at once):
 - ~/.a-sdlc/lesson-learn.md
 ```
 
-If artifacts don't exist:
+If artifacts don't exist (user overrode the scan gate in Step 1.5):
 ```
-Warn: No codebase artifacts found. Run `/sdlc:scan` first for best results.
-      Proceeding with direct codebase analysis...
+Warn: No codebase artifacts found. Proceeding with direct codebase analysis...
 ```
 Read only the lesson-learn files (parallel) and continue to direct codebase analysis.
 
@@ -124,6 +198,105 @@ From codebase analysis, identify:
 - API contract changes (backward compatibility?)
 - Dependency additions (new packages?)
 - Test infrastructure (existing test patterns?)
+
+#### 2.4: File Path Verification [FR-004, AC-004]
+
+**This gate verifies that file paths cited in the codebase analysis actually exist. Behavior depends on quality configuration.**
+
+##### 2.4.1: Check Quality Config
+
+```
+Read: .sdlc/config.yaml → look for quality.enabled
+```
+
+**Skip this step if ANY of these are true:**
+- `.sdlc/config.yaml` does not exist
+- `quality.enabled` is `false` or absent
+
+If skipping:
+```
+File path verification: skipped (quality not enabled)
+```
+Proceed to Round-Table / Step 3.
+
+##### 2.4.2: Collect Cited File Paths
+
+Scan all evidence gathered in Steps 2.1 and 2.2 (Evidence Log, component analysis, constraint notes) and extract every file path reference. File paths typically match patterns like:
+- `src/module/file.py`
+- `tests/test_module.py`
+- `path/to/file.ext:123` (strip line number — verify file only)
+
+Strip any line number suffixes (e.g., `file.py:45` → `file.py`) before verification. Only verify file existence — do NOT verify line numbers.
+
+Collect all unique file paths into a list: `cited_paths`.
+
+If no file paths are cited: skip verification and proceed.
+
+##### 2.4.3: Verify Paths via Glob
+
+For each path in `cited_paths`, use Glob to check whether the file exists in the repository:
+
+```
+For each path in cited_paths:
+    result = Glob(pattern=path)
+    if no match: add to invalid_paths
+```
+
+If all paths are valid:
+```
+File path verification: all {N} cited paths verified ✓
+```
+Proceed to Round-Table / Step 3.
+
+##### 2.4.4: Handle Invalid Paths [NFR-003]
+
+If `invalid_paths` is not empty, present the results:
+
+```
+File path verification: {M} of {N} cited paths do not exist
+
+Invalid paths:
+- {path_1} (cited in: {context where it was referenced})
+- {path_2} (cited in: {context where it was referenced})
+```
+
+Present an AskUserQuestion gate:
+
+```
+AskUserQuestion([
+  {
+    question: "{M} file path(s) cited in the design analysis do not exist in the repository. How would you like to proceed?",
+    header: "Path Gate",
+    multiSelect: false,
+    options: [
+      { label: "Fix paths (Recommended)", description: "Return to Step 2.2 to revise the codebase analysis with correct file references" },
+      { label: "Override (keep invalid paths)", description: "Proceed despite invalid paths — they will be logged as corrections" }
+    ]
+  }
+])
+```
+
+**If user selects "Fix paths":**
+
+Return to Step 2.2 to re-analyze affected components with corrected file paths. After re-analysis, re-run Step 2.4 to verify again.
+
+**If user selects "Override (keep invalid paths)":**
+
+Log the override:
+```
+mcp__asdlc__log_correction(
+    context_type="prd",
+    context_id="{prd_id}",
+    category="filepath-override",
+    description="User chose to proceed with {M} invalid file path(s) in design analysis: {comma-separated list of invalid paths}"
+)
+```
+
+```
+Warn: Proceeding with {M} unverified file path(s). These may cause issues during task splitting.
+```
+
+Proceed to Round-Table / Step 3.
 
 ### Round-Table: Architecture Review (Section C from _round-table-blocks.md)
 
@@ -565,6 +738,7 @@ The user must explicitly run one of these commands to continue:
 | `mcp__asdlc__challenge_artifact` | Initiate design challenge (quality gate) |
 | `mcp__asdlc__record_challenge_round` | Record challenger objections and responses |
 | `mcp__asdlc__get_challenge_status` | Check challenge resolution status |
+| `mcp__asdlc__log_correction` | Log scan-skip override (scan gate) and file path override (path gate) |
 
 ## Notes
 

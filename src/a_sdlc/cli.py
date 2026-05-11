@@ -13,6 +13,11 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from a_sdlc.artifacts import ArtifactPluginManager
+    from a_sdlc.plugins import PluginManager
 
 import click
 from rich.console import Console
@@ -1358,7 +1363,19 @@ def sonarqube_status() -> None:
 
 
 @main.command()
-def doctor() -> None:
+@click.option(
+    "--check-consistency",
+    is_flag=True,
+    default=False,
+    help="Check data consistency across all projects (orphaned files, phantom records).",
+)
+@click.option(
+    "--repair",
+    is_flag=True,
+    default=False,
+    help="Repair detected inconsistencies (implies --check-consistency).",
+)
+def doctor(check_consistency: bool, repair: bool) -> None:
     """Run system diagnostics.
 
     Checks for:
@@ -1372,7 +1389,11 @@ def doctor() -> None:
     - Docker and monitoring services
     - SonarQube configuration
     - Database accessibility and schema version
+    - Data consistency (with --check-consistency)
     """
+    # --repair implies --check-consistency
+    if repair:
+        check_consistency = True
     console.print(Panel("[bold]a-sdlc System Diagnostics[/bold]", border_style="blue"))
 
     checks = []
@@ -1753,7 +1774,82 @@ def doctor() -> None:
         console.print("[yellow]Passed with warnings. Some features may be limited.[/yellow]")
     else:
         console.print("[red]Some checks failed. Please address the issues above.[/red]")
-        sys.exit(1)
+        if not check_consistency:
+            sys.exit(1)
+
+    # Consistency check (--check-consistency / --repair)
+    if check_consistency:
+        from a_sdlc.storage import HybridStorage
+
+        console.print()
+        console.print(Panel("[bold]Data Consistency Check[/bold]", border_style="blue"))
+
+        storage = HybridStorage()
+        projects = storage.list_projects()
+
+        if not projects:
+            console.print("[dim]No projects registered.[/dim]")
+        else:
+            has_inconsistencies = False
+
+            for project in projects:
+                project_id = project["id"]
+                project_name = project.get("name", project_id)
+                result = storage.consistency_check(project_id)
+
+                orphaned = result["orphaned_files"]
+                phantoms = result["phantom_records"]
+                total = result["total_entities"]
+
+                if not orphaned and not phantoms:
+                    console.print(
+                        f"  [green]✓[/green] {project_name} ({project_id}): "
+                        f"{total} entities, no inconsistencies"
+                    )
+                    continue
+
+                has_inconsistencies = True
+                console.print(
+                    f"  [red]✗[/red] {project_name} ({project_id}): "
+                    f"{total} entities, "
+                    f"{len(orphaned)} orphaned file(s), "
+                    f"{len(phantoms)} phantom record(s)"
+                )
+
+                for item in orphaned:
+                    console.print(
+                        f"    [yellow]orphaned {item['entity_type']}[/yellow]: "
+                        f"{item['id']} ({item['file_path']})"
+                    )
+
+                for item in phantoms:
+                    console.print(
+                        f"    [yellow]phantom {item['entity_type']}[/yellow]: "
+                        f"{item['id']} (DB record, no file)"
+                    )
+
+                # Repair if requested
+                if repair and (orphaned or phantoms):
+                    fix_count = len(orphaned) + len(phantoms)
+                    if click.confirm(f"  Repair {fix_count} inconsistencies in {project_name}?"):
+                        repair_result = storage.repair_consistency(project_id, dry_run=False)
+                        console.print(
+                            f"    [green]Repaired:[/green] "
+                            f"{repair_result['repaired_orphans']} orphaned file(s), "
+                            f"{repair_result['repaired_phantoms']} phantom record(s)"
+                        )
+                    else:
+                        console.print("    [dim]Skipped.[/dim]")
+
+            console.print()
+            if has_inconsistencies:
+                if not repair:
+                    console.print(
+                        "[yellow]Inconsistencies found. Run with --repair to fix.[/yellow]"
+                    )
+                sys.exit(1)
+            else:
+                console.print("[green]All projects consistent.[/green]")
 
 
 @main.command("build-extension")
@@ -1891,7 +1987,7 @@ def plugins_enable(plugin_name: str, plugin_type: str | None, save_global: bool)
     """
     pm = get_plugin_manager()
     apm = get_artifact_plugin_manager()
-    target = "global" if save_global else "project"
+    target = cast(Literal["global", "project"], "global" if save_global else "project")
 
     # Auto-detect plugin type if not specified
     if plugin_type is None:
@@ -1956,7 +2052,7 @@ def plugins_configure(plugin_name: str, save_global: bool) -> None:
     """
     pm = get_plugin_manager()
     apm = get_artifact_plugin_manager()
-    target = "global" if save_global else "project"
+    target = cast(Literal["global", "project"], "global" if save_global else "project")
 
     # Check if it's a task plugin
     if plugin_name in pm.list_plugins():
@@ -1988,7 +2084,7 @@ def plugins_configure(plugin_name: str, save_global: bool) -> None:
     sys.exit(1)
 
 
-def _configure_linear_plugin(pm: object, target: str = "project") -> None:
+def _configure_linear_plugin(pm: "PluginManager", target: Literal["global", "project"] = "project") -> None:
     """Interactive configuration for Linear plugin."""
     location = "global config" if target == "global" else "project config"
     console.print(
@@ -2018,7 +2114,7 @@ def _configure_linear_plugin(pm: object, target: str = "project") -> None:
     console.print(f"[green]Linear plugin configured in {location}![/green]")
 
 
-def _configure_jira_plugin(pm: object, target: str = "project") -> None:
+def _configure_jira_plugin(pm: "PluginManager", target: Literal["global", "project"] = "project") -> None:
     """Interactive configuration for Jira plugin."""
     location = "global config" if target == "global" else "project config"
     console.print(
@@ -2054,7 +2150,7 @@ def _configure_jira_plugin(pm: object, target: str = "project") -> None:
     console.print(f"[green]Jira plugin configured in {location}![/green]")
 
 
-def _configure_confluence_plugin(apm: object, target: str = "project") -> None:
+def _configure_confluence_plugin(apm: "ArtifactPluginManager", target: Literal["global", "project"] = "project") -> None:
     """Interactive configuration for Confluence plugin."""
     location = "global config" if target == "global" else "project config"
     console.print(
@@ -2515,7 +2611,7 @@ def prd_list(local_only: bool, remote_only: bool) -> None:
         apm = get_artifact_plugin_manager()
         try:
             confluence = apm.get_plugin("confluence")
-            remote_prds = confluence.list_prds()
+            remote_prds = confluence.list_prds()  # type: ignore[attr-defined]  # Confluence subclass method
             confluence_available = True
         except Exception:
             if remote_only:
@@ -2654,12 +2750,12 @@ def prd_pull(title: str, force: bool) -> None:
     console.print(f"Pulling PRD: {title}...")
 
     try:
-        prd_obj = confluence.pull_prd(title)
+        prd_obj = confluence.pull_prd(title)  # type: ignore[attr-defined]  # Confluence subclass method
     except KeyError:
         console.print(f"[red]PRD not found in Confluence: {title}[/red]")
         console.print()
         console.print("Available PRDs in Confluence:")
-        for remote_prd in confluence.list_prds():
+        for remote_prd in confluence.list_prds():  # type: ignore[attr-defined]  # Confluence subclass method
             console.print(f"  - {remote_prd['title']}")
         sys.exit(1)
     except RuntimeError as e:
@@ -2710,7 +2806,7 @@ def prd_push(prd_id_or_file: str, force: bool) -> None:
     else:
         # It's a PRD ID
         local = LocalPRDPlugin({"prds_dir": str(prds_dir)})
-        prd_obj = local.get_prd(prd_id_or_file)
+        prd_obj = local.get_prd(prd_id_or_file)  # type: ignore[assignment]  # Narrowed by null check below
 
         if not prd_obj:
             console.print(f"[red]PRD not found: {prd_id_or_file}[/red]")
@@ -2730,7 +2826,7 @@ def prd_push(prd_id_or_file: str, force: bool) -> None:
         sys.exit(1)
 
     # Check if page exists in Confluence
-    existing = confluence.get_prd_page(prd_obj.title)
+    existing = confluence.get_prd_page(prd_obj.title)  # type: ignore[attr-defined]  # Confluence subclass method
     if existing and not force:
         console.print(f"[yellow]PRD already exists in Confluence: {prd_obj.title}[/yellow]")
         console.print("Use [cyan]--force[/cyan] to update.")
@@ -2741,7 +2837,7 @@ def prd_push(prd_id_or_file: str, force: bool) -> None:
     console.print(f"{action} PRD in Confluence: {prd_obj.title}...")
 
     try:
-        page_id = confluence.push_prd(prd_obj)
+        page_id = confluence.push_prd(prd_obj)  # type: ignore[attr-defined]  # Confluence subclass method
     except RuntimeError as e:
         console.print(f"[red]Failed to push PRD: {e}[/red]")
         sys.exit(1)
@@ -2818,7 +2914,7 @@ def prd_delete(prd_id: str, local_only: bool, remote_only: bool, yes: bool) -> N
             prd_obj = local.get_prd(prd_id)
             title = prd_obj.title if prd_obj else prd_id.replace("-", " ").title()
 
-            confluence.delete_prd(title)
+            confluence.delete_prd(title)  # type: ignore[attr-defined]  # Confluence subclass method
             console.print(f"[green]Deleted from Confluence: {title}[/green]")
 
         except KeyError:
@@ -3028,7 +3124,7 @@ def prd_update(
             confluence = apm.get_plugin("confluence")
 
             console.print("\n[cyan]Pushing to Confluence...[/cyan]")
-            page_id = confluence.push_prd(prd_obj)
+            page_id = confluence.push_prd(prd_obj)  # type: ignore[attr-defined]  # Confluence subclass method
 
             local.update_external_link(
                 prd_obj.id,
@@ -3776,7 +3872,7 @@ def run_goal(
             f"Log:           {log_file}\n\n"
             f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
             f"Detailed view:   [cyan]a-sdlc run status {run_id}[/cyan]\n"
-            f"Answer:          [cyan]a-sdlc run answer {run_id} -m \"...\"[/cyan]\n"
+            f'Answer:          [cyan]a-sdlc run answer {run_id} -m "..."[/cyan]\n'
             f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
             title="[bold]Goal Execution[/bold]",
             border_style="green",
@@ -4310,9 +4406,7 @@ def _show_run_detail(run_id_arg: str) -> None:
     )
 
     # --- Queue State table ---
-    total_tasks = (
-        metrics["pending"] + metrics["active"] + metrics["completed"] + metrics["failed"]
-    )
+    total_tasks = metrics["pending"] + metrics["active"] + metrics["completed"] + metrics["failed"]
     if total_tasks > 0:
         queue_table = Table(title="Queue State")
         queue_table.add_column("Metric", style="bold")
@@ -4443,13 +4537,9 @@ def _show_run_detail(run_id_arg: str) -> None:
             phase_strs = [f"{k}: {v}s" for k, v in phases.items()]
             metric_lines.append(f"Phase durations:   {', '.join(phase_strs)}")
         if pipeline_metrics.get("agent_session_count") is not None:
-            metric_lines.append(
-                f"Agent sessions:    {pipeline_metrics['agent_session_count']}"
-            )
+            metric_lines.append(f"Agent sessions:    {pipeline_metrics['agent_session_count']}")
         if pipeline_metrics.get("challenge_rounds") is not None:
-            metric_lines.append(
-                f"Challenge rounds:  {pipeline_metrics['challenge_rounds']}"
-            )
+            metric_lines.append(f"Challenge rounds:  {pipeline_metrics['challenge_rounds']}")
         if pipeline_metrics.get("failure_count") is not None:
             metric_lines.append(f"Failures:          {pipeline_metrics['failure_count']}")
         if pipeline_metrics.get("total_cost_cents") is not None:
@@ -4571,9 +4661,7 @@ def _show_run_detail(run_id_arg: str) -> None:
         config_data = data.get("config", {})
         if config_data.get("message"):
             console.print(f"[bold magenta]{config_data['message']}[/bold magenta]")
-        console.print(
-            f"  Answer: [cyan]a-sdlc run answer {run_id_arg} -m 'your answer'[/cyan]"
-        )
+        console.print(f"  Answer: [cyan]a-sdlc run answer {run_id_arg} -m 'your answer'[/cyan]")
 
 
 @run.command("status")
@@ -4607,9 +4695,7 @@ def run_status(run_id: str | None) -> None:
         return
 
     # Collect all run state files
-    run_files = sorted(
-        runs_dir.glob("R-*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
+    run_files = sorted(runs_dir.glob("R-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not run_files:
         console.print("[yellow]No runs found.[/yellow]")
         return
@@ -4643,10 +4729,7 @@ def run_status(run_id: str | None) -> None:
 
         # Queue depth: Pending/Active/Completed/Failed for all run types
         total_items = (
-            metrics["pending"]
-            + metrics["active"]
-            + metrics["completed"]
-            + metrics["failed"]
+            metrics["pending"] + metrics["active"] + metrics["completed"] + metrics["failed"]
         )
         if total_items > 0:
             queue_str = (
@@ -4659,14 +4742,10 @@ def run_status(run_id: str | None) -> None:
             queue_str = "-"
 
         # Threads: total thread entries (FR-009)
-        thread_str = (
-            str(metrics["thread_count"]) if metrics["thread_count"] > 0 else "-"
-        )
+        thread_str = str(metrics["thread_count"]) if metrics["thread_count"] > 0 else "-"
 
         # Agent count: from agent_* keys or pipeline metrics
-        agent_str = (
-            str(metrics["agent_count"]) if metrics["agent_count"] > 0 else "-"
-        )
+        agent_str = str(metrics["agent_count"]) if metrics["agent_count"] > 0 else "-"
 
         started = data.get("started_at", "")
         if started:
@@ -4703,9 +4782,7 @@ def run_status(run_id: str | None) -> None:
             console.print(f"  Reject:  [cyan]a-sdlc run reject {rid} -m 'reason'[/cyan]")
         elif data.get("status") == "awaiting_clarification":
             console.print()
-            console.print(
-                f"[bold magenta]Run {rid} is awaiting an answer:[/bold magenta]"
-            )
+            console.print(f"[bold magenta]Run {rid} is awaiting an answer:[/bold magenta]")
             # Show clarification_question (pipeline) or config.message (legacy)
             clar_q = data.get("clarification_question", "")
             if clar_q:
@@ -4715,9 +4792,7 @@ def run_status(run_id: str | None) -> None:
                 config_data = data.get("config", {})
                 if config_data.get("message"):
                     console.print(f"  {config_data['message']}")
-            console.print(
-                f"  Answer: [cyan]a-sdlc run answer {rid} -m 'your answer'[/cyan]"
-            )
+            console.print(f"  Answer: [cyan]a-sdlc run answer {rid} -m 'your answer'[/cyan]")
 
 
 @run.command("cancel")
@@ -4988,10 +5063,7 @@ def run_control(item_id: str, action: str, run_id: str | None) -> None:
     )
     _update_run(run_id, controls=controls)
 
-    console.print(
-        f"[green]Control action '{action}' issued for {item_id} "
-        f"in run {run_id}.[/green]"
-    )
+    console.print(f"[green]Control action '{action}' issued for {item_id} in run {run_id}.[/green]")
 
 
 @run.command("comment")
@@ -5056,9 +5128,7 @@ def run_comment(artifact_id: str, message: str, run_id: str | None) -> None:
     )
     _update_run(run_id, comments=comments)
 
-    console.print(
-        f"[green]Comment posted to {artifact_id} in run {run_id}.[/green]"
-    )
+    console.print(f"[green]Comment posted to {artifact_id} in run {run_id}.[/green]")
     console.print(f"[dim]{message}[/dim]")
 
 
@@ -6050,6 +6120,7 @@ def jira_status(sprint_id: str | None) -> None:
             return
 
         sprint = storage.get_sprint(sprint_id)
+        assert sprint is not None  # Sprint must exist if sync mapping exists
         prds = storage.get_sprint_prds(sprint_id)
 
         console.print(f"\n[bold]Sprint: {sprint['title']}[/bold]")
@@ -6345,6 +6416,7 @@ def linear_status(sprint_id: str | None) -> None:
             return
 
         sprint = storage.get_sprint(sprint_id)
+        assert sprint is not None  # Sprint must exist if sync mapping exists
         prds = storage.get_sprint_prds(sprint_id)
 
         console.print(f"\n[bold]Sprint: {sprint['title']}[/bold]")
@@ -6616,9 +6688,7 @@ def agent_budget(agent_id: str, token_limit: int | None, cost_limit: int | None)
     storage = HybridStorage()
 
     if token_limit is not None or cost_limit is not None:
-        storage.create_agent_budget(
-            agent_id, token_limit=token_limit, cost_limit_cents=cost_limit
-        )
+        storage.create_agent_budget(agent_id, token_limit=token_limit, cost_limit_cents=cost_limit)
         console.print(f"[green]Budget updated for {agent_id}.[/green]")
 
     budget = storage.get_agent_budget(agent_id)
@@ -6931,12 +7001,8 @@ def quality_gaps(sprint_id: str | None) -> None:
         except Exception as exc:
             console.print(f"[red]Error analysing PRD {pid}: {exc}[/red]")
 
-    coverage_pct = (
-        round((linked_reqs / total_reqs) * 100, 1) if total_reqs > 0 else 100.0
-    )
-    verification_pct = (
-        round((verified_acs / total_acs) * 100, 1) if total_acs > 0 else 100.0
-    )
+    coverage_pct = round((linked_reqs / total_reqs) * 100, 1) if total_reqs > 0 else 100.0
+    verification_pct = round((verified_acs / total_acs) * 100, 1) if total_acs > 0 else 100.0
     quality_pass = coverage_pct >= 100.0 and verification_pct >= 100.0
 
     verdict = "[green]PASS[/green]" if quality_pass else "[red]FAIL[/red]"
@@ -6989,9 +7055,7 @@ def quality_reclassify(req_id: str, depth: str) -> None:
         summary=req.get("summary", ""),
         depth=depth,
     )
-    console.print(
-        f"[green]Reclassified {req_id}: {old_depth} -> {depth}[/green]"
-    )
+    console.print(f"[green]Reclassified {req_id}: {old_depth} -> {depth}[/green]")
 
 
 @quality.command("skip-challenge")
@@ -7025,13 +7089,14 @@ def quality_skip_challenge(challenge_id: str, reason: str) -> None:
 
     try:
         result = storage.update_challenge_round(
-            artifact_type, artifact_id, round_number,
-            verdict="skipped", status="skipped",
+            artifact_type,
+            artifact_id,
+            round_number,
+            verdict="skipped",
+            status="skipped",
         )
         if not result:
-            console.print(
-                f"[red]Challenge round not found: {challenge_id}[/red]"
-            )
+            console.print(f"[red]Challenge round not found: {challenge_id}[/red]")
             return
     except Exception as exc:
         console.print(f"[red]Failed to skip challenge: {exc}[/red]")
@@ -7049,9 +7114,7 @@ def quality_skip_challenge(challenge_id: str, reason: str) -> None:
 
 @quality.command("resolve-escalation")
 @click.argument("objection_id")
-@click.option(
-    "--resolution", required=True, help="Resolution text for the escalation"
-)
+@click.option("--resolution", required=True, help="Resolution text for the escalation")
 def quality_resolve_escalation(objection_id: str, resolution: str) -> None:
     """Resolve a user-escalated objection."""
     from a_sdlc.storage import HybridStorage
@@ -7080,13 +7143,15 @@ def quality_resolve_escalation(objection_id: str, resolution: str) -> None:
 
     try:
         result = storage.update_challenge_round(
-            artifact_type, artifact_id, round_number,
-            responses=resolution, verdict="resolved", status="resolved",
+            artifact_type,
+            artifact_id,
+            round_number,
+            responses=resolution,
+            verdict="resolved",
+            status="resolved",
         )
         if not result:
-            console.print(
-                f"[red]Challenge round not found: {objection_id}[/red]"
-            )
+            console.print(f"[red]Challenge round not found: {objection_id}[/red]")
             return
     except Exception as exc:
         console.print(f"[red]Failed to resolve escalation: {exc}[/red]")
@@ -7133,9 +7198,7 @@ def quality_waive(req_id: str, reason: str, sprint_id: str | None) -> None:
             "summary": req.get("summary", ""),
         },
     )
-    console.print(
-        f"[green]Requirement {req_id} waived. Reason: {reason}[/green]"
-    )
+    console.print(f"[green]Requirement {req_id} waived. Reason: {reason}[/green]")
 
 
 if __name__ == "__main__":

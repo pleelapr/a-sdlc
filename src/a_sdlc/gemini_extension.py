@@ -45,7 +45,7 @@ def _get_template_dir() -> Path:
 def _get_gemini_md_template() -> str:
     """Load the GEMINI.md template content."""
     try:
-        ref = resources.files("a_sdlc").joinpath("artifact_templates", "gemini-md.template.md")
+        ref = resources.files("a_sdlc").joinpath("artifact_templates").joinpath("gemini-md.template.md")
         return ref.read_text(encoding="utf-8")
     except (TypeError, AttributeError, FileNotFoundError):
         fallback = Path(__file__).parent / "artifact_templates" / "gemini-md.template.md"

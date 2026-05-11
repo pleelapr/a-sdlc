@@ -105,7 +105,7 @@ class TestQualityConfig:
     def test_defaults(self):
         """Default QualityConfig has expected values matching PRD spec."""
         config = QualityConfig()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.ac_gate is True
         assert config.behavioral_test_required is True
         assert config.coverage_warnings is True
@@ -216,10 +216,10 @@ class TestLoadQualityConfigDefaults:
     """Test loading quality config when quality section is absent (AC-007)."""
 
     def test_defaults_when_no_config_files(self):
-        """Without any config files, quality is disabled with safe defaults."""
+        """Without any config files, quality defaults to enabled (FR-001/AC-001)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_quality_config(Path(tmpdir))
-            assert config.enabled is False
+            assert config.enabled is True
             assert config.ac_gate is True
             assert config.behavioral_test_required is True
             assert config.coverage_warnings is True
@@ -229,7 +229,7 @@ class TestLoadQualityConfigDefaults:
             assert config.challenge.gate == "hard"
 
     def test_config_yaml_without_quality_section(self):
-        """A config.yaml with no quality section returns defaults (AC-007)."""
+        """A config.yaml with no quality section returns defaults (AC-001)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
             sdlc_dir = project_dir / ".sdlc"
@@ -239,7 +239,7 @@ class TestLoadQualityConfigDefaults:
             )
 
             config = load_quality_config(project_dir)
-            assert config.enabled is False
+            assert config.enabled is True
             assert config.ac_gate is True
 
     def test_explicit_enabled_false(self):
@@ -252,6 +252,62 @@ class TestLoadQualityConfigDefaults:
 
             config = load_quality_config(project_dir)
             assert config.enabled is False
+
+
+# =============================================================================
+# Combined defaults verification (SDLC-P0035 / AC-001)
+# =============================================================================
+
+
+class TestCombinedDefaults:
+    """Verify combined quality and challenge defaults after P0035 changes."""
+
+    def test_quality_and_challenge_both_enabled_by_default(self):
+        """Both quality.enabled and challenge.enabled default to True (FR-001/AC-001)."""
+        quality = QualityConfig()
+        assert quality.enabled is True
+        assert quality.challenge.enabled is True
+
+    def test_combined_defaults_from_load_no_config(self):
+        """load_quality_config with no config returns both quality and challenge enabled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_quality_config(Path(tmpdir))
+            assert config.enabled is True
+            assert config.challenge.enabled is True
+            # All lifecycle gates should be active when both are enabled
+            assert config.challenge.is_gate_active("prd") is True
+            assert config.challenge.is_gate_active("design") is True
+            assert config.challenge.is_gate_active("split") is True
+            assert config.challenge.is_gate_active("implementation") is True
+
+    def test_combined_defaults_from_empty_quality_section(self):
+        """Empty quality section in config still yields both enabled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            sdlc_dir = project_dir / ".sdlc"
+            sdlc_dir.mkdir()
+            (sdlc_dir / "config.yaml").write_text(yaml.dump({"quality": {}}))
+
+            config = load_quality_config(project_dir)
+            assert config.enabled is True
+            assert config.challenge.enabled is True
+            assert config.challenge.gate == "hard"
+
+    def test_opt_out_disables_quality_but_challenge_defaults_preserved(self):
+        """Opting out of quality preserves challenge defaults in the config object."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            sdlc_dir = project_dir / ".sdlc"
+            sdlc_dir.mkdir()
+            (sdlc_dir / "config.yaml").write_text(
+                yaml.dump({"quality": {"enabled": False}})
+            )
+
+            config = load_quality_config(project_dir)
+            assert config.enabled is False
+            # Challenge config still has its own defaults
+            assert config.challenge.enabled is True
+            assert config.challenge.gate == "hard"
 
 
 # =============================================================================
@@ -468,15 +524,15 @@ class TestLoadQualityConfigErrorHandling:
     """Test robustness with missing or malformed config files."""
 
     def test_missing_config_file(self):
-        """Missing config file returns safe defaults."""
+        """Missing config file returns defaults (enabled=True)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_quality_config(Path(tmpdir))
-            assert config.enabled is False
+            assert config.enabled is True
             assert config.ac_gate is True
             assert config.min_coverage_pct == 80
 
     def test_malformed_yaml(self):
-        """Malformed YAML files are treated as empty."""
+        """Malformed YAML files are treated as empty, defaults apply."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
             sdlc_dir = project_dir / ".sdlc"
@@ -484,11 +540,11 @@ class TestLoadQualityConfigErrorHandling:
             (sdlc_dir / "config.yaml").write_text("{{invalid yaml")
 
             config = load_quality_config(project_dir)
-            assert config.enabled is False
+            assert config.enabled is True
             assert config.ac_gate is True
 
     def test_non_dict_quality_section(self):
-        """Non-dict quality section is treated as empty."""
+        """Non-dict quality section is treated as empty, defaults apply."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
             sdlc_dir = project_dir / ".sdlc"
@@ -496,7 +552,7 @@ class TestLoadQualityConfigErrorHandling:
             (sdlc_dir / "config.yaml").write_text(yaml.dump({"quality": "not_a_dict"}))
 
             config = load_quality_config(project_dir)
-            assert config.enabled is False
+            assert config.enabled is True
             assert config.ac_gate is True
             assert config.min_coverage_pct == 80
 
@@ -526,10 +582,10 @@ class TestBackwardsCompatibility:
     """Test that projects without quality config see zero behavioural change."""
 
     def test_no_config_yaml_at_all(self):
-        """A project with no config.yaml has quality disabled."""
+        """A project with no config.yaml defaults to quality enabled (FR-001/AC-001)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_quality_config(Path(tmpdir))
-            assert config.enabled is False
+            assert config.enabled is True
             assert config.ac_gate is True
             assert config.behavioral_test_required is True
             assert config.coverage_warnings is True
@@ -538,7 +594,7 @@ class TestBackwardsCompatibility:
             assert config.challenge.enabled is True
 
     def test_config_yaml_without_quality_section(self):
-        """A config.yaml with no quality section has quality disabled."""
+        """A config.yaml with no quality section defaults to enabled (AC-001)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
             sdlc_dir = project_dir / ".sdlc"
@@ -553,7 +609,7 @@ class TestBackwardsCompatibility:
             )
 
             config = load_quality_config(project_dir)
-            assert config.enabled is False
+            assert config.enabled is True
 
     def test_preserves_other_config_sections(self):
         """Loading quality config does not interfere with other config sections."""

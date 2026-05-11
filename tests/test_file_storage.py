@@ -1074,3 +1074,443 @@ class TestHybridStorageDesign:
 
         hybrid_storage.delete_design("TEST-P0001")
         assert not file_path.exists()
+
+
+class TestCompensatingTransactions:
+    """Test compensating transactions for create and delete operations."""
+
+    @pytest.fixture
+    def storage(self, tmp_path):
+        """Create a HybridStorage instance for testing."""
+        from a_sdlc.storage import HybridStorage
+
+        storage = HybridStorage(base_path=tmp_path)
+        storage.create_project("test-project", "Test Project", str(tmp_path / "proj"))
+        return storage
+
+    # --- Create compensating transactions ---
+
+    def test_create_prd_db_failure_cleans_up_file(self, storage):
+        """If DB insert fails during create_prd, orphaned skeleton file is deleted."""
+        with (
+            patch.object(storage._db, "create_prd", side_effect=sqlite3.IntegrityError("UNIQUE constraint")),
+            pytest.raises(sqlite3.IntegrityError),
+        ):
+            storage.create_prd(
+                prd_id="PRD-FAIL",
+                project_id="test-project",
+                title="Failing PRD",
+            )
+
+        # Verify the skeleton file was cleaned up
+        content_dir = storage._content_mgr.base_path / "test-project" / "prds"
+        prd_files = list(content_dir.glob("PRD-FAIL*")) if content_dir.exists() else []
+        assert len(prd_files) == 0
+
+    def test_create_task_db_failure_cleans_up_file(self, storage):
+        """If DB insert fails during create_task, orphaned skeleton file is deleted."""
+        with (
+            patch.object(storage._db, "create_task", side_effect=sqlite3.IntegrityError("UNIQUE constraint")),
+            pytest.raises(sqlite3.IntegrityError),
+        ):
+            storage.create_task(
+                task_id="TASK-FAIL",
+                project_id="test-project",
+                title="Failing Task",
+            )
+
+        # Verify the skeleton file was cleaned up
+        content_dir = storage._content_mgr.base_path / "test-project" / "tasks"
+        task_files = list(content_dir.glob("TASK-FAIL*")) if content_dir.exists() else []
+        assert len(task_files) == 0
+
+    def test_create_design_db_failure_cleans_up_file(self, storage):
+        """If DB insert fails during create_design, orphaned skeleton file is deleted."""
+        # First create a PRD (needed for design's prd_id reference in the DB)
+        storage.create_prd("PRD-001", "test-project", "Test PRD")
+
+        with (
+            patch.object(storage._db, "create_design", side_effect=sqlite3.IntegrityError("UNIQUE constraint")),
+            pytest.raises(sqlite3.IntegrityError),
+        ):
+            storage.create_design(
+                prd_id="PRD-001",
+                project_id="test-project",
+            )
+
+        # Verify the skeleton file was cleaned up
+        content_dir = storage._content_mgr.base_path / "test-project" / "designs"
+        design_files = list(content_dir.glob("PRD-001*")) if content_dir.exists() else []
+        assert len(design_files) == 0
+
+    def test_create_prd_success_preserves_file(self, storage):
+        """On successful create_prd, skeleton file persists."""
+        prd = storage.create_prd(
+            prd_id="PRD-OK",
+            project_id="test-project",
+            title="Good PRD",
+        )
+        file_path = Path(prd["file_path"])
+        assert file_path.exists()
+
+    def test_create_task_success_preserves_file(self, storage):
+        """On successful create_task, skeleton file persists."""
+        task = storage.create_task(
+            task_id="TASK-OK",
+            project_id="test-project",
+            title="Good Task",
+        )
+        file_path = Path(task["file_path"])
+        assert file_path.exists()
+
+    def test_create_design_success_preserves_file(self, storage):
+        """On successful create_design, skeleton file persists."""
+        storage.create_prd("PRD-OK", "test-project", "Test PRD")
+        design = storage.create_design(
+            prd_id="PRD-OK",
+            project_id="test-project",
+        )
+        file_path = Path(design["file_path"])
+        assert file_path.exists()
+
+    # --- Delete DB-first order ---
+
+    def test_delete_prd_db_first_order(self, storage):
+        """delete_prd deletes DB record first, then file."""
+        storage.create_prd("PRD-DEL", "test-project", "Delete Me")
+        prd = storage.get_prd("PRD-DEL")
+        file_path = Path(prd["file_path"])
+        assert file_path.exists()
+
+        result = storage.delete_prd("PRD-DEL")
+        assert result is True
+        # Both DB record and file should be gone
+        assert storage._db.get_prd("PRD-DEL") is None
+        assert not file_path.exists()
+
+    def test_delete_task_db_first_order(self, storage):
+        """delete_task deletes DB record first, then file."""
+        storage.create_task("TASK-DEL", "test-project", "Delete Me")
+        task = storage.get_task("TASK-DEL")
+        file_path = Path(task["file_path"])
+        assert file_path.exists()
+
+        result = storage.delete_task("TASK-DEL")
+        assert result is True
+        # Both DB record and file should be gone
+        assert storage._db.get_task("TASK-DEL") is None
+        assert not file_path.exists()
+
+    def test_delete_design_db_first_order(self, storage):
+        """delete_design deletes DB record first, then file."""
+        storage.create_prd("PRD-DES", "test-project", "Test PRD")
+        storage.create_design("PRD-DES", "test-project")
+        design = storage._db.get_design_by_prd("PRD-DES")
+        file_path = Path(design["file_path"])
+        assert file_path.exists()
+
+        result = storage.delete_design("PRD-DES")
+        assert result is True
+        assert storage._db.get_design_by_prd("PRD-DES") is None
+        assert not file_path.exists()
+
+    def test_delete_prd_file_failure_still_returns_true(self, storage):
+        """If file delete fails after DB delete, operation still returns True."""
+        storage.create_prd("PRD-FF", "test-project", "File Fail")
+        prd = storage.get_prd("PRD-FF")
+        file_path = Path(prd["file_path"])
+
+        # Make file deletion raise OSError
+        with patch.object(storage._content_mgr, "delete_prd", side_effect=OSError("Permission denied")):
+            result = storage.delete_prd("PRD-FF")
+
+        # Operation succeeds (DB is source of truth)
+        assert result is True
+        # DB record is gone
+        assert storage._db.get_prd("PRD-FF") is None
+        # File still exists (orphaned, cleaned by doctor --repair)
+        assert file_path.exists()
+
+    def test_delete_task_file_failure_still_returns_true(self, storage):
+        """If file delete fails after DB delete, operation still returns True."""
+        storage.create_task("TASK-FF", "test-project", "File Fail")
+        task = storage.get_task("TASK-FF")
+        file_path = Path(task["file_path"])
+
+        with patch.object(storage._content_mgr, "delete_task", side_effect=OSError("Permission denied")):
+            result = storage.delete_task("TASK-FF")
+
+        assert result is True
+        assert storage._db.get_task("TASK-FF") is None
+        assert file_path.exists()
+
+    def test_delete_design_file_failure_still_returns_true(self, storage):
+        """If file delete fails after DB delete, operation still returns True."""
+        storage.create_prd("PRD-DFF", "test-project", "Test PRD")
+        storage.create_design("PRD-DFF", "test-project")
+        design = storage._db.get_design_by_prd("PRD-DFF")
+        file_path = Path(design["file_path"])
+
+        with patch.object(storage._content_mgr, "delete_design", side_effect=OSError("Permission denied")):
+            result = storage.delete_design("PRD-DFF")
+
+        assert result is True
+        assert storage._db.get_design_by_prd("PRD-DFF") is None
+        assert file_path.exists()
+
+    def test_delete_prd_db_failure_preserves_file(self, storage):
+        """If DB delete fails, file is preserved (entity still exists)."""
+        storage.create_prd("PRD-DBF", "test-project", "DB Fail")
+        prd = storage.get_prd("PRD-DBF")
+        file_path = Path(prd["file_path"])
+
+        with patch.object(storage._db, "delete_prd", return_value=False):
+            result = storage.delete_prd("PRD-DBF")
+
+        assert result is False
+        # File is preserved (entity still exists in DB)
+        assert file_path.exists()
+
+    def test_delete_task_db_failure_preserves_file(self, storage):
+        """If DB delete fails, file is preserved (entity still exists)."""
+        storage.create_task("TASK-DBF", "test-project", "DB Fail")
+        task = storage.get_task("TASK-DBF")
+        file_path = Path(task["file_path"])
+
+        with patch.object(storage._db, "delete_task", return_value=False):
+            result = storage.delete_task("TASK-DBF")
+
+        assert result is False
+        assert file_path.exists()
+
+    def test_delete_design_db_failure_preserves_file(self, storage):
+        """If DB delete fails, file is preserved (entity still exists)."""
+        storage.create_prd("PRD-DDB", "test-project", "Test PRD")
+        storage.create_design("PRD-DDB", "test-project")
+        design = storage._db.get_design_by_prd("PRD-DDB")
+        file_path = Path(design["file_path"])
+
+        with patch.object(storage._db, "delete_design", return_value=False):
+            result = storage.delete_design("PRD-DDB")
+
+        assert result is False
+        assert file_path.exists()
+
+
+class TestConsistencyCheck:
+    """Test consistency_check() and repair_consistency() methods."""
+
+    @pytest.fixture
+    def storage(self, tmp_path):
+        """Create a HybridStorage instance with a project for testing."""
+        from a_sdlc.storage import HybridStorage
+
+        storage = HybridStorage(base_path=tmp_path)
+        storage.create_project("test-project", "Test Project", str(tmp_path / "proj"))
+        return storage
+
+    # --- consistency_check tests ---
+
+    def test_clean_state_no_issues(self, storage):
+        """consistency_check returns empty lists when file/DB are in sync."""
+        storage.create_prd("PRD-001", "test-project", "PRD 1")
+        storage.create_task("TASK-001", "test-project", "Task 1")
+        storage.create_prd("PRD-002", "test-project", "PRD 2")
+        storage.create_design("PRD-002", "test-project")
+
+        result = storage.consistency_check("test-project")
+
+        assert result["orphaned_files"] == []
+        assert result["phantom_records"] == []
+        assert result["total_entities"] >= 3
+
+    def test_detects_orphaned_prd_file(self, storage):
+        """consistency_check detects a PRD file with no DB record."""
+        # Create an orphaned file directly on disk
+        prd_dir = storage._content_mgr.base_path / "test-project" / "prds"
+        prd_dir.mkdir(parents=True, exist_ok=True)
+        orphan_path = prd_dir / "ORPHAN-PRD.md"
+        orphan_path.write_text("# Orphaned PRD", encoding="utf-8")
+
+        result = storage.consistency_check("test-project")
+
+        orphan_ids = [o["id"] for o in result["orphaned_files"]]
+        assert "ORPHAN-PRD" in orphan_ids
+        orphan = next(o for o in result["orphaned_files"] if o["id"] == "ORPHAN-PRD")
+        assert orphan["entity_type"] == "prd"
+        assert orphan["file_path"] == str(orphan_path)
+
+    def test_detects_orphaned_task_file(self, storage):
+        """consistency_check detects a task file with no DB record."""
+        task_dir = storage._content_mgr.base_path / "test-project" / "tasks"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        orphan_path = task_dir / "ORPHAN-TASK.md"
+        orphan_path.write_text("# Orphaned Task", encoding="utf-8")
+
+        result = storage.consistency_check("test-project")
+
+        orphan_ids = [o["id"] for o in result["orphaned_files"]]
+        assert "ORPHAN-TASK" in orphan_ids
+        orphan = next(o for o in result["orphaned_files"] if o["id"] == "ORPHAN-TASK")
+        assert orphan["entity_type"] == "task"
+
+    def test_detects_orphaned_design_file(self, storage):
+        """consistency_check detects a design file with no DB record."""
+        design_dir = storage._content_mgr.base_path / "test-project" / "designs"
+        design_dir.mkdir(parents=True, exist_ok=True)
+        orphan_path = design_dir / "ORPHAN-DESIGN.md"
+        orphan_path.write_text("# Orphaned Design", encoding="utf-8")
+
+        result = storage.consistency_check("test-project")
+
+        orphan_ids = [o["id"] for o in result["orphaned_files"]]
+        assert "ORPHAN-DESIGN" in orphan_ids
+        orphan = next(o for o in result["orphaned_files"] if o["id"] == "ORPHAN-DESIGN")
+        assert orphan["entity_type"] == "design"
+
+    def test_detects_phantom_prd_record(self, storage):
+        """consistency_check detects a DB PRD record with no content file."""
+        # Create a PRD normally (creates both file and DB record)
+        storage.create_prd("PRD-PHANTOM", "test-project", "Phantom PRD")
+        # Delete the file directly, leaving the DB record
+        prd_path = storage._content_mgr.get_prd_path("test-project", "PRD-PHANTOM")
+        prd_path.unlink()
+
+        result = storage.consistency_check("test-project")
+
+        phantom_ids = [p["id"] for p in result["phantom_records"]]
+        assert "PRD-PHANTOM" in phantom_ids
+        phantom = next(p for p in result["phantom_records"] if p["id"] == "PRD-PHANTOM")
+        assert phantom["entity_type"] == "prd"
+
+    def test_detects_phantom_task_record(self, storage):
+        """consistency_check detects a DB task record with no content file."""
+        storage.create_task("TASK-PHANTOM", "test-project", "Phantom Task")
+        task_path = storage._content_mgr.get_task_path("test-project", "TASK-PHANTOM")
+        task_path.unlink()
+
+        result = storage.consistency_check("test-project")
+
+        phantom_ids = [p["id"] for p in result["phantom_records"]]
+        assert "TASK-PHANTOM" in phantom_ids
+        phantom = next(p for p in result["phantom_records"] if p["id"] == "TASK-PHANTOM")
+        assert phantom["entity_type"] == "task"
+
+    def test_detects_phantom_design_record(self, storage):
+        """consistency_check detects a DB design record with no content file."""
+        storage.create_prd("PRD-DES", "test-project", "Test PRD")
+        storage.create_design("PRD-DES", "test-project")
+        design_path = storage._content_mgr.get_design_path("test-project", "PRD-DES")
+        design_path.unlink()
+
+        result = storage.consistency_check("test-project")
+
+        phantom_ids = [p["id"] for p in result["phantom_records"]]
+        assert "PRD-DES" in phantom_ids
+        phantom = next(p for p in result["phantom_records"] if p["id"] == "PRD-DES")
+        assert phantom["entity_type"] == "design"
+
+    def test_total_entities_counts_union(self, storage):
+        """total_entities counts the union of file IDs and DB IDs."""
+        # Create one normal entity (counted once) and one orphan file
+        storage.create_prd("PRD-001", "test-project", "Normal PRD")
+        prd_dir = storage._content_mgr.base_path / "test-project" / "prds"
+        (prd_dir / "ORPHAN.md").write_text("# orphan", encoding="utf-8")
+
+        result = storage.consistency_check("test-project")
+
+        # PRD-001 (in both) + ORPHAN (file only) = 2
+        assert result["total_entities"] == 2
+
+    def test_empty_project_no_issues(self, storage):
+        """consistency_check on project with no entities returns clean result."""
+        result = storage.consistency_check("test-project")
+
+        assert result["orphaned_files"] == []
+        assert result["phantom_records"] == []
+        assert result["total_entities"] == 0
+
+    # --- repair_consistency tests ---
+
+    def test_repair_dry_run_reports_without_acting(self, storage):
+        """repair_consistency(dry_run=True) reports fixes without applying."""
+        # Create orphan file
+        prd_dir = storage._content_mgr.base_path / "test-project" / "prds"
+        prd_dir.mkdir(parents=True, exist_ok=True)
+        orphan_path = prd_dir / "ORPHAN.md"
+        orphan_path.write_text("# orphan", encoding="utf-8")
+
+        # Create phantom record
+        storage.create_task("TASK-PHANTOM", "test-project", "Phantom")
+        task_path = storage._content_mgr.get_task_path("test-project", "TASK-PHANTOM")
+        task_path.unlink()
+
+        result = storage.repair_consistency("test-project", dry_run=True)
+
+        assert result["dry_run"] is True
+        assert result["repaired_orphans"] == 1
+        assert result["repaired_phantoms"] == 1
+
+        # Verify nothing was actually changed
+        assert orphan_path.exists()
+        assert storage._db.get_task("TASK-PHANTOM") is not None
+
+    def test_repair_deletes_orphaned_files(self, storage):
+        """repair_consistency(dry_run=False) deletes orphaned files."""
+        prd_dir = storage._content_mgr.base_path / "test-project" / "prds"
+        prd_dir.mkdir(parents=True, exist_ok=True)
+        orphan_path = prd_dir / "ORPHAN.md"
+        orphan_path.write_text("# orphan", encoding="utf-8")
+
+        result = storage.repair_consistency("test-project", dry_run=False)
+
+        assert result["dry_run"] is False
+        assert result["repaired_orphans"] == 1
+        assert not orphan_path.exists()
+
+    def test_repair_deletes_phantom_records(self, storage):
+        """repair_consistency(dry_run=False) deletes phantom DB records."""
+        storage.create_task("TASK-PHANTOM", "test-project", "Phantom")
+        task_path = storage._content_mgr.get_task_path("test-project", "TASK-PHANTOM")
+        task_path.unlink()
+
+        result = storage.repair_consistency("test-project", dry_run=False)
+
+        assert result["dry_run"] is False
+        assert result["repaired_phantoms"] == 1
+        assert storage._db.get_task("TASK-PHANTOM") is None
+
+    def test_repair_clean_state_no_changes(self, storage):
+        """repair_consistency on a clean project repairs nothing."""
+        storage.create_prd("PRD-001", "test-project", "Normal PRD")
+
+        result = storage.repair_consistency("test-project", dry_run=False)
+
+        assert result["repaired_orphans"] == 0
+        assert result["repaired_phantoms"] == 0
+
+    def test_repair_handles_mixed_issues(self, storage):
+        """repair_consistency handles orphans and phantoms across entity types."""
+        # Orphaned PRD file
+        prd_dir = storage._content_mgr.base_path / "test-project" / "prds"
+        prd_dir.mkdir(parents=True, exist_ok=True)
+        (prd_dir / "ORPHAN-PRD.md").write_text("# orphan", encoding="utf-8")
+
+        # Orphaned task file
+        task_dir = storage._content_mgr.base_path / "test-project" / "tasks"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "ORPHAN-TASK.md").write_text("# orphan", encoding="utf-8")
+
+        # Phantom PRD record
+        storage.create_prd("PHANTOM-PRD", "test-project", "Phantom")
+        storage._content_mgr.get_prd_path("test-project", "PHANTOM-PRD").unlink()
+
+        result = storage.repair_consistency("test-project", dry_run=False)
+
+        assert result["repaired_orphans"] == 2
+        assert result["repaired_phantoms"] == 1
+
+        # Verify cleanup
+        assert not (prd_dir / "ORPHAN-PRD.md").exists()
+        assert not (task_dir / "ORPHAN-TASK.md").exists()
+        assert storage._db.get_prd("PHANTOM-PRD") is None

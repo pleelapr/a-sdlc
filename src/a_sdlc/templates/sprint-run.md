@@ -695,7 +695,7 @@ dependency_outcomes:
 
 #### Batch-Aware Shared Context
 
-The orchestrator builds shared context **once per batch** and injects it into every subprocess via the `shared_context` parameter. This replaces ~20-50KB of per-agent file reads with a ~2-3KB pre-loaded summary.
+The orchestrator builds shared context **once per batch** and injects it into every subprocess via the `shared_context` parameter. This replaces ~30-70KB of per-agent file reads with a ~3-4KB pre-loaded summary (architecture, config, lessons, PRD summaries, and design decisions).
 
 ```python
 def build_batch_shared_context() -> str:
@@ -703,12 +703,21 @@ def build_batch_shared_context() -> str:
 
     Reads common files once and compresses them into a compact summary.
     This prevents N subagents from each independently reading the same
-    ~20KB architecture.md, ~5KB config.yaml, and ~3KB lesson-learn.md.
+    ~20KB architecture.md, ~5KB config.yaml, ~3KB lesson-learn.md,
+    plus PRD content and design documents per batch.
 
-    Target: ~2-3KB total (replaces ~20-50KB of per-agent reads).
+    Target: ~3-4KB total (replaces ~30-70KB of per-agent reads).
+
+    Sections:
+    1. Architecture summary (~1KB compressed from architecture.md)
+    2. Config flags as compact JSON (~200B)
+    3. Key lessons from lesson-learn.md (~500B)
+    4. PRD summaries for this batch (~500 chars, bounded)
+    5. Design decisions for this batch (~500 chars, key decisions only)
 
     Returns:
-        Compact string with architecture summary, config flags, and lessons.
+        Compact string with architecture summary, config flags, lessons,
+        PRD summaries, and design decisions.
     """
     sections = []
 
@@ -741,6 +750,48 @@ def build_batch_shared_context() -> str:
             sections.append("### Key Lessons (MUST rules)\n" + "\n".join(must_rules))
     except FileNotFoundError:
         pass
+
+    # 4. PRD summary per batch (~500 chars max, covers all PRDs in this batch)
+    #    The orchestrator already knows which PRDs are in the current batch
+    #    from the dependency graph. Pre-load a compressed summary so subagents
+    #    skip calling get_prd() for shared context.
+    batch_prd_ids = get_batch_prd_ids()  # from current batch's task list
+    prd_summaries = []
+    for prd_id in batch_prd_ids:
+        try:
+            prd = mcp__asdlc__get_prd(prd_id=prd_id, include_content=True)
+            content = prd.get("content", "")
+            # Compress to ~100 chars per PRD: title + first paragraph
+            title = prd.get("title", prd_id)
+            first_para = content.split("\n\n")[0][:200] if content else ""
+            prd_summaries.append(f"- **{prd_id}** ({title}): {first_para[:100]}...")
+        except Exception:
+            pass
+    if prd_summaries:
+        # Cap total PRD summary at ~500 chars
+        prd_text = "\n".join(prd_summaries)[:500]
+        sections.append("### PRD Summaries (batch)\n" + prd_text)
+
+    # 5. Design approach per batch (~500 chars max, key decisions only)
+    #    Pre-load design decisions so subagents skip calling get_design().
+    design_summaries = []
+    for prd_id in batch_prd_ids:
+        try:
+            design = mcp__asdlc__get_design(prd_id=prd_id)
+            content = design.get("content", "")
+            if not content:
+                continue
+            # Extract key decisions only: lines matching "DD-N:" or "Decision:" patterns
+            decisions = [line.strip() for line in content.split("\n")
+                         if line.strip().startswith("DD-") or "Decision:" in line][:5]
+            if decisions:
+                design_summaries.append(f"- **{prd_id}**: " + "; ".join(decisions))
+        except Exception:
+            pass
+    if design_summaries:
+        # Cap total design summary at ~500 chars
+        design_text = "\n".join(design_summaries)[:500]
+        sections.append("### Design Decisions (batch)\n" + design_text)
 
     return "\n\n".join(sections)
 ```
@@ -843,18 +894,25 @@ The orchestrator MUST continuously monitor every dispatched subprocess. **Never 
 ```python
 def poll_until_completion(handle: dict, task_id: str,
                           max_stall_minutes: int = 5,
-                          poll_interval: int = 30) -> dict:
-    """Poll check_execution until task completes, with automatic stall detection.
+                          poll_interval: int = 30,
+                          max_retries: int = 1) -> dict:
+    """Poll check_execution until task completes, with stall detection and retry.
 
     CRITICAL: The orchestrator MUST call this after every execute_task dispatch.
     Fire-and-forget is forbidden — a stuck subprocess wastes API credits and
     blocks sprint progress.
+
+    On stall detection, the function retries once using checkpoint context
+    before killing permanently. The checkpoint file (written by the subprocess
+    per Checkpoint Instructions) enables the retried subprocess to resume
+    from where the stalled one left off.
 
     Args:
         handle: Non-blocking handle from execute_task: {status, pid, log_path}
         task_id: For logging and diagnostics.
         max_stall_minutes: Kill process if no activity for this long (default: 5).
         poll_interval: Seconds between check_execution polls (default: 30).
+        max_retries: Number of retry attempts on stall before permanent kill (default: 1).
 
     Returns:
         Completed status dict with outcome, or failure dict.
@@ -862,6 +920,8 @@ def poll_until_completion(handle: dict, task_id: str,
     log_path = handle["log_path"]
     pid = handle["pid"]
     max_stall_seconds = max_stall_minutes * 60
+    retries_remaining = max_retries
+
     last_turns = -1
     last_tool = ""
     stall_start = None  # timestamp when stall was first detected
@@ -897,15 +957,52 @@ def poll_until_completion(handle: dict, task_id: str,
                 stall_start = current_time()
             elapsed = current_time() - stall_start
             if elapsed > max_stall_seconds:
-                # STALL: kill the subprocess
+                # STALL DETECTED: stop the subprocess
                 mcp__asdlc__stop_execution(pid=pid)
-                return {
-                    "status": "failed",
-                    "outcome": {
-                        "verdict": "FAIL",
-                        "summary": f"Process stalled ({elapsed}s no activity). Auto-killed.",
-                    },
-                }
+
+                if retries_remaining > 0:
+                    # --- RETRY: re-dispatch with checkpoint context ---
+                    retries_remaining -= 1
+                    mcp__asdlc__log_correction(
+                        context_type="task", context_id=task_id,
+                        category="execution-recovery",
+                        description=f"Process stalled ({elapsed}s no activity). "
+                                    f"Retrying with checkpoint (retries_remaining={retries_remaining}).")
+
+                    # Re-dispatch: execute_task reads checkpoint automatically (T00204)
+                    retry_handle = mcp__asdlc__execute_task(
+                        task_id=task_id,
+                        executor=executor,
+                        max_turns=classify_max_turns(task),
+                        dispatch_info=f"RETRY: previous attempt stalled after {elapsed}s",
+                        shared_context=batch_shared_context,
+                    )
+
+                    if retry_handle.get("status") == "error":
+                        return {
+                            "status": "failed",
+                            "outcome": {
+                                "verdict": "FAIL",
+                                "summary": f"Retry dispatch failed: {retry_handle.get('error', 'unknown')}",
+                            },
+                        }
+
+                    # Update tracking for the new subprocess
+                    handle = retry_handle
+                    log_path = handle["log_path"]
+                    pid = handle["pid"]
+                    last_turns = -1
+                    last_tool = ""
+                    stall_start = None
+                else:
+                    # --- NO RETRIES LEFT: kill permanently ---
+                    return {
+                        "status": "failed",
+                        "outcome": {
+                            "verdict": "FAIL",
+                            "summary": f"Process stalled after retry ({elapsed}s no activity). Permanently killed.",
+                        },
+                    }
 ```
 
 #### Dispatch Sequence (Capped Parallelism Example)

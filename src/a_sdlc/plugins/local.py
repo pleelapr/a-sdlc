@@ -479,9 +479,9 @@ class LocalPlugin(TaskPlugin):
         if sprint is None:
             raise KeyError(f"Sprint not found: {sprint_id}")
 
-        if task_id not in sprint.task_ids:
-            sprint.task_ids.append(task_id)
-            self.update_sprint(sprint_id, {"task_ids": sprint.task_ids})
+        if task_id not in sprint.prd_ids:
+            sprint.prd_ids.append(task_id)
+            self.update_sprint(sprint_id, {"prd_ids": sprint.prd_ids})
 
         # Also update the task's sprint_id
         task = self.get_task(task_id)
@@ -494,9 +494,9 @@ class LocalPlugin(TaskPlugin):
         if sprint is None:
             raise KeyError(f"Sprint not found: {sprint_id}")
 
-        if task_id in sprint.task_ids:
-            sprint.task_ids.remove(task_id)
-            self.update_sprint(sprint_id, {"task_ids": sprint.task_ids})
+        if task_id in sprint.prd_ids:
+            sprint.prd_ids.remove(task_id)
+            self.update_sprint(sprint_id, {"prd_ids": sprint.prd_ids})
 
         # Also clear the task's sprint_id
         task = self.get_task(task_id)
@@ -510,7 +510,7 @@ class LocalPlugin(TaskPlugin):
             raise KeyError(f"Sprint not found: {sprint_id}")
 
         tasks = []
-        for task_id in sprint.task_ids:
+        for task_id in sprint.prd_ids:
             task = self.get_task(task_id)
             if task:
                 tasks.append(task)

@@ -162,12 +162,13 @@ class ClaudeCodeAdapter(ExecutionAdapter):
     """
 
     def __init__(self, *, skip_permissions: bool = True) -> None:
-        self.claude_path = shutil.which("claude")
-        if not self.claude_path:
+        claude_path = shutil.which("claude")
+        if not claude_path:
             raise RuntimeError(
                 "Claude Code CLI not found on PATH. "
                 "Install from: https://claude.ai/code"
             )
+        self.claude_path: str = claude_path
         self.skip_permissions = skip_permissions
 
     # Tools that must NEVER be available in subprocess sessions.
@@ -399,12 +400,13 @@ class GeminiAdapter(ExecutionAdapter):
     """Spawns ``gemini`` CLI subprocesses."""
 
     def __init__(self) -> None:
-        self.gemini_path = shutil.which("gemini")
-        if not self.gemini_path:
+        gemini_path = shutil.which("gemini")
+        if not gemini_path:
             raise RuntimeError(
                 "Gemini CLI not found on PATH. "
                 "Install from: https://github.com/google-gemini/gemini-cli"
             )
+        self.gemini_path: str = gemini_path
 
     def _build_cmd(
         self,

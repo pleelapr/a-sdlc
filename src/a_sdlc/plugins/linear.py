@@ -7,6 +7,7 @@ Supports cycle (sprint) synchronization via Linear's GraphQL API.
 """
 
 from datetime import datetime
+from typing import Any
 
 from a_sdlc.plugins.base import (
     Sprint,
@@ -448,7 +449,7 @@ Save mapping in `.sdlc/sprints/mappings.json`
             raise ValueError(f"Sprint {sprint.id} is not linked to a Linear cycle")
 
         # Build sync operations
-        operations = []
+        operations: list[dict[str, Any]] = []
 
         for task in tasks:
             if task.external_id:

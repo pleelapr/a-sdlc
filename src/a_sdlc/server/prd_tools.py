@@ -179,7 +179,7 @@ def update_prd(
         return {"status": "not_found", "message": f"PRD not found: {prd_id}"}
 
     # Build update kwargs for database
-    db_kwargs = {}
+    db_kwargs: dict[str, str | None] = {}
     if title is not None:
         db_kwargs["title"] = title
     if status is not None:

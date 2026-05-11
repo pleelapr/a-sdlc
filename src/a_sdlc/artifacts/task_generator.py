@@ -248,7 +248,7 @@ def infer_task_dependencies(
         Tasks with updated dependencies.
     """
     # Group tasks by component
-    tasks_by_component: dict[str, list[Task]] = {}
+    tasks_by_component: dict[str | None, list[Task]] = {}
     for task in tasks:
         if task.component not in tasks_by_component:
             tasks_by_component[task.component] = []

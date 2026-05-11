@@ -17,7 +17,7 @@ import json
 import signal
 import textwrap
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -1484,6 +1484,118 @@ class TestRunStateHelpers:
 
 
 # ---------------------------------------------------------------------------
+# File locking in run-state helpers
+# ---------------------------------------------------------------------------
+
+
+class TestRunStateLocking:
+    """Verify fcntl.flock-based file locking in _read_run, _write_run, _update_run."""
+
+    def test_read_acquires_shared_lock(self, runs_dir):
+        """_read_run() acquires LOCK_SH before reading."""
+        import fcntl
+        from unittest.mock import call
+
+        _write_run("R-lock01", {"status": "running"})
+
+        with patch("a_sdlc.executor.fcntl") as mock_fcntl:
+            mock_fcntl.LOCK_SH = fcntl.LOCK_SH
+            mock_fcntl.LOCK_UN = fcntl.LOCK_UN
+            _read_run("R-lock01")
+
+            # Verify LOCK_SH was called
+            flock_calls = mock_fcntl.flock.call_args_list
+            assert any(
+                c == call(ANY, fcntl.LOCK_SH) for c in flock_calls
+            ), f"Expected LOCK_SH call, got: {flock_calls}"
+
+    def test_write_acquires_exclusive_lock(self, runs_dir):
+        """_write_run() acquires LOCK_EX before writing."""
+        import fcntl
+        from unittest.mock import call
+
+        with patch("a_sdlc.executor.fcntl") as mock_fcntl:
+            mock_fcntl.LOCK_EX = fcntl.LOCK_EX
+            mock_fcntl.LOCK_UN = fcntl.LOCK_UN
+            _write_run("R-lock02", {"status": "running"})
+
+            flock_calls = mock_fcntl.flock.call_args_list
+            assert any(
+                c == call(ANY, fcntl.LOCK_EX) for c in flock_calls
+            ), f"Expected LOCK_EX call, got: {flock_calls}"
+
+    def test_update_acquires_exclusive_lock_atomically(self, runs_dir):
+        """_update_run() acquires LOCK_EX for the entire read-modify-write."""
+        import fcntl
+        from unittest.mock import call
+
+        _write_run("R-lock03", {"status": "running", "pid": 42})
+
+        with patch("a_sdlc.executor.fcntl") as mock_fcntl:
+            mock_fcntl.LOCK_EX = fcntl.LOCK_EX
+            mock_fcntl.LOCK_UN = fcntl.LOCK_UN
+            result = _update_run("R-lock03", status="completed")
+
+            # Verify LOCK_EX was called (not LOCK_SH — update uses exclusive)
+            flock_calls = mock_fcntl.flock.call_args_list
+            assert any(
+                c == call(ANY, fcntl.LOCK_EX) for c in flock_calls
+            ), f"Expected LOCK_EX call, got: {flock_calls}"
+            # Should NOT have LOCK_SH (atomic — single lock scope)
+            assert not any(
+                c == call(ANY, fcntl.LOCK_SH) for c in flock_calls
+            ), "_update_run should use LOCK_EX only, not LOCK_SH"
+
+        assert result["status"] == "completed"
+        assert result["pid"] == 42
+
+    def test_read_handles_corrupt_json(self, runs_dir):
+        """_read_run() returns {} for corrupt JSON files."""
+        path = runs_dir / "R-corrupt.json"
+        path.write_text("{invalid json!!!")
+        data = _read_run("R-corrupt")
+        assert data == {}
+
+    def test_write_read_roundtrip_with_locking(self, runs_dir):
+        """Full write-then-read roundtrip uses file locking."""
+        payload = {"status": "running", "tasks": [1, 2, 3]}
+        _write_run("R-round", payload)
+        data = _read_run("R-round")
+        assert data == payload
+
+    def test_update_creates_file_if_missing(self, runs_dir):
+        """_update_run() creates the file if it doesn't exist."""
+        result = _update_run("R-new", status="running", pid=99)
+        assert result == {"status": "running", "pid": 99}
+        data = _read_run("R-new")
+        assert data["status"] == "running"
+        assert data["pid"] == 99
+
+    def test_lock_released_on_read_error(self, runs_dir):
+        """_read_run() releases lock even when os.read raises OSError."""
+        _write_run("R-oserr", {"status": "ok"})
+
+        with patch("a_sdlc.executor.os.read", side_effect=OSError("disk error")):
+            data = _read_run("R-oserr")
+        assert data == {}
+
+    def test_lock_released_on_write_error(self, runs_dir):
+        """_write_run() releases lock even when os.write raises OSError."""
+        with (
+            patch("a_sdlc.executor.os.write", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            _write_run("R-werr", {"status": "ok"})
+
+    def test_update_handles_corrupt_existing_file(self, runs_dir):
+        """_update_run() handles corrupt existing JSON gracefully."""
+        path = runs_dir / "R-badupd.json"
+        path.write_text("not json at all")
+        result = _update_run("R-badupd", status="fixed")
+        assert result == {"status": "fixed"}
+
+
+# ---------------------------------------------------------------------------
 # Result parsers
 # ---------------------------------------------------------------------------
 
@@ -2280,7 +2392,7 @@ class TestExecuteWorkLoop:
         mock_storage.increment_agent_budget.assert_called_once_with(
             "agent-1",
             tokens_delta=40000,  # 10 turns * 4000
-            cost_delta=50,  # 0.50 * 100
+            cost_delta_cents=50,  # 0.50 * 100
         )
 
     def test_work_loop_calls_escalation_rules(self, tmp_path):

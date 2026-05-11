@@ -1,25 +1,26 @@
 {
-  "generated_at": "2026-02-24T23:19:19.499960Z",
+  "generated_at": "2026-05-11T00:00:00Z",
+  "version": "0.7.0",
   "artifacts": {
     "architecture": {
-      "sha256": "2c10348af081b259ce9a914cd76866e57fa033ff45d3d90c0a9e9fbbc1dcd8b4",
-      "lines": 243
+      "sha256": "2364fbc763ccf45a41aab9f29523aa2030e9775f46843f7dd57de7e1db117ad5",
+      "lines": 554
     },
     "codebase-summary": {
-      "sha256": "ad5fa483654ebe72a01699cab0b10d7d5909c3a345ca22565e80593b031b90e7",
-      "lines": 123
+      "sha256": "3be87a5fb34f6b0090cb5b3a30a59e2375fbb64e314be48cf0c15617bd27dd04",
+      "lines": 289
     },
     "data-model": {
-      "sha256": "ff9e2608c14ef37e590a9c8f1427e65ccb3fe9e659167cd5b5ddded0fa9e88c1",
-      "lines": 220
+      "sha256": "4e35730c22a3b62b1f92b140da0ce7cf9d3e1fcd019e591eabd3a26ef25c5d6c",
+      "lines": 839
     },
     "directory-structure": {
-      "sha256": "4696ab3f579b1624c7aeac591a68c54cb7b7c4aad23f9175d4f02e883599815c",
-      "lines": 178
+      "sha256": "4f2ec129b716f86ddf684f6425896e37c975cdabe076ec9e4ff840a1da260ed3",
+      "lines": 441
     },
     "key-workflows": {
-      "sha256": "802a2cee045adead517245f12e029e3796957ce61191309784e6276cd32f1234",
-      "lines": 242
+      "sha256": "217b7b6898259ad0da175f05d80f4e1259e9387946c61d4b5b6931d75ef7d2ed",
+      "lines": 395
     }
   }
 }

@@ -371,15 +371,14 @@ class JiraPlugin(TaskPlugin):
                 client = self._get_client()
 
                 # Build Jira issue creation payload
-                issue_data = {
-                    "fields": {
-                        "project": {"key": self.project_key},
-                        "summary": task.title,
-                        "description": self._format_description_adf(task),
-                        "issuetype": {"name": self.issue_type},
-                        "priority": {"name": self.PRIORITY_MAP.get(task.priority, "Medium")},
-                    }
+                fields: dict[str, Any] = {
+                    "project": {"key": self.project_key},
+                    "summary": task.title,
+                    "description": self._format_description_adf(task),
+                    "issuetype": {"name": self.issue_type},
+                    "priority": {"name": self.PRIORITY_MAP.get(task.priority, "Medium")},
                 }
+                issue_data: dict[str, Any] = {"fields": fields}
 
                 # Add labels for requirement ID
                 if task.requirement_id:

@@ -23,6 +23,11 @@ import atexit
 import contextlib
 import logging
 import os
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]  # Windows
 import re
 import signal
 import socket
@@ -30,7 +35,7 @@ import subprocess
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 
@@ -86,12 +91,15 @@ def get_db():
 # Module-level variable to track UI server process
 _ui_process: subprocess.Popen | None = None
 
+# Module-level variable to track UI log file handle (FR-006)
+_ui_log_handle = None
+
 # In-memory sprint quality waivers: sprint_id -> {reason, waived_at, sprint_id}
 # Waivers persist for the lifetime of the MCP server process (FR-037).
 _sprint_waivers: dict[str, dict[str, Any]] = {}
 
 # Initialize FastMCP server
-mcp = FastMCP(
+mcp: FastMCP = FastMCP(
     name="asdlc",
     instructions="SDLC management tools for PRDs, tasks, and sprints",
 )
@@ -279,7 +287,7 @@ def _start_ui_server() -> subprocess.Popen | None:
     """
     import threading
 
-    global _ui_process
+    global _ui_process, _ui_log_handle
 
     # Clean up stale UI process from a previous crashed session
     _cleanup_stale_ui()
@@ -300,7 +308,7 @@ def _start_ui_server() -> subprocess.Popen | None:
     # Open a log file for UI stderr so crashes are diagnosable
     log_dir = Path.home() / ".a-sdlc"
     log_dir.mkdir(parents=True, exist_ok=True)
-    ui_log = open(log_dir / "ui.log", "a")  # noqa: SIM115
+    _ui_log_handle = open(log_dir / "ui.log", "a")  # noqa: SIM115
 
     # Find the a-sdlc executable
     asdlc_path = _find_executable("a-sdlc")
@@ -309,7 +317,7 @@ def _start_ui_server() -> subprocess.Popen | None:
             [asdlc_path, "ui"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=ui_log,
+            stderr=_ui_log_handle,
         )
     else:
         # Try uvx as fallback
@@ -319,7 +327,7 @@ def _start_ui_server() -> subprocess.Popen | None:
                 [uvx_path, "a-sdlc", "ui"],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=ui_log,
+                stderr=_ui_log_handle,
             )
 
     # Write UI PID for orphan detection
@@ -344,7 +352,7 @@ def _start_ui_server() -> subprocess.Popen | None:
 
 def _stop_ui_server() -> None:
     """Stop the UI server if it was started by this MCP server."""
-    global _ui_process
+    global _ui_process, _ui_log_handle
     if _ui_process is not None:
         _logger.info("Stopping UI server (pid=%d)", _ui_process.pid)
         _ui_process.terminate()
@@ -354,6 +362,10 @@ def _stop_ui_server() -> None:
             _ui_process.kill()
         _ui_process = None
         _UI_PID_FILE.unlink(missing_ok=True)
+    if _ui_log_handle is not None:
+        with contextlib.suppress(OSError):
+            _ui_log_handle.close()
+        _ui_log_handle = None
 
 
 def _signal_handler(signum: int, frame) -> None:
@@ -366,34 +378,67 @@ def _signal_handler(signum: int, frame) -> None:
 
 _MCP_PID_FILE = Path.home() / ".a-sdlc" / "mcp.pid"
 
-
-def _mcp_is_running() -> bool:
-    """Check if another MCP server instance is already running."""
-    if _MCP_PID_FILE.exists():
-        try:
-            pid = int(_MCP_PID_FILE.read_text().strip())
-            os.kill(pid, 0)
-            return True
-        except (ValueError, OSError, ProcessLookupError):
-            # Stale PID file — remove it
-            with contextlib.suppress(OSError):
-                _MCP_PID_FILE.unlink()
-    return False
+# File descriptor kept open to hold the flock for process lifetime (FR-008)
+_mcp_pid_fd: int | None = None
 
 
-def _mcp_write_pid() -> None:
-    """Write the current process PID to the MCP PID file."""
+def _mcp_acquire_pid() -> bool:
+    """Try to acquire the MCP PID file atomically using flock.
+
+    Combines the check-if-running and write-PID steps into a single atomic
+    operation, eliminating the TOCTOU race condition between the old
+    ``_mcp_is_running()`` and ``_mcp_write_pid()`` functions.
+
+    The file descriptor is kept open for the lifetime of the process so that
+    the advisory lock is held until exit.  The OS releases the lock
+    automatically when the process terminates.
+
+    Returns:
+        True if the PID file was acquired (we are the singleton).
+        False if another live process already holds it.
+    """
+    global _mcp_pid_fd
     _MCP_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _MCP_PID_FILE.write_text(str(os.getpid()))
+    fd = os.open(str(_MCP_PID_FILE), os.O_CREAT | os.O_RDWR)
+    if fcntl:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            # Another process holds the lock — it's alive
+            os.close(fd)
+            return False
+
+    # Lock acquired — check if existing PID in file is still alive
+    content = os.read(fd, 64).decode().strip()
+    if content:
+        try:
+            pid = int(content)
+            os.kill(pid, 0)
+            # Process is alive but we got the lock — shouldn't normally happen,
+            # but treat as "already running" for safety
+            os.close(fd)
+            return False
+        except (ValueError, OSError):
+            pass  # Stale PID — overwrite it
+
+    # Write our PID
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    # Keep fd open so the lock is held for the process lifetime
+    _mcp_pid_fd = fd
+    return True
 
 
 def _mcp_remove_pid() -> None:
-    """Remove the MCP PID file if it exists."""
-    try:
-        if _MCP_PID_FILE.exists():
-            _MCP_PID_FILE.unlink()
-    except OSError:
-        pass
+    """Remove the MCP PID file and release the flock if held."""
+    global _mcp_pid_fd
+    if _mcp_pid_fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(_mcp_pid_fd)
+        _mcp_pid_fd = None
+    with contextlib.suppress(OSError):
+        _MCP_PID_FILE.unlink()
 
 
 def run_server(transport: str = "stdio") -> None:
@@ -427,9 +472,8 @@ def run_server(transport: str = "stdio") -> None:
 
     if not is_child and transport != "stdio":
         # Singleton only for HTTP transport — stdio is inherently per-session
-        if _mcp_is_running():
+        if not _mcp_acquire_pid():
             sys.exit(0)
-        _mcp_write_pid()
         atexit.register(_mcp_remove_pid)
 
     if not is_child:
@@ -446,7 +490,7 @@ def run_server(transport: str = "stdio") -> None:
         _logger.info(
             "MCP server starting (transport=%s, pid=%d)", transport, os.getpid()
         )
-        mcp.run(transport=transport)
+        mcp.run(transport=cast(Literal["stdio", "sse", "streamable-http"], transport))
     except Exception:
         _logger.exception("MCP server crashed")
         _stop_ui_server()
