@@ -93,7 +93,7 @@ def test_build_plan_empty_system(tmp_path):
     with (
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "monitoring"),
-        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+        patch("a_sdlc.storage.get_data_dir", return_value=tmp_path / "data"),
     ):
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "commands" / "sdlc"
@@ -148,7 +148,7 @@ def test_build_plan_full_system(tmp_path):
     with (
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", monitoring_dir),
-        patch("a_sdlc.core.database.get_data_dir", return_value=data_dir),
+        patch("a_sdlc.storage.get_data_dir", return_value=data_dir),
     ):
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = skill_dir
@@ -177,7 +177,7 @@ def test_build_plan_malformed_claude_json(tmp_path):
     with (
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
-        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+        patch("a_sdlc.storage.get_data_dir", return_value=tmp_path / "data"),
     ):
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "cmds"
@@ -201,7 +201,7 @@ def test_build_plan_detects_personas(tmp_path):
     with (
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
-        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+        patch("a_sdlc.storage.get_data_dir", return_value=tmp_path / "data"),
     ):
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "cmds"
@@ -229,7 +229,7 @@ def test_build_plan_no_personas_when_dir_missing(tmp_path):
     with (
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "mon"),
-        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+        patch("a_sdlc.storage.get_data_dir", return_value=tmp_path / "data"),
     ):
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "cmds"
@@ -902,7 +902,7 @@ def test_build_plan_detects_agent_teams_env(tmp_path):
     with (
         patch("a_sdlc.uninstall.Installer") as MockInstaller,  # noqa: N806
         patch("a_sdlc.uninstall.MONITORING_DIR", tmp_path / "monitoring"),
-        patch("a_sdlc.core.database.get_data_dir", return_value=tmp_path / "data"),
+        patch("a_sdlc.storage.get_data_dir", return_value=tmp_path / "data"),
     ):
         mock_inst = MockInstaller.return_value
         mock_inst.target_dir = tmp_path / "commands" / "sdlc"

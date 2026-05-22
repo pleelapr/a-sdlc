@@ -63,10 +63,9 @@ result = mcp__asdlc__create_task(
     title="Implement login",
     prd_id="feature-auth",        # Required for sprint inheritance
     priority="high",              # low, medium, high, critical
-    component="auth-service"
+    component="auth-service",
+    content="<task description markdown>"
 )
-# Then write task content to the returned file_path:
-Write(file_path=result["file_path"], content="<task description markdown>")
 ```
 
 ### Update Task Status
@@ -95,7 +94,7 @@ mcp__asdlc__list_tasks(prd_id="<prd_id>")
 
 ## Storage
 
-All task data is stored in the SQLite database at `~/.a-sdlc/data.db`. No file-based storage is used.
+All task data is stored in the configured database (PostgreSQL via Docker Compose). No file-based storage is used.
 
 ## Notes
 

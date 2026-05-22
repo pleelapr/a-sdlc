@@ -160,7 +160,7 @@ To import from external:
 
 ## Notes
 
-- Mappings are stored in the SQLite database (~/.a-sdlc/data.db)
+- Mappings are stored in the database
 - Sync status is updated after each sync operation
 - Deleted sprints will show as "deleted" in mapping list
 - Use `/sdlc:sprint-unlink` to remove stale mappings

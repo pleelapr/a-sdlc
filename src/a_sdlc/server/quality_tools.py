@@ -222,7 +222,7 @@ def parse_requirements(prd_id: str) -> dict[str, Any]:
     """
     try:
         db = _server.get_db()
-        content_mgr = _server.get_content_manager()
+        content_mgr = _server.get_storage().content_mgr
 
         # Retrieve PRD metadata
         prd = db.get_prd(prd_id)
@@ -948,7 +948,7 @@ def create_remediation_tasks(sprint_id: str) -> dict[str, Any]:
         List of created remediation tasks with IDs and titles.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
 
     try:
         sprint = db.get_sprint(sprint_id)

@@ -128,7 +128,6 @@ def v11_db():
                 status TEXT DEFAULT 'pending',
                 priority TEXT DEFAULT 'medium',
                 component TEXT,
-                assigned_agent_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 started_at TIMESTAMP,
@@ -1716,6 +1715,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -1741,6 +1741,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -1772,6 +1773,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -1796,6 +1798,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -1812,13 +1815,16 @@ class TestParseRequirements:
         mock_storage.delete_requirements.assert_called_once_with("TEST-P0001")
         assert mock_storage.upsert_requirement.call_count == 1
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_prd_not_found(self, mock_get_db, mock_get_cm):
+    def test_prd_not_found(self, mock_get_db, mock_get_cm, mock_get_storage):
         """parse_requirements should return not_found for nonexistent PRD."""
         mock_db = MagicMock()
         mock_db.get_prd.return_value = None
         mock_get_db.return_value = mock_db
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
 
         result = parse_requirements("NONEXISTENT-P9999")
         assert result["status"] == "not_found"
@@ -1836,6 +1842,10 @@ class TestParseRequirements:
         mock_cm = MagicMock()
         mock_cm.read_content.return_value = None
         mock_get_cm.return_value = mock_cm
+
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
+        mock_get_storage.return_value = mock_storage
 
         result = parse_requirements("TEST-P0001")
         assert result["status"] == "ok"
@@ -1856,6 +1866,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_get_storage.return_value = mock_storage
 
@@ -1881,6 +1892,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -1904,6 +1916,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -1911,13 +1924,16 @@ class TestParseRequirements:
         result = parse_requirements("TEST-P0001")
         assert result["requirements"][0]["id"] == "TEST-P0001:FR-001"
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_exception_returns_error(self, mock_get_db, mock_get_cm):
+    def test_exception_returns_error(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Exceptions should be caught and returned as error status."""
         mock_db = MagicMock()
         mock_db.get_prd.side_effect = RuntimeError("DB connection lost")
         mock_get_db.return_value = mock_db
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
 
         result = parse_requirements("TEST-P0001")
         assert result["status"] == "error"
@@ -1940,6 +1956,7 @@ class TestParseRequirements:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.delete_requirements.return_value = 0
         mock_storage.upsert_requirement.return_value = {}
         mock_get_storage.return_value = mock_storage
@@ -2747,16 +2764,20 @@ class TestGetTaskRequirementsMCP:
 class TestSplitPrdAutoLinkage:
     """Test split_prd modifications for auto-linkage and coverage."""
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_creates_links_from_traces_to(self, mock_get_db, mock_pid, mock_cm):
+    def test_creates_links_from_traces_to(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """split_prd should create requirement links when traces_to present."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "PRD-001", "title": "Test PRD", "file_path": "/tmp/prd.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.side_effect = ["TEST-T00001", "TEST-T00002"]
@@ -2787,16 +2808,20 @@ class TestSplitPrdAutoLinkage:
         assert "linkage" in result
         assert result["linkage"]["linked"] > 0
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_returns_coverage_stats(self, mock_get_db, mock_pid, mock_cm):
+    def test_returns_coverage_stats(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """split_prd should return coverage stats when traces_to present."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "P-001", "file_path": "/tmp/prd.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -2817,16 +2842,20 @@ class TestSplitPrdAutoLinkage:
         assert result["coverage"]["orphaned"] == []
         assert result["coverage"]["linkage_pct"] == 100.0
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_coverage_with_orphaned(self, mock_get_db, mock_pid, mock_cm):
+    def test_coverage_with_orphaned(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """Coverage should report orphaned requirements correctly."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "P-001", "file_path": "/tmp/prd.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -2849,16 +2878,20 @@ class TestSplitPrdAutoLinkage:
         assert set(result["coverage"]["orphaned"]) == {"FR-002", "NFR-001"}
         assert result["coverage"]["linkage_pct"] == 33.3
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_without_traces_to_no_linkage(self, mock_get_db, mock_pid, mock_cm):
+    def test_without_traces_to_no_linkage(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """split_prd without traces_to should not create links (backward compat)."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "P-001", "file_path": "/tmp/prd.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -2872,16 +2905,20 @@ class TestSplitPrdAutoLinkage:
         assert "coverage" not in result
         db.link_task_requirement.assert_not_called()
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_auto_parses_requirements(self, mock_get_db, mock_pid, mock_cm):
+    def test_auto_parses_requirements(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """split_prd should auto-parse requirements when not yet parsed."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
         cm.get_task_path.return_value = Path("/tmp/nonexistent")
@@ -2910,16 +2947,20 @@ class TestSplitPrdAutoLinkage:
 class TestCrossPrdRecommendations:
     """Test cross-PRD integration recommendation generation."""
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_recommendations_generated(self, mock_get_db, mock_pid, mock_cm):
+    def test_recommendations_generated(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """Should generate recommendations when reqs reference other PRDs."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "PRD-P0001", "file_path": "/tmp/p.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -2942,16 +2983,20 @@ class TestCrossPrdRecommendations:
         assert recs[0]["requirement"] == "FR-001"
         assert recs[0]["references_prd"] == "SDLC-P0028"
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_no_recommendations_without_cross_refs(self, mock_get_db, mock_pid, mock_cm):
+    def test_no_recommendations_without_cross_refs(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """Should not include recommendations when no cross-PRD refs exist."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "P-001", "file_path": "/tmp/p.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -2973,16 +3018,20 @@ class TestCrossPrdRecommendations:
 class TestCoverageEdgeCases:
     """Test coverage computation edge cases."""
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_zero_requirements_gives_100_pct(self, mock_get_db, mock_pid, mock_cm):
+    def test_zero_requirements_gives_100_pct(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """Zero requirements should yield 100% linkage (vacuous truth)."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "P-001", "file_path": ""}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -2997,16 +3046,20 @@ class TestCoverageEdgeCases:
         assert result["status"] == "success"
         assert result["coverage"]["linkage_pct"] == 100.0
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server._get_current_project_id")
     @patch("a_sdlc.server.get_db")
-    def test_all_requirements_linked(self, mock_get_db, mock_pid, mock_cm):
+    def test_all_requirements_linked(self, mock_get_db, mock_pid, mock_cm, mock_get_storage):
         """All requirements linked should yield 100% coverage."""
         db = MagicMock()
         mock_get_db.return_value = db
         mock_pid.return_value = "proj-1"
         cm = MagicMock()
         mock_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
         db.get_prd.return_value = {"id": "P-001", "file_path": "/tmp/p.md"}
         db.get_project.return_value = {"shortname": "TEST"}
         db.get_next_task_id.return_value = "TEST-T00001"
@@ -3217,6 +3270,7 @@ class TestChallengeArtifactMCP:
         mock_get_cm.return_value = mock_cm
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.get_requirements.return_value = []
         mock_storage.get_challenge_rounds.return_value = []
         mock_storage.create_challenge_round.return_value = {}
@@ -3305,6 +3359,7 @@ class TestChallengeArtifactMCP:
             mock_get_cm.return_value = mock_cm
 
             mock_storage = MagicMock()
+            mock_storage.content_mgr = mock_cm
             mock_storage.get_requirements.return_value = []
             mock_storage.get_challenge_rounds.return_value = []
             mock_storage.create_challenge_round.return_value = {}
@@ -3363,6 +3418,7 @@ class TestChallengeArtifactMCP:
         }
 
         mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
         mock_storage.get_requirements.return_value = []
         mock_storage.get_challenge_rounds.return_value = [round1]
         mock_storage.create_challenge_round.return_value = {}
@@ -3705,15 +3761,19 @@ class TestGetChallengeStatusMCP:
 class TestCreateRemediationTasks:
     """Test create_remediation_tasks MCP tool."""
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_orphaned_requirements_create_tasks(self, mock_get_db, mock_get_cm):
+    def test_orphaned_requirements_create_tasks(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Should create 'Remediate:' tasks for orphaned requirements (FR-036)."""
         db = MagicMock()
         mock_get_db.return_value = db
         cm = MagicMock()
         mock_get_cm.return_value = cm
         cm.write_task.return_value = Path("/tmp/tasks/T00001.md")
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
 
         db.get_sprint.return_value = {"id": "S-0001", "project_id": "proj"}
         db.get_sprint_prds.return_value = [{"id": "P-0001"}]
@@ -3735,15 +3795,19 @@ class TestCreateRemediationTasks:
         assert result["tasks"][0]["gap_type"] == "orphaned_requirement"
         assert result["tasks"][0]["source_id"] == "r1"
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_unverified_acs_create_tasks(self, mock_get_db, mock_get_cm):
+    def test_unverified_acs_create_tasks(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Should create 'Verify:' tasks for unverified acceptance criteria (FR-036)."""
         db = MagicMock()
         mock_get_db.return_value = db
         cm = MagicMock()
         mock_get_cm.return_value = cm
         cm.write_task.return_value = Path("/tmp/tasks/T00001.md")
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
 
         db.get_sprint.return_value = {"id": "S-0001", "project_id": "proj"}
         db.get_sprint_prds.return_value = [{"id": "P-0001"}]
@@ -3765,15 +3829,19 @@ class TestCreateRemediationTasks:
         assert result["tasks"][0]["title"] == "Verify: AC-001 \u2014 User sees dashboard"
         assert result["tasks"][0]["gap_type"] == "unverified_ac"
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_scope_drift_creates_trace_tasks(self, mock_get_db, mock_get_cm):
+    def test_scope_drift_creates_trace_tasks(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Should create 'Trace:' tasks for unlinked (scope drift) tasks (FR-036)."""
         db = MagicMock()
         mock_get_db.return_value = db
         cm = MagicMock()
         mock_get_cm.return_value = cm
         cm.write_task.return_value = Path("/tmp/tasks/T00001.md")
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
 
         db.get_sprint.return_value = {"id": "S-0001", "project_id": "proj"}
         db.get_sprint_prds.return_value = [{"id": "P-0001"}]
@@ -3794,15 +3862,20 @@ class TestCreateRemediationTasks:
         assert result["tasks"][0]["gap_type"] == "scope_drift"
         assert result["tasks"][0]["source_id"] == "T-DRIFT"
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_remediation_metadata_tag(self, mock_get_db, mock_get_cm):
+    def test_remediation_metadata_tag(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Should tag all remediation tasks with remediation:true metadata (AC-021)."""
         db = MagicMock()
         mock_get_db.return_value = db
         cm = MagicMock()
         mock_get_cm.return_value = cm
         cm.write_task.return_value = Path("/tmp/tasks/T00001.md")
+
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
 
         db.get_sprint.return_value = {"id": "S-0001", "project_id": "proj"}
         db.get_sprint_prds.return_value = [{"id": "P-0001"}]
@@ -3822,14 +3895,18 @@ class TestCreateRemediationTasks:
         data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
         assert data["remediation"] is True
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_no_gaps_returns_empty(self, mock_get_db, mock_get_cm):
+    def test_no_gaps_returns_empty(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Should return zero created tasks when no gaps exist."""
         db = MagicMock()
         mock_get_db.return_value = db
         cm = MagicMock()
         mock_get_cm.return_value = cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = cm
+        mock_get_storage.return_value = mock_storage
 
         db.get_sprint.return_value = {"id": "S-0001", "project_id": "proj"}
         db.get_sprint_prds.return_value = [{"id": "P-0001"}]
@@ -3843,12 +3920,15 @@ class TestCreateRemediationTasks:
         assert result["created"] == 0
         assert result["tasks"] == []
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_db")
-    def test_sprint_not_found(self, mock_get_db):
+    def test_sprint_not_found(self, mock_get_db, mock_get_storage):
         """Should return error when sprint does not exist."""
         db = MagicMock()
         mock_get_db.return_value = db
         db.get_sprint.return_value = None
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
 
         result = create_remediation_tasks("NONEXISTENT")
 

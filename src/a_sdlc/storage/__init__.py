@@ -2,11 +2,17 @@
 Storage adapter for a-sdlc.
 
 This module provides backward-compatible storage interface by wrapping:
-- Database (SQLite): Metadata and file path references
-- ContentManager: Markdown content files
+- SessionDatabase (PostgreSQL via SQLModel): Metadata and file path references
+- ContentManager: Markdown content files (S3 backend)
 
 The HybridStorage class provides the same interface as the old FileStorage
 to minimize changes in CLI and UI code.
+
+Backend selection:
+    When *base_path* is provided (test isolation), always use SQLite + local
+    regardless of configuration.  Otherwise:
+    - Instantiate ``SessionDatabase`` with the configured PostgreSQL URL.
+    - Instantiate ``S3ContentBackend`` with the configured S3 bucket.
 """
 
 import contextlib
@@ -22,9 +28,17 @@ logger = logging.getLogger(__name__)
 def get_data_dir() -> Path:
     """Get platform-specific data directory.
 
+    Respects the ``A_SDLC_DATA_DIR`` environment variable when set (e.g. in
+    Docker containers where ``/data`` is mounted).  Falls back to the
+    platform default: ``~/.a-sdlc/`` on macOS/Linux,
+    ``%LOCALAPPDATA%/a-sdlc/`` on Windows.
+
     Returns:
-        Path: ~/.a-sdlc/ on macOS/Linux, %LOCALAPPDATA%/a-sdlc/ on Windows
+        Path to the a-sdlc data directory.
     """
+    env_dir = os.environ.get("A_SDLC_DATA_DIR")
+    if env_dir:
+        return Path(env_dir)
     if platform.system() == "Windows":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         return base / "a-sdlc"
@@ -38,19 +52,24 @@ def _get_database_class():
     return Database
 
 
+def _get_session_database_class():
+    from a_sdlc.core.session_database import SessionDatabase
+    return SessionDatabase
+
+
 def _get_content_manager_class():
     from a_sdlc.core.content import ContentManager
     return ContentManager
 
 
-def _get_db_instance():
-    from a_sdlc.core.database import get_db
-    return get_db()
+def _get_s3_content_backend_class():
+    from a_sdlc.core.content import S3ContentBackend
+    return S3ContentBackend
 
 
-def _get_content_manager_instance():
-    from a_sdlc.core.content import get_content_manager
-    return get_content_manager()
+def _get_storage_config():
+    from a_sdlc.core.storage_config import get_storage_config
+    return get_storage_config()
 
 
 class HybridStorage:
@@ -65,16 +84,22 @@ class HybridStorage:
         db: Any = None,
         content_mgr: Any = None,
         base_path: "Path | None" = None,
+        config: Any = None,
     ):
         """Initialize hybrid storage.
 
         Args:
-            db: Database instance (default: global instance)
-            content_mgr: ContentManager instance (default: global instance)
-            base_path: Custom base path for test isolation (creates new instances)
+            db: Deprecated — raises ``ValueError``. Use *base_path* or *config*.
+            content_mgr: Deprecated — raises ``ValueError``. Use *base_path* or *config*.
+            base_path: Custom base path for test isolation (creates new instances).
+                When provided, always uses SQLite + local filesystem regardless
+                of *config*.
+            config: Optional ``StorageConfig`` instance. When omitted the
+                global singleton from ``get_storage_config()`` is used.
+                Ignored when *base_path* is provided.
         """
         if base_path is not None:
-            # Create custom instances for test isolation
+            # Test isolation mode: always SQLite + local filesystem
             Database = _get_database_class()  # noqa: N806
             ContentManager = _get_content_manager_class()  # noqa: N806
             self._base_path = Path(base_path)
@@ -83,10 +108,69 @@ class HybridStorage:
             self._content_mgr = ContentManager(base_path=self._base_path / "content")
             # Ensure templates directory exists
             self.templates_dir.mkdir(parents=True, exist_ok=True)
+        elif db is not None or content_mgr is not None:
+            raise ValueError(
+                "Passing db= or content_mgr= directly is no longer supported. "
+                "Use base_path= for test isolation or config= for production."
+            )
         else:
+            # Auto-select backends from config
             self._base_path = get_data_dir()
-            self._db = db or _get_db_instance()
-            self._content_mgr = content_mgr or _get_content_manager_instance()
+            self._init_from_config(config)
+
+    def _init_from_config(self, config: Any = None) -> None:
+        """Initialize database and content backends from StorageConfig.
+
+        Production requires PostgreSQL + S3.  Raises if configuration is
+        missing or invalid.
+
+        Args:
+            config: Optional ``StorageConfig``. When ``None``, the global
+                singleton from ``get_storage_config()`` is loaded.
+
+        Raises:
+            StorageConfigError: If database is not PostgreSQL or content
+                backend is not S3.
+        """
+        from a_sdlc.core.storage_config import StorageConfigError
+
+        if config is None:
+            config = _get_storage_config()
+
+        # -- Database backend ---------------------------------------------------
+        if config.is_postgresql:
+            SessionDatabase = _get_session_database_class()  # noqa: N806
+            self._db = SessionDatabase(config=config)
+            logger.info("Using SessionDatabase (PostgreSQL)")
+        else:
+            raise StorageConfigError(
+                f"PostgreSQL is required. Got: {config.database_url}. "
+                "Set A_SDLC_DATABASE_URL to a PostgreSQL URL or use Docker Compose."
+            )
+
+        # -- Content backend ----------------------------------------------------
+        if config.is_s3 and config.s3_bucket:
+            ContentManager = _get_content_manager_class()  # noqa: N806
+            S3ContentBackend = _get_s3_content_backend_class()  # noqa: N806
+            content_base = self._base_path / "content"
+            backend = S3ContentBackend(
+                bucket=config.s3_bucket,
+                endpoint_url=config.s3_endpoint,
+                access_key=config.s3_access_key,
+                secret_key=config.s3_secret_key,
+                base_path=content_base,
+            )
+            self._content_mgr = ContentManager(
+                base_path=content_base,
+                backend=backend,
+            )
+            logger.info("Using S3ContentBackend (bucket=%s)", config.s3_bucket)
+        else:
+            raise StorageConfigError(
+                "S3 content backend is required. "
+                "Set A_SDLC_CONTENT_BACKEND=s3 and A_SDLC_S3_BUCKET, "
+                "or use Docker Compose."
+            )
 
     @property
     def db(self):
@@ -224,12 +308,13 @@ class HybridStorage:
         prd_with_content = dict(prd)
 
         if include_content:
-            # Read content from file
+            # Read content from file — prefer environment-correct path over stored file_path
+            # (stored file_path may reference a different machine, e.g. local Mac path in Docker)
             content = None
-            if prd.get("file_path"):
-                content = self._content_mgr.read_content(Path(prd["file_path"]))
-            elif prd.get("project_id"):
+            if prd.get("project_id"):
                 content = self._content_mgr.read_prd(prd["project_id"], prd_id)
+            if content is None and prd.get("file_path"):
+                content = self._content_mgr.read_content(Path(prd["file_path"]))
             prd_with_content["content"] = content or ""
         else:
             prd_with_content["content"] = ""
@@ -353,12 +438,12 @@ class HybridStorage:
         task_with_content = dict(task)
 
         if include_content:
-            # Read content from file
+            # Read content — prefer environment-correct path over stored file_path
             content = None
-            if task.get("file_path"):
-                content = self._content_mgr.read_content(Path(task["file_path"]))
-            elif task.get("project_id"):
+            if task.get("project_id"):
                 content = self._content_mgr.read_task(task["project_id"], task_id)
+            if content is None and task.get("file_path"):
+                content = self._content_mgr.read_content(Path(task["file_path"]))
 
             # Add full raw content (like PRD handling)
             task_with_content["content"] = content or ""
@@ -402,10 +487,10 @@ class HybridStorage:
         # Enrich tasks with dependencies from content files
         for task in tasks:
             content = None
-            if task.get("file_path"):
-                content = self._content_mgr.read_content(Path(task["file_path"]))
-            elif task.get("project_id"):
+            if task.get("project_id"):
                 content = self._content_mgr.read_task(task["project_id"], task["id"])
+            if content is None and task.get("file_path"):
+                content = self._content_mgr.read_content(Path(task["file_path"]))
 
             if content:
                 parsed = self._content_mgr.parse_task_content(content)
@@ -433,10 +518,10 @@ class HybridStorage:
 
             # Enrich with dependencies from content files
             content = None
-            if task.get("file_path"):
-                content = self._content_mgr.read_content(Path(task["file_path"]))
-            elif task.get("project_id"):
+            if task.get("project_id"):
                 content = self._content_mgr.read_task(task["project_id"], task["id"])
+            if content is None and task.get("file_path"):
+                content = self._content_mgr.read_content(Path(task["file_path"]))
 
             if content:
                 parsed = self._content_mgr.parse_task_content(content)
@@ -552,12 +637,12 @@ class HybridStorage:
         if not design:
             return None
 
-        # Read content from file
+        # Read content from file (try environment-correct path first, fall back to stored file_path)
         content = None
-        if design.get("file_path"):
-            content = self._content_mgr.read_content(Path(design["file_path"]))
-        elif design.get("project_id"):
+        if design.get("project_id"):
             content = self._content_mgr.read_design(design["project_id"], prd_id)
+        if content is None and design.get("file_path"):
+            content = self._content_mgr.read_content(Path(design["file_path"]))
 
         design_with_content = dict(design)
         design_with_content["content"] = content or ""
@@ -709,368 +794,6 @@ class HybridStorage:
         return self._db.list_external_configs(project_id)
 
     # =========================================================================
-    # Agent Operations
-    # =========================================================================
-
-    def create_agent(
-        self,
-        agent_id: str,
-        project_id: str,
-        persona_type: str,
-        display_name: str,
-        status: str = "active",
-        permissions_profile: str | None = None,
-        approved_by: str | None = None,
-    ) -> dict[str, Any]:
-        """Create a new agent record."""
-        return self._db.create_agent(
-            agent_id, project_id, persona_type, display_name,
-            status, permissions_profile, approved_by,
-        )
-
-    def get_agent(self, agent_id: str) -> dict[str, Any] | None:
-        """Get an agent by ID."""
-        return self._db.get_agent(agent_id)
-
-    def list_agents(
-        self, project_id: str, status: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List agents for a project, optionally filtered by status."""
-        return self._db.list_agents(project_id, status)
-
-    def update_agent(self, agent_id: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Update agent fields dynamically."""
-        return self._db.update_agent(agent_id, **kwargs)
-
-    def update_agent_status(
-        self, agent_id: str, status: str, reason: str | None = None
-    ) -> dict[str, Any] | None:
-        """Update agent status (active/suspended/retired)."""
-        return self._db.update_agent_status(agent_id, status, reason)
-
-    def delete_agent(self, agent_id: str) -> bool:
-        """Soft-delete an agent by setting status to 'retired'."""
-        return self._db.delete_agent(agent_id)
-
-    def get_next_agent_id(self, project_id: str) -> str:
-        """Generate next agent ID for a project."""
-        return self._db.get_next_agent_id(project_id)
-
-    # =========================================================================
-    # Agent Permission Operations
-    # =========================================================================
-
-    def set_agent_permission(
-        self,
-        agent_id: str,
-        permission_type: str,
-        permission_value: str,
-        allowed: int = 1,
-    ) -> dict[str, Any]:
-        """Set or update a permission for an agent."""
-        return self._db.set_agent_permission(
-            agent_id, permission_type, permission_value, allowed,
-        )
-
-    def check_agent_permission(
-        self, agent_id: str, permission_type: str, permission_value: str
-    ) -> bool:
-        """Check if agent has a specific permission."""
-        return self._db.check_agent_permission(agent_id, permission_type, permission_value)
-
-    def get_agent_permissions(self, agent_id: str) -> list[dict[str, Any]]:
-        """Get all permissions for an agent."""
-        return self._db.get_agent_permissions(agent_id)
-
-    # =========================================================================
-    # Agent Budget Operations
-    # =========================================================================
-
-    def create_agent_budget(
-        self,
-        agent_id: str,
-        run_id: str | None = None,
-        token_limit: int | None = None,
-        cost_limit_cents: int | None = None,
-        alert_threshold_pct: int = 90,
-    ) -> dict[str, Any]:
-        """Create a budget record for an agent."""
-        return self._db.create_agent_budget(
-            agent_id, run_id, token_limit, cost_limit_cents, alert_threshold_pct,
-        )
-
-    def get_agent_budget(
-        self, agent_id: str, run_id: str | None = None
-    ) -> dict[str, Any] | None:
-        """Get budget for an agent, optionally filtered by run."""
-        return self._db.get_agent_budget(agent_id, run_id)
-
-    def update_agent_budget(
-        self,
-        budget_id: int,
-        token_used_delta: int = 0,
-        cost_used_delta: int = 0,
-    ) -> dict[str, Any] | None:
-        """Update budget usage with delta values."""
-        return self._db.update_agent_budget(budget_id, token_used_delta, cost_used_delta)
-
-    def increment_agent_budget(
-        self,
-        agent_id: str,
-        tokens_delta: int = 0,
-        cost_delta_cents: int = 0,
-        run_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Atomically increment an agent's budget usage counters (REM-004)."""
-        return self._db.increment_agent_budget(
-            agent_id, tokens_delta, cost_delta_cents, run_id,
-        )
-
-    # =========================================================================
-    # Execution Run Operations
-    # =========================================================================
-
-    def create_execution_run(
-        self,
-        run_id: str,
-        project_id: str,
-        sprint_id: str | None = None,
-        status: str = "pending",
-        run_type: str = "sprint",
-        goal: str | None = None,
-        current_phase: str | None = None,
-        config: str | None = None,
-        governance_config: str | None = None,
-        total_budget_cents: int | None = None,
-        agent_count: int = 0,
-    ) -> dict[str, Any] | None:
-        """Create an execution run record."""
-        return self._db.create_execution_run(
-            run_id=run_id,
-            project_id=project_id,
-            sprint_id=sprint_id,
-            status=status,
-            run_type=run_type,
-            goal=goal,
-            current_phase=current_phase,
-            config=config,
-            governance_config=governance_config,
-            total_budget_cents=total_budget_cents,
-            agent_count=agent_count,
-        )
-
-    def get_execution_run(self, run_id: str) -> dict[str, Any] | None:
-        """Get an execution run by ID."""
-        return self._db.get_execution_run(run_id)
-
-    def update_execution_run(self, run_id: str, **kwargs: Any) -> dict[str, Any] | None:
-        """Update execution run fields dynamically."""
-        return self._db.update_execution_run(run_id, **kwargs)
-
-    def get_next_run_id(self, project_id: str) -> str:
-        """Generate next execution run ID for a project."""
-        return self._db.get_next_run_id(project_id)
-
-    def list_execution_runs(
-        self,
-        project_id: str,
-        run_type: str | None = None,
-        status: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """List execution runs for a project."""
-        return self._db.list_execution_runs(project_id, run_type=run_type, status=status)
-
-    def get_execution_run_detail(self, run_id: str) -> dict[str, Any] | None:
-        """Get an execution run by ID with summary stats."""
-        return self._db.get_execution_run_detail(run_id)
-
-    def count_work_items_by_status(self, run_id: str) -> dict[str, int]:
-        """Count work items by status for a run."""
-        return self._db.count_work_items_by_status(run_id)
-
-    def count_thread_entries(self, run_id: str) -> int:
-        """Count total thread entries for a run."""
-        return self._db.count_thread_entries(run_id)
-
-    def get_recent_thread_entries(self, run_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        """Get recent thread entries across all artifacts for a run."""
-        return self._db.get_recent_thread_entries(run_id, limit=limit)
-
-    def create_work_queue_item(
-        self,
-        item_id: str,
-        run_id: str,
-        project_id: str,
-        work_type: str,
-        artifact_type: str | None = None,
-        artifact_id: str | None = None,
-        status: str = "pending",
-        priority: int = 0,
-        depends_on: str | None = None,
-        assigned_agent_id: str | None = None,
-        config: str | None = None,
-    ) -> dict[str, Any]:
-        """Create a work queue item."""
-        return self._db.create_work_queue_item(
-            item_id, run_id, project_id, work_type,
-            artifact_type=artifact_type, artifact_id=artifact_id,
-            status=status, priority=priority, depends_on=depends_on,
-            assigned_agent_id=assigned_agent_id, config=config,
-        )
-
-    def list_work_queue_items(
-        self, run_id: str, status: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List work queue items for a run."""
-        return self._db.list_work_queue_items(run_id, status=status)
-
-    def get_work_queue_item(self, item_id: str) -> dict[str, Any] | None:
-        """Get a single work queue item by ID."""
-        return self._db.get_work_queue_item(item_id)
-
-    def update_work_queue_item(
-        self, item_id: str, **kwargs: Any
-    ) -> dict[str, Any] | None:
-        """Update work queue item fields dynamically."""
-        return self._db.update_work_queue_item(item_id, **kwargs)
-
-    def create_artifact_thread_entry(
-        self,
-        run_id: str,
-        project_id: str,
-        artifact_type: str,
-        artifact_id: str,
-        entry_type: str,
-        agent_id: str | None = None,
-        agent_persona: str | None = None,
-        round_number: int = 1,
-        content: str | None = None,
-        parent_thread_id: int | None = None,
-    ) -> dict[str, Any]:
-        """Create an artifact thread entry."""
-        return self._db.create_artifact_thread_entry(
-            run_id, project_id, artifact_type, artifact_id, entry_type,
-            agent_id=agent_id, agent_persona=agent_persona,
-            round_number=round_number, content=content,
-            parent_thread_id=parent_thread_id,
-        )
-
-    def list_artifact_threads(
-        self,
-        run_id: str,
-        artifact_type: str | None = None,
-        artifact_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """List artifact thread entries for a run."""
-        return self._db.list_artifact_threads(
-            run_id, artifact_type=artifact_type, artifact_id=artifact_id
-        )
-
-    def list_artifact_threads_by_artifact(
-        self,
-        artifact_type: str,
-        artifact_id: str,
-    ) -> list[dict[str, Any]]:
-        """List artifact thread entries for a specific artifact across all runs."""
-        return self._db.list_artifact_threads_by_artifact(
-            artifact_type, artifact_id
-        )
-
-    def get_run_state_hash(self, run_id: str) -> str:
-        """Get a hash representing the current state of a run."""
-        return self._db.get_run_state_hash(run_id)
-
-    # =========================================================================
-    # Work Queue Advanced Operations
-    # =========================================================================
-
-    def get_next_work_item_id(self, project_id: str) -> str:
-        """Generate next work item ID for a project."""
-        return self._db.get_next_work_item_id(project_id)
-
-    def create_work_item(
-        self,
-        run_id: str,
-        project_id: str,
-        work_type: str,
-        artifact_type: str | None = None,
-        artifact_id: str | None = None,
-        status: str = "pending",
-        priority: int = 0,
-        depends_on: "list[str] | str | None" = None,
-        config: "dict[str, Any] | str | None" = None,
-        retry_count: int = 0,
-    ) -> dict[str, Any]:
-        """Create a work queue item with auto-generated ID."""
-        return self._db.create_work_item(
-            run_id, project_id, work_type,
-            artifact_type=artifact_type, artifact_id=artifact_id,
-            status=status, priority=priority, depends_on=depends_on,
-            config=config, retry_count=retry_count,
-        )
-
-    def get_work_item(self, item_id: str) -> dict[str, Any] | None:
-        """Get a single work queue item with deserialized JSON fields."""
-        return self._db.get_work_item(item_id)
-
-    def get_work_items(
-        self, run_id: str, status: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List work queue items with deserialized JSON fields."""
-        return self._db.get_work_items(run_id, status=status)
-
-    def update_work_item(
-        self, item_id: str, **kwargs: Any
-    ) -> dict[str, Any] | None:
-        """Update work queue item with JSON serialization and auto-timestamps."""
-        return self._db.update_work_item(item_id, **kwargs)
-
-    def get_dispatchable_items(
-        self, run_id: str, max_concurrent: int = 3
-    ) -> list[dict[str, Any]]:
-        """Get work items that are ready to be dispatched."""
-        return self._db.get_dispatchable_items(run_id, max_concurrent)
-
-    def increment_retry_count(self, item_id: str) -> dict[str, Any] | None:
-        """Atomically increment retry count for a work item."""
-        return self._db.increment_retry_count(item_id)
-
-    def pause_work_item(self, item_id: str) -> dict[str, Any]:
-        """Pause a work item (pending/in_progress -> paused)."""
-        return self._db.pause_work_item(item_id)
-
-    def cancel_work_item(self, item_id: str) -> dict[str, Any]:
-        """Cancel a work item (non-terminal -> cancelled)."""
-        return self._db.cancel_work_item(item_id)
-
-    def skip_work_item(
-        self, item_id: str, reason: str | None = None
-    ) -> dict[str, Any]:
-        """Skip a work item (pending/blocked -> skipped)."""
-        return self._db.skip_work_item(item_id, reason)
-
-    def force_approve_work_item(self, item_id: str) -> dict[str, Any]:
-        """Force-approve a work item (any -> completed + force_approved)."""
-        return self._db.force_approve_work_item(item_id)
-
-    def retry_work_item(self, item_id: str) -> dict[str, Any]:
-        """Retry a work item (failed/blocked -> pending, increment retry)."""
-        return self._db.retry_work_item(item_id)
-
-    def answer_work_item(self, item_id: str, answer: str) -> dict[str, Any]:
-        """Answer a question work item (question -> completed + answer)."""
-        return self._db.answer_work_item(item_id, answer)
-
-    def get_hierarchical_thread(
-        self,
-        artifact_type: str,
-        artifact_id: str,
-        run_id: str,
-    ) -> list[dict[str, Any]]:
-        """Get thread entries across sprint/PRD/task hierarchy."""
-        return self._db.get_hierarchical_thread(artifact_type, artifact_id, run_id)
-
-    # =========================================================================
     # Audit Log Operations
     # =========================================================================
 
@@ -1100,172 +823,6 @@ class HybridStorage:
     ) -> list[dict[str, Any]]:
         """Get audit log entries with optional filters."""
         return self._db.get_audit_log(project_id, agent_id, run_id, action_type, limit)
-
-    # =========================================================================
-    # Task Claim Operations
-    # =========================================================================
-
-    def claim_task(self, task_id: str, agent_id: str) -> dict[str, Any]:
-        """Atomically claim a task for an agent."""
-        return self._db.claim_task(task_id, agent_id)
-
-    def release_task(
-        self, task_id: str, agent_id: str, reason: str = "manual"
-    ) -> dict[str, Any] | None:
-        """Release a task claim, resetting the task to pending."""
-        return self._db.release_task(task_id, agent_id, reason)
-
-    def get_active_claim(self, task_id: str) -> dict[str, Any] | None:
-        """Get the active claim for a task."""
-        return self._db.get_active_claim(task_id)
-
-    def list_claims_by_agent(self, agent_id: str) -> list[dict[str, Any]]:
-        """List all claims for an agent."""
-        return self._db.list_claims_by_agent(agent_id)
-
-    def detect_stale_claims(self, timeout_minutes: int = 30) -> list[dict[str, Any]]:
-        """Detect active claims that have exceeded the timeout threshold."""
-        return self._db.detect_stale_claims(timeout_minutes)
-
-    def get_available_work(
-        self,
-        project_id: str,
-        agent_id: str,
-        sprint_id: str | None = None,
-        component_map: dict[str, list[str]] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Get available (unclaimed, pending) tasks for an agent."""
-        return self._db.get_available_work(
-            project_id, agent_id, sprint_id, component_map
-        )
-
-    # =========================================================================
-    # Agent Message Operations
-    # =========================================================================
-
-    def send_agent_message(
-        self,
-        from_agent_id: str,
-        to_agent_id: str,
-        message_type: str,
-        content: str,
-        related_task_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Send a message from one agent to another."""
-        return self._db.send_agent_message(
-            from_agent_id, to_agent_id, message_type, content, related_task_id,
-        )
-
-    def get_agent_messages(
-        self,
-        agent_id: str,
-        unread_only: bool = False,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Get messages sent to an agent."""
-        return self._db.get_agent_messages(agent_id, unread_only, limit)
-
-    def mark_message_read(self, message_id: int) -> dict[str, Any] | None:
-        """Mark a message as read."""
-        return self._db.mark_message_read(message_id)
-
-    # =========================================================================
-    # Agent Team Operations
-    # =========================================================================
-
-    def create_agent_team(
-        self,
-        name: str,
-        project_id: str,
-        lead_agent_id: str | None = None,
-        sprint_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Create a new agent team."""
-        return self._db.create_agent_team(name, project_id, lead_agent_id, sprint_id)
-
-    def assign_agent_to_team(
-        self, agent_id: str, team_id: int
-    ) -> dict[str, Any] | None:
-        """Assign an agent to a team."""
-        return self._db.assign_agent_to_team(agent_id, team_id)
-
-    def get_team_composition(
-        self, team_id: int, sprint_id: str | None = None
-    ) -> dict[str, Any]:
-        """Get team details with all member agents."""
-        return self._db.get_team_composition(team_id, sprint_id)
-
-    def list_agent_teams(
-        self, project_id: str, sprint_id: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List all teams in a project."""
-        return self._db.list_agent_teams(project_id, sprint_id)
-
-    # =========================================================================
-    # Agent Performance Operations
-    # =========================================================================
-
-    def record_agent_performance(
-        self,
-        agent_id: str,
-        sprint_id: str | None = None,
-        tasks_completed: int = 0,
-        tasks_failed: int = 0,
-        avg_quality_score: float | None = None,
-        avg_completion_time_min: float | None = None,
-        corrections_count: int = 0,
-        review_pass_rate: float | None = None,
-    ) -> dict[str, Any]:
-        """Upsert agent performance record."""
-        return self._db.record_agent_performance(
-            agent_id, sprint_id, tasks_completed, tasks_failed,
-            avg_quality_score, avg_completion_time_min,
-            corrections_count, review_pass_rate,
-        )
-
-    def get_agent_performance(
-        self, agent_id: str, sprint_id: str | None = None
-    ) -> dict[str, Any] | None:
-        """Get performance record for an agent."""
-        return self._db.get_agent_performance(agent_id, sprint_id)
-
-    def compute_agent_performance(self, agent_id: str) -> dict[str, Any]:
-        """Compute aggregated performance metrics across all sprints."""
-        return self._db.compute_agent_performance(agent_id)
-
-    def update_agent_performance_score(
-        self, agent_id: str, new_score: float
-    ) -> dict[str, Any] | None:
-        """Update the rolling performance_score on the agents table."""
-        return self._db.update_agent_performance_score(agent_id, new_score)
-
-    # =========================================================================
-    # Health & Org Operations
-    # =========================================================================
-
-    def detect_health_issues(
-        self,
-        project_id: str,
-        stalled_timeout_min: int = 30,
-        error_rate_threshold_pct: int = 30,
-        quality_threshold: int = 40,
-    ) -> list[dict[str, Any]]:
-        """Detect agents with health issues."""
-        return self._db.detect_health_issues(
-            project_id, stalled_timeout_min, error_rate_threshold_pct, quality_threshold,
-        )
-
-    def suspend_agent(self, agent_id: str) -> dict[str, Any] | None:
-        """Suspend an agent."""
-        return self._db.suspend_agent(agent_id)
-
-    def retire_agent(self, agent_id: str) -> dict[str, Any] | None:
-        """Retire an agent (preserves all data)."""
-        return self._db.retire_agent(agent_id)
-
-    def get_org_overview(self, project_id: str) -> dict[str, Any]:
-        """Get organizational overview with agent stats, teams, and performance."""
-        return self._db.get_org_overview(project_id)
 
     # =========================================================================
     # Quality & Traceability Operations
@@ -1521,11 +1078,52 @@ FileStorage = HybridStorage
 _storage: HybridStorage | None = None
 
 
-def get_storage() -> HybridStorage:
-    """Get or create the global storage instance."""
+def init_storage(
+    config: Any = None,
+    base_path: "Path | None" = None,
+) -> HybridStorage:
+    """Initialize the global storage singleton.
+
+    Must be called before ``get_storage()``.  Safe to call multiple times —
+    subsequent calls return the existing instance.
+
+    Args:
+        config: Optional ``StorageConfig``.  When ``None``, loaded from
+            environment / config files via ``get_storage_config()``.
+        base_path: When provided, creates a test-isolation instance
+            (SQLite + local filesystem) regardless of *config*.
+
+    Returns:
+        The initialized ``HybridStorage`` instance.
+    """
     global _storage
+    if _storage is not None:
+        return _storage
+    if base_path is not None:
+        _storage = HybridStorage(base_path=base_path)
+    elif config is not None:
+        _storage = HybridStorage(config=config)
+    else:
+        from a_sdlc.core.storage_config import get_storage_config
+
+        _storage = HybridStorage(config=get_storage_config())
+    return _storage
+
+
+def get_storage() -> HybridStorage:
+    """Get the global storage instance.
+
+    Raises ``RuntimeError`` if ``init_storage()`` has not been called.
+    The MCP server calls ``init_storage()`` at startup via
+    ``_init_storage_backend()``.  CLI commands call ``init_storage()``
+    before accessing storage.
+    """
     if _storage is None:
-        _storage = HybridStorage()
+        raise RuntimeError(
+            "Storage not initialized. "
+            "Server must call init_storage() at startup. "
+            "Set A_SDLC_DATABASE_URL and use Docker Compose."
+        )
     return _storage
 
 
@@ -1594,6 +1192,7 @@ def get_template_path(template_name: str) -> Path | None:
 __all__ = [
     "HybridStorage",
     "FileStorage",  # Backward compatibility alias
+    "init_storage",
     "get_storage",
     "get_data_dir",
     "ensure_templates",

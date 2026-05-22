@@ -5,7 +5,7 @@ These tests have been updated to work with file-based storage instead of SQLite.
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -534,8 +534,11 @@ class TestDeleteSyncMappingCleanup:
         # Delete PRD using the server function
         from a_sdlc.server import delete_prd
 
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = content_mgr
         with patch("a_sdlc.server.get_db", return_value=db), \
-             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr), \
+             patch("a_sdlc.server.get_storage", return_value=mock_storage):
             result = delete_prd(prd_id)
 
         assert result["status"] == "deleted"
@@ -576,8 +579,11 @@ class TestDeleteSyncMappingCleanup:
         # Delete task using the server function
         from a_sdlc.server import delete_task
 
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = content_mgr
         with patch("a_sdlc.server.get_db", return_value=db), \
-             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr), \
+             patch("a_sdlc.server.get_storage", return_value=mock_storage):
             result = delete_task(task_id)
 
         assert result["status"] == "deleted"
@@ -646,8 +652,11 @@ class TestDeleteSyncMappingCleanup:
         # Delete PRD (should not error even without mappings)
         from a_sdlc.server import delete_prd
 
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = content_mgr
         with patch("a_sdlc.server.get_db", return_value=db), \
-             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr), \
+             patch("a_sdlc.server.get_storage", return_value=mock_storage):
             result = delete_prd(prd_id)
 
         assert result["status"] == "deleted"
@@ -676,8 +685,11 @@ class TestDeleteSyncMappingCleanup:
         # Delete task (should not error even without mappings)
         from a_sdlc.server import delete_task
 
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = content_mgr
         with patch("a_sdlc.server.get_db", return_value=db), \
-             patch("a_sdlc.server.get_content_manager", return_value=content_mgr):
+             patch("a_sdlc.server.get_content_manager", return_value=content_mgr), \
+             patch("a_sdlc.server.get_storage", return_value=mock_storage):
             result = delete_task(task_id)
 
         assert result["status"] == "deleted"

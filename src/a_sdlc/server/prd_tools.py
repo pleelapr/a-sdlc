@@ -68,7 +68,7 @@ def get_prd(prd_id: str, include_content: bool = True) -> dict[str, Any]:
         PRD metadata and optionally content from markdown file.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
 
     prd = db.get_prd(prd_id)
     if not prd:
@@ -101,11 +101,13 @@ def create_prd(
     status: str = "draft",
     source: str | None = None,
     sprint_id: str | None = None,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new PRD (metadata + skeleton file).
+    """Create a new PRD (metadata + content file).
 
-    Creates a DB record and an empty skeleton file. Returns the file_path
-    so the caller can write content directly using the Write tool.
+    Creates a DB record and a content file. When `content` is provided,
+    writes it through the configured backend (local filesystem or S3).
+    Otherwise creates a skeleton file. Returns file_path for reference.
 
     Args:
         title: PRD title.
@@ -113,12 +115,15 @@ def create_prd(
         status: PRD status (draft, ready, split, completed).
         source: Optional source reference (e.g., 'jira:PROJ-123').
         sprint_id: Optional sprint to assign this PRD to.
+        content: Optional PRD markdown content. When provided, written
+            through the configured content backend (works with S3/Docker).
+            When omitted, creates a skeleton file with title header only.
 
     Returns:
-        Created PRD details with ID and file_path for content writing.
+        Created PRD details with ID and file_path for reference.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
@@ -141,12 +146,19 @@ def create_prd(
         sprint_id=sprint_id,
     )
 
-    return {
+    result = {
         "status": "created",
         "message": f"PRD created: {prd_id}",
         "prd": dict(prd),
         "file_path": str(file_path),
     }
+
+    # Write content through backend if provided
+    if content is not None:
+        content_mgr.write_prd(pid, prd_id, title, content)
+        result["content_written"] = True
+
+    return result
 
 
 @_server.mcp.tool()
@@ -156,11 +168,12 @@ def update_prd(
     status: str | None = None,
     version: str | None = None,
     sprint_id: str | None = None,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    """Update PRD metadata (DB only, no file operations).
+    """Update PRD metadata and/or content.
 
-    For content changes, edit the file directly using the Edit tool.
-    Use get_prd() to obtain the file_path.
+    Updates metadata fields in the database and optionally writes new content
+    through the configured content backend (local filesystem or S3).
 
     Args:
         prd_id: PRD identifier.
@@ -168,6 +181,9 @@ def update_prd(
         status: New status (optional).
         version: New version (optional).
         sprint_id: New sprint assignment (optional). Use empty string to unassign.
+        content: New PRD markdown content (optional). When provided, written
+            through the configured content backend. Supports read-modify-write:
+            get_prd() -> modify content -> update_prd(content=new_content).
 
     Returns:
         Updated PRD details.
@@ -177,6 +193,13 @@ def update_prd(
     prd = db.get_prd(prd_id)
     if not prd:
         return {"status": "not_found", "message": f"PRD not found: {prd_id}"}
+
+    # Write content through backend if provided
+    content_written = False
+    if content is not None:
+        content_mgr = _server.get_storage().content_mgr
+        content_mgr.write_prd(prd["project_id"], prd_id, prd["title"], content)
+        content_written = True
 
     # Build update kwargs for database
     db_kwargs: dict[str, str | None] = {}
@@ -190,16 +213,20 @@ def update_prd(
         # Empty string means unassign from sprint
         db_kwargs["sprint_id"] = sprint_id if sprint_id else None
 
-    if not db_kwargs:
+    if not db_kwargs and not content_written:
         return {"status": "error", "message": "No fields to update"}
 
-    updated_prd = db.update_prd(prd_id, **db_kwargs)
+    updated_prd = db.update_prd(prd_id, **db_kwargs) if db_kwargs else prd
 
-    return {
+    result = {
         "status": "updated",
         "message": f"PRD updated: {prd_id}",
         "prd": updated_prd,
     }
+    if content_written:
+        result["content_written"] = True
+
+    return result
 
 
 @_server.mcp.tool()
@@ -213,7 +240,7 @@ def delete_prd(prd_id: str) -> dict[str, Any]:
         Deletion status.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
 
     prd = db.get_prd(prd_id)
     if not prd:
@@ -265,6 +292,8 @@ def split_prd(
             - design_compliance (optional): List of design decision IDs (e.g., ["DD-1"])
             - task_id (optional): Pre-specified task ID for multi-agent workflow.
               If provided and file exists, uses existing file instead of generating.
+            - content (optional): Full task markdown content. When provided,
+              written through the configured backend after skeleton creation.
 
     Returns:
         Created task IDs, file_paths, and status.
@@ -288,7 +317,7 @@ def split_prd(
         )
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
     pid = _server._get_current_project_id()
 
     if not pid:
@@ -353,7 +382,7 @@ def split_prd(
                 # File was pre-written by Content Generation Agent
                 files_reused += 1
             else:
-                # Write skeleton file (caller writes content via Write tool)
+                # Write skeleton file
                 file_path = content_mgr.write_task(
                     project_id=pid,
                     task_id=task_id,
@@ -365,6 +394,10 @@ def split_prd(
                     prd_id=prd_id,
                     data=data,
                 )
+
+            # Overwrite with full content if provided in spec
+            if spec.get("content"):
+                content_mgr.write_task_content(pid, task_id, spec["content"])
 
             # Register in database
             task = db.create_task(

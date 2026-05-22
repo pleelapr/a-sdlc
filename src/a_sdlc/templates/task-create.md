@@ -11,7 +11,7 @@ Create a new task for the current project.
 This command creates **database-backed tasks**, not Claude Code internal tasks.
 
 **a-sdlc tasks:**
-- Stored in `~/.a-sdlc/content/{project_id}/tasks/{task_id}.md`
+- Stored via the configured content backend (S3 or local)
 - Persist across sessions and restarts
 - Linkable to PRDs and Sprints
 - Syncable to Linear/Jira
@@ -22,18 +22,19 @@ This command creates **database-backed tasks**, not Claude Code internal tasks.
 
 ## Usage
 
-Create task metadata, then write content to the returned file:
+Create task with metadata and content in a single call:
 
 ```
 result = mcp__asdlc__create_task(
     title="Implement user authentication",
     priority="high",
     component="auth-service",
-    prd_id="feature-auth"  # Optional - task inherits sprint from PRD
+    prd_id="feature-auth",  # Optional - task inherits sprint from PRD
+    content="<task description markdown>"
 )
-# Then write task content to the returned file_path:
-Write(file_path=result["file_path"], content="<task description markdown>")
 ```
+
+**CRITICAL: If `create_task` returns an error, STOP IMMEDIATELY.** Report the error to the user. The `content` parameter writes through the configured backend (local filesystem or S3).
 
 ## Parameters
 
@@ -45,6 +46,7 @@ Write(file_path=result["file_path"], content="<task description markdown>")
 | `priority` | No | low, medium, high, critical (default: medium) |
 | `component` | No | Component/module name |
 | `data` | No | Additional structured data (JSON) |
+| `content` | No | Task markdown content (written through configured backend) |
 
 ## Output
 
@@ -61,7 +63,7 @@ Write(file_path=result["file_path"], content="<task description markdown>")
     "prd_id": "feature-auth",
     "created_at": "2025-01-26T10:00:00Z"
   },
-  "file_path": "~/.a-sdlc/content/proj/tasks/PROJ-T00001.md"
+  "file_path": "content/proj/tasks/PROJ-T00001.md"
 }
 ```
 

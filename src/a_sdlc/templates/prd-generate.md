@@ -611,14 +611,12 @@ Proceed to Step 5.
 ### 5. Save PRD
 
 ```
-result = mcp__asdlc__create_prd(title="<title>")
+result = mcp__asdlc__create_prd(title="<title>", content="<markdown_content>")
 ```
 
-This creates a DB record and skeleton file. Then write the full content:
+**CRITICAL: If `create_prd` returns an error, STOP IMMEDIATELY.** Report the error to the user and suggest they check the database or re-run the command. Never write PRD content to `.sdlc/prds/` or any other path.
 
-```
-Write(file_path=result["file_path"], content="<markdown_content>")
-```
+This creates a DB record and writes content through the configured backend (local filesystem or S3). The `content` parameter ensures content reaches the correct storage even in Docker/cloud deployments.
 
 Returns:
 ```json
@@ -632,7 +630,7 @@ Returns:
     "sprint_id": null,
     "created_at": "2025-01-26T12:00:00Z"
   },
-  "file_path": "~/.a-sdlc/content/proj/prds/PROJ-P0001.md"
+  "file_path": "content/proj/prds/PROJ-P0001.md"
 }
 ```
 

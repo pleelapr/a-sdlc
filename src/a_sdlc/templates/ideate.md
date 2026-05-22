@@ -457,10 +457,20 @@ AskUserQuestion({
 4. **Save approved PRDs**:
 
 ```
-result = mcp__asdlc__create_prd(title="<title>")
-# Then write content to the returned file_path:
-Write(file_path=result["file_path"], content="<markdown_content>")
+result = mcp__asdlc__create_prd(title="<title>", content="<markdown_content>")
 ```
+
+**CRITICAL: If `create_prd` returns an error, STOP IMMEDIATELY.** Report the error to the user. The `content` parameter writes through the configured backend (local or S3).
+
+5. **Verify each saved PRD** (MANDATORY — do not skip):
+
+After writing the file, confirm the PRD exists by calling:
+```
+verification = mcp__asdlc__get_prd(prd_id="{prd_id}")
+```
+If `verification` returns the PRD with content, the save was successful. If it returns an error or empty content, retry the Write operation.
+
+Only after ALL approved PRDs are verified, display the Final Summary below.
 
 ### Final Summary
 
@@ -482,7 +492,6 @@ After all PRDs are processed, display:
 - Design architecture: /sdlc:prd-architect "{prd-id}"  ← recommended before splitting
 - Split into tasks: /sdlc:prd-split "{prd-id}"
 - Investigate feasibility: /sdlc:prd-investigate "{prd-id}"
-- Run autonomous pipeline: `a-sdlc run goal "implement <PRD titles>"`
 ```
 
 ## ⛔ STOP HERE

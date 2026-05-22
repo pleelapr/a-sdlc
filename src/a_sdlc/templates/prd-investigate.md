@@ -333,11 +333,13 @@ Automatically apply all non-breaking fixes (warnings + info), prompt for errors.
 
 **Applying Updates:**
 
-Edit the PRD file directly, then update metadata:
+Use the read-modify-write pattern, then update metadata:
 ```
+# 1. Read current content
 prd = mcp__asdlc__get_prd(prd_id="<prd_id>")
-Edit(file_path=prd["prd"]["file_path"], old_string="...", new_string="...")
-mcp__asdlc__update_prd(prd_id="<prd_id>", version="<incremented_version>")
+# 2. Modify content in-memory (apply fixes)
+# 3. Write updated content and metadata through configured backend
+mcp__asdlc__update_prd(prd_id="<prd_id>", content="<full updated markdown>", version="<incremented_version>")
 ```
 
 **Confirmation Output:**

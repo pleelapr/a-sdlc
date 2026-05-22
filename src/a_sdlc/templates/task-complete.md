@@ -818,6 +818,18 @@ AskUserQuestion({
 ```
 call mcp__asdlc__update_task(task_id="{task_id}", status="completed")
 ```
+
+**Verify completion (MANDATORY — do not skip):**
+```
+task_verify = mcp__asdlc__get_task(task_id="{task_id}")
+```
+Confirm `task_verify["status"]` is `"completed"`. If the status did not update, retry the `update_task` call.
+
+Display confirmation:
+```
+✅ Task {task_id} marked as COMPLETED
+```
+
 Then proceed to Log Corrections, Check PRD Completion, and Suggest Next Task.
 
 **If "Hold":**
@@ -1055,7 +1067,12 @@ After completing a task, check if all tasks for the parent PRD are now completed
    ```
    mcp__asdlc__update_prd(prd_id="<prd_id>", status="completed")
    ```
-5. Notify user: "All tasks for PRD <prd_id> are complete. PRD marked as completed."
+5. Verify PRD status updated:
+   ```
+   prd_verify = mcp__asdlc__get_prd(prd_id="<prd_id>")
+   ```
+   Confirm `prd_verify["status"]` is `"completed"`.
+6. Display confirmation: "✅ All tasks for PRD <prd_id> are complete. PRD marked as completed."
 
 **Example check:**
 ```

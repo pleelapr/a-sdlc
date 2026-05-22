@@ -1,7 +1,7 @@
 """
 External sync service for a-sdlc.
 
-Handles synchronization between local hybrid storage (SQLite + markdown files)
+Handles synchronization between hybrid storage (database + content backend)
 and external systems like Linear and Jira.
 """
 
@@ -11,7 +11,6 @@ from typing import Any
 import httpx
 
 from a_sdlc.core.content import ContentManager
-from a_sdlc.core.database import Database
 
 
 class LinearClient:
@@ -514,11 +513,11 @@ class JiraClient:
 class ExternalSyncService:
     """Handles sync operations between local and external systems."""
 
-    def __init__(self, db: Database, content_mgr: ContentManager):
+    def __init__(self, db: Any, content_mgr: ContentManager):
         """Initialize sync service.
 
         Args:
-            db: Database instance for metadata
+            db: Database instance for metadata (SessionDatabase or Database)
             content_mgr: ContentManager instance for file operations
         """
         self.db = db

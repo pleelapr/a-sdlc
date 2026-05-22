@@ -40,10 +40,12 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
+    "sqlmodel>=0.0.14",
+    "alembic>=1.13.0",
     "mcp>=1.0.0",
     # UI dependencies (for web dashboard)
     "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
+    "uvicorn[standard]>=0.20.0",
     "jinja2>=3.0.0",
 ]
 
@@ -54,6 +56,7 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "types-PyYAML>=6.0",
+    "moto[s3]>=5.0.0",
 ]
 linear = [
     "httpx>=0.25.0",
@@ -61,18 +64,23 @@ linear = [
 atlassian = [
     "httpx>=0.25.0",
 ]
+postgresql = [
+    "psycopg2-binary>=2.9.0",
+]
+s3 = [
+    "boto3>=1.34.0",
+]
 sonarqube = [
     "pysonar",
 ]
 all = [
-    "a-sdlc[dev,linear,atlassian,sonarqube]",
+    "a-sdlc[dev,linear,atlassian,postgresql,s3,sonarqube]",
 ]
 
 [project.scripts]
 a-sdlc = "a_sdlc.cli:main"
 
 [project.entry-points."a_sdlc.plugins"]
-local = "a_sdlc.plugins.local:LocalPlugin"
 linear = "a_sdlc.plugins.linear:LinearPlugin"
 jira = "a_sdlc.plugins.jira:JiraPlugin"
 
@@ -109,3 +117,6 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "integration: comprehensive backend integration tests",
+]

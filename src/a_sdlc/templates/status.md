@@ -110,7 +110,7 @@ Read requirements to show:
 
 🔌 Plugin
 
-  Task storage: database (~/.a-sdlc/data.db)
+  Task storage: configured database backend
 
 ╭──────────────────────────────────────────────────────────╮
 │ Quick Actions                                             │

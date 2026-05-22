@@ -71,7 +71,7 @@ When you create tasks for a PRD that's assigned to a sprint:
 
 ## Storage
 
-All sprint data is stored in the SQLite database at `~/.a-sdlc/data.db`. No file-based storage is used.
+All sprint data is stored in the configured database (PostgreSQL via Docker Compose). No file-based storage is used.
 
 ## Notes
 

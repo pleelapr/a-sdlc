@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
+    from alembic.config import Config as AlembicConfig
+
     from a_sdlc.artifacts import ArtifactPluginManager
     from a_sdlc.plugins import PluginManager
 
@@ -71,41 +73,52 @@ def main() -> None:
 
 @main.command()
 @click.option(
-    "--transport",
-    "-t",
-    type=click.Choice(["stdio", "streamable-http"]),
-    default="stdio",
-    help="Transport type (default: stdio for Claude Code)",
+    "--mcp-port",
+    default=8765,
+    type=int,
+    help="MCP server port (default: 8765)",
 )
-@click.option("--host", default="127.0.0.1", help="Host for HTTP transport")
-@click.option("--port", default=8765, type=int, help="Port for HTTP transport")
-def serve(transport: str, host: str, port: int) -> None:
-    """Start the a-sdlc MCP server.
+@click.option(
+    "--ui-port",
+    default=3847,
+    type=int,
+    help="UI dashboard port (default: 3847)",
+)
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    help="Bind address (default: 0.0.0.0)",
+)
+def serve(
+    mcp_port: int,
+    ui_port: int,
+    host: str,
+) -> None:
+    """Start the combined MCP + UI server.
 
-    Runs the MCP server that provides tools for managing
-    PRDs, tasks, and sprints through Claude Code.
+    Runs the MCP server (streamable-http) and web UI dashboard in a
+    single process.  This is the primary way to run a-sdlc.
+
+    For production deployment, use Docker Compose instead:
+        docker compose up -d
 
     Examples:
 
-        a-sdlc serve                    # Start with stdio (for Claude Code)
-        a-sdlc serve -t streamable-http # Start HTTP server for debugging
+        a-sdlc serve                                    # Default ports
+        a-sdlc serve --mcp-port 9000 --ui-port 9001    # Custom ports
     """
     from a_sdlc.server import run_server
 
+    console.print(
+        f"[cyan]Starting combined MCP+UI server "
+        f"(MCP: {host}:{mcp_port}, UI: {host}:{ui_port})[/cyan]"
+    )
     try:
-        if transport == "stdio":
-            # Don't print anything for stdio - it would interfere with MCP protocol
-            run_server(transport="stdio")
-        else:
-            console.print(f"[cyan]Starting a-sdlc MCP server on http://{host}:{port}/mcp[/cyan]")
-            run_server(transport="streamable-http")
+        run_server(mcp_port=mcp_port, ui_port=ui_port, host=host)
     except SystemExit:
-        raise  # Let sys.exit() through
+        raise
     except Exception as exc:
-        # For stdio, we can't print to stdout; log to stderr
-        import sys as _sys
-
-        print(f"a-sdlc server error: {exc}", file=_sys.stderr)
+        console.print(f"[red]Server error: {exc}[/red]")
         raise SystemExit(1) from exc
 
 
@@ -133,6 +146,11 @@ def serve(transport: str, host: str, port: int) -> None:
 @click.option(
     "--no-agent-teams", is_flag=True, help="Skip enabling Agent Teams experimental feature"
 )
+@click.option(
+    "--url",
+    default=None,
+    help="MCP server URL for Docker/cloud instances (e.g., http://my-host:19765/mcp)",
+)
 def install(
     list_skills: bool,
     force: bool,
@@ -140,6 +158,7 @@ def install(
     cli_target: str,
     with_playwright: bool,
     no_agent_teams: bool,
+    url: str | None,
 ) -> None:
     """Deploy skill templates to Claude Code (non-interactive).
 
@@ -147,11 +166,12 @@ def install(
 
     Examples:
 
-        a-sdlc install                    # Install all templates
+        a-sdlc install                    # Install all templates (HTTP config)
         a-sdlc install --list             # List installed templates
         a-sdlc install --force            # Reinstall all templates
         a-sdlc install --target claude    # Install for Claude Code only
         a-sdlc install --target gemini    # Install for Gemini CLI only
+        a-sdlc install --url http://my-host:19765/mcp  # Docker/cloud instance
     """
     targets = resolve_targets(cli_target)
     if not targets:
@@ -171,7 +191,7 @@ def install(
         target_names = []
         for t in targets:
             installer = Installer(target_dir=target_dir, target=t)
-            installed = installer.install(force=force)
+            installed = installer.install(force=force, url=url)
             all_installed.extend(installed)
             personas = installer.list_installed_personas()
             all_personas.extend(personas)
@@ -195,6 +215,12 @@ def install(
         elif no_agent_teams:
             agent_teams_status = "Agent Teams: [dim]Skipped (--no-agent-teams)[/dim]\n"
 
+        transport_line = ""
+        if url:
+            transport_line = f"Transport: [cyan]http[/cyan] → [cyan]{url}[/cyan]\n"
+        else:
+            transport_line = "Transport: [cyan]http[/cyan]\n"
+
         targets_str = ", ".join(target_names)
         persona_line = ""
         if all_personas:
@@ -206,6 +232,7 @@ def install(
                 f"[green]Successfully installed {len(all_installed)} skill templates![/green]\n"
                 f"Targets: [cyan]{targets_str}[/cyan]\n"
                 f"{persona_line}"
+                f"{transport_line}"
                 f"{agent_teams_status}\n"
                 "[dim]Run 'a-sdlc doctor' for detailed system diagnostics.[/dim]",
                 title="[bold]Installation Complete[/bold]",
@@ -400,16 +427,18 @@ def setup(upgrade: bool):
 
     # Step 3b: DB migration + MCP refresh (upgrade only)
     if upgrade:
-        from a_sdlc.core.database import SCHEMA_VERSION, Database
-
         console.print("[bold]Step 2b: Upgrading database and MCP config...[/bold]")
         console.print()
 
         try:
-            Database()
-            console.print(f"  [green]PASS[/green] Database schema v{SCHEMA_VERSION} (current)")
-        except RuntimeError as e:
-            console.print(f"  [red]FAIL[/red] Database migration failed: {e}")
+            from a_sdlc.storage import init_storage
+
+            storage = init_storage()
+            storage.list_projects()  # Verify connectivity
+            console.print("  [green]PASS[/green] Database connected via configured backend")
+        except Exception as e:
+            console.print(f"  [red]FAIL[/red] Database connection failed: {e}")
+            console.print("  Fix: check A_SDLC_DATABASE_URL or run docker compose up -d")
             sys.exit(1)
 
         try:
@@ -1362,6 +1391,83 @@ def sonarqube_status() -> None:
         console.print("[dim]Run [cyan]a-sdlc sonarqube configure[/cyan] to set up.[/dim]")
 
 
+def _doctor_live_mode() -> None:
+    """Continuously poll the health endpoint every 2 seconds with color-coded output.
+
+    Shows: status, uptime, active connections, last error, memory.
+    Exits cleanly on Ctrl+C.
+    """
+    import time as _time
+    import urllib.request
+
+    health_url = "http://127.0.0.1:8765/health"
+    click.echo("Live health monitor — polling every 2s  (Ctrl+C to exit)")
+    click.echo()
+
+    try:
+        while True:
+            try:
+                req = urllib.request.Request(health_url, method="GET")
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    data = json.loads(resp.read().decode())
+
+                status = data.get("status", "unknown")
+                uptime = data.get("uptime_seconds", 0)
+                conns = data.get("active_connections", 0)
+                memory = data.get("memory_mb", 0)
+                last_err = data.get("last_error")
+                version = data.get("version", "?")
+
+                # Color-code by status
+                if status == "healthy":
+                    status_styled = click.style(status, fg="green", bold=True)
+                elif status == "degraded":
+                    status_styled = click.style(status, fg="yellow", bold=True)
+                else:
+                    status_styled = click.style(status, fg="red", bold=True)
+
+                # Format uptime
+                _h, _rem = divmod(int(uptime), 3600)
+                _m, _s = divmod(_rem, 60)
+                uptime_str = f"{_h}h {_m}m {_s}s"
+
+                # Format last error
+                err_str = "none"
+                if last_err:
+                    err_str = click.style(
+                        f"{last_err.get('type', '?')}: {last_err.get('message', '?')}",
+                        fg="red",
+                    )
+
+                timestamp = click.style(
+                    datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                    fg="cyan",
+                )
+                click.echo(
+                    f"[{timestamp}] {status_styled}  "
+                    f"v{version}  "
+                    f"up {uptime_str}  "
+                    f"conns={conns}  "
+                    f"mem={memory}MB  "
+                    f"err={err_str}"
+                )
+            except Exception:
+                timestamp = click.style(
+                    datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                    fg="cyan",
+                )
+                status_styled = click.style("unreachable", fg="red", bold=True)
+                click.echo(
+                    f"[{timestamp}] {status_styled}  "
+                    f"Cannot reach {health_url}"
+                )
+
+            _time.sleep(2)
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo("Stopped.")
+
+
 @main.command()
 @click.option(
     "--check-consistency",
@@ -1375,7 +1481,13 @@ def sonarqube_status() -> None:
     default=False,
     help="Repair detected inconsistencies (implies --check-consistency).",
 )
-def doctor(check_consistency: bool, repair: bool) -> None:
+@click.option(
+    "--live",
+    is_flag=True,
+    default=False,
+    help="Continuously poll the health endpoint every 2s with color-coded status.",
+)
+def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
     """Run system diagnostics.
 
     Checks for:
@@ -1388,9 +1500,17 @@ def doctor(check_consistency: bool, repair: bool) -> None:
     - Installed plugins
     - Docker and monitoring services
     - SonarQube configuration
+    - Server process, port reachability, health endpoint, log file
     - Database accessibility and schema version
     - Data consistency (with --check-consistency)
+
+    Use --live to continuously monitor the health endpoint with color-coded output.
     """
+    # --live mode: continuous health polling
+    if live:
+        _doctor_live_mode()
+        return
+
     # --repair implies --check-consistency
     if repair:
         check_consistency = True
@@ -1689,23 +1809,170 @@ def doctor(check_consistency: bool, repair: bool) -> None:
             }
         )
 
-    # Database accessibility check
-    import sqlite3
+    # ---- Server process checks ----
+    import os as _os
+    import socket as _socket
 
-    from a_sdlc.core.database import SCHEMA_VERSION, Database
+    from a_sdlc.server import _MCP_PID_FILE
 
-    db = None  # type: ignore[assignment]
+    _asdlc_dir = Path.home() / ".a-sdlc"
+
+    # 1. Server PID check
+    _server_pid: int | None = None
+    if _MCP_PID_FILE.exists():
+        try:
+            _server_pid = int(_MCP_PID_FILE.read_text().strip())
+            _os.kill(_server_pid, 0)
+            checks.append(
+                {
+                    "name": "Server Process",
+                    "status": "pass",
+                    "detail": f"Running (PID: {_server_pid})",
+                }
+            )
+        except (ValueError, OSError):
+            checks.append(
+                {
+                    "name": "Server Process",
+                    "status": "warn",
+                    "detail": "Stale PID file. Fix: delete ~/.a-sdlc/mcp.pid or restart the server",
+                }
+            )
+            _server_pid = None
+    else:
+        checks.append(
+            {
+                "name": "Server Process",
+                "status": "warn",
+                "detail": "Not running. Fix: run docker compose up -d or a-sdlc serve",
+            }
+        )
+
+    # 2. Port reachability checks
+    for _port_name, _port_num in [("MCP Port (8765)", 8765), ("UI Port (3847)", 3847)]:
+        try:
+            with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _sock:
+                _sock.settimeout(2)
+                _port_reachable = _sock.connect_ex(("127.0.0.1", _port_num)) == 0
+        except OSError:
+            _port_reachable = False
+        checks.append(
+            {
+                "name": _port_name,
+                "status": "pass" if _port_reachable else "warn",
+                "detail": f"Listening on 127.0.0.1:{_port_num}"
+                if _port_reachable
+                else "Not reachable. Fix: run docker compose up -d or a-sdlc serve",
+            }
+        )
+
+    # 3. Health endpoint check
     try:
-        db = Database()
-        db_path = db.db_path
-        db_accessible = Path(db_path).exists() if str(db_path) != ":memory:" else True
+        import urllib.request
+
+        _health_req = urllib.request.Request(
+            "http://127.0.0.1:8765/health", method="GET"
+        )
+        with urllib.request.urlopen(_health_req, timeout=3) as _resp:
+            if _resp.status == 200:
+                _health_body = json.loads(_resp.read().decode())
+                _h_status = _health_body.get("status", "unknown")
+                _h_version = _health_body.get("version", "?")
+                checks.append(
+                    {
+                        "name": "Health Endpoint",
+                        "status": "pass",
+                        "detail": f"status={_h_status}, version={_h_version}",
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "name": "Health Endpoint",
+                        "status": "warn",
+                        "detail": f"HTTP {_resp.status}. Server may be unhealthy",
+                    }
+                )
+    except Exception:
+        checks.append(
+            {
+                "name": "Health Endpoint",
+                "status": "warn",
+                "detail": "Unreachable at http://127.0.0.1:8765/health. Fix: run docker compose up -d or a-sdlc serve",
+            }
+        )
+
+    # 4. Log file check
+    _server_log = _asdlc_dir / "server.log"
+    if _server_log.exists():
+        _log_writable = _os.access(_server_log, _os.W_OK)
+        checks.append(
+            {
+                "name": "Server Log",
+                "status": "pass" if _log_writable else "warn",
+                "detail": str(_server_log)
+                if _log_writable
+                else f"{_server_log} (not writable). Fix: check file permissions",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "Server Log",
+                "status": "warn",
+                "detail": f"Not found at {_server_log}. Created on first server start",
+            }
+        )
+
+    # 5. Docker container status (when Docker mode detected)
+    if _os.environ.get("A_SDLC_DOCKER") == "1":
+        import subprocess as _sp
+
+        try:
+            _docker_result = _sp.run(
+                ["docker", "ps", "--filter", "name=a-sdlc", "--format", "{{.Status}}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if _docker_result.returncode == 0 and _docker_result.stdout.strip():
+                _container_status = _docker_result.stdout.strip().split("\n")[0]
+                checks.append(
+                    {
+                        "name": "Docker Container",
+                        "status": "pass",
+                        "detail": _container_status,
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "name": "Docker Container",
+                        "status": "warn",
+                        "detail": "No a-sdlc container running. Fix: docker compose up -d",
+                    }
+                )
+        except Exception:
+            checks.append(
+                {
+                    "name": "Docker Container",
+                    "status": "warn",
+                    "detail": "Cannot query Docker. Fix: ensure Docker is running",
+                }
+            )
+
+    # Database accessibility check
+    from a_sdlc.storage import init_storage
+
+    try:
+        storage = init_storage()
+        # Verify DB is reachable by running a lightweight query
+        storage.list_projects()
         checks.append(
             {
                 "name": "Database Accessible",
-                "status": "pass" if db_accessible else "fail",
-                "detail": str(db_path)
-                if db_accessible
-                else f"Database file not found at {db_path}. Fix: run a-sdlc install",
+                "status": "pass",
+                "detail": "Connected via configured backend",
             }
         )
     except Exception as e:
@@ -1713,31 +1980,41 @@ def doctor(check_consistency: bool, repair: bool) -> None:
             {
                 "name": "Database Accessible",
                 "status": "fail",
-                "detail": f"Cannot open database: {e}. Fix: check ~/.a-sdlc/ permissions or run a-sdlc install",
+                "detail": f"Cannot connect to database: {e}. Fix: check A_SDLC_DATABASE_URL or run docker compose up -d",
             }
         )
 
-    # Database schema version check
+    # Database schema version check (via Alembic)
     try:
-        if db is not None:
-            with sqlite3.connect(db.db_path) as conn:
-                actual = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-            if actual == SCHEMA_VERSION:
-                schema_status, schema_detail = "pass", f"v{actual} (current)"
+        from a_sdlc.core.storage_config import get_storage_config
+
+        cfg = get_storage_config()
+        db_url = cfg.database_url
+        if db_url:
+            from alembic.runtime.migration import MigrationContext
+            from sqlalchemy import create_engine
+
+            engine = create_engine(db_url)
+            with engine.connect() as conn:
+                context = MigrationContext.configure(conn)
+                current_rev = context.get_current_revision()
+            engine.dispose()
+            if current_rev:
+                schema_status, schema_detail = "pass", f"Alembic revision: {current_rev}"
             else:
                 schema_status, schema_detail = (
                     "warn",
-                    f"v{actual} (expected v{SCHEMA_VERSION}). Fix: run a-sdlc install --upgrade",
+                    "No Alembic revision found. Fix: run a-sdlc db migrate",
                 )
         else:
             schema_status, schema_detail = (
-                "fail",
-                "Skipped (database not accessible). Fix: resolve database issue above",
+                "warn",
+                "No database URL configured. Fix: set A_SDLC_DATABASE_URL",
             )
     except Exception as e:
         schema_status, schema_detail = (
             "fail",
-            f"Cannot check: {e}. Fix: run a-sdlc install --upgrade",
+            f"Cannot check schema: {e}. Fix: run a-sdlc db migrate",
         )
 
     checks.append(
@@ -1902,11 +2179,11 @@ def build_extension(output: Path) -> None:
 
 @main.group()
 def plugins() -> None:
-    """Manage task storage plugins.
+    """Manage sync plugins.
 
-    Plugins allow tasks to be stored in different backends:
-    - local: File-based storage in .sdlc/tasks/ (default)
+    Plugins allow tasks to be synced with external systems:
     - linear: Sync with Linear issue tracker
+    - jira: Sync with Jira Cloud issue tracker
     """
     pass
 
@@ -1924,7 +2201,6 @@ def plugins_list() -> None:
     task_table.add_column("Description", style="dim")
 
     task_descriptions = {
-        "local": "File-based task storage in .sdlc/tasks/",
         "linear": "Sync tasks with Linear issue tracker",
         "jira": "Sync tasks with Jira Cloud issue tracker",
     }
@@ -3177,7 +3453,6 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
     """
     from a_sdlc.artifacts.prd_local import LocalPRDPlugin
     from a_sdlc.artifacts.task_generator import parse_requirements_from_prd
-    from a_sdlc.plugins.local import LocalPlugin
 
     # Load PRD
     prds_dir = Path.cwd() / ".sdlc" / "prds"
@@ -3263,16 +3538,28 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
         console.print("[yellow]Task generation cancelled[/yellow]")
         return
 
-    # Save tasks locally
+    # Save tasks via storage layer
+    from a_sdlc.storage import init_storage
+
     pm = get_plugin_manager()
-    local = LocalPlugin({"path": ".sdlc/tasks"})
+    storage = init_storage()
+    project = storage.get_project_by_path(str(Path.cwd()))
 
     saved_ids = []
-    for task in tasks:
-        task_id = local.create_task(task)
-        saved_ids.append(task_id)
+    if project:
+        for task in tasks:
+            task_data = storage.create_task(
+                title=task.title,
+                project_id=project["id"],
+                priority=task.priority.value if hasattr(task.priority, "value") else str(task.priority),
+                component=task.component or "",
+            )
+            if task_data:
+                saved_ids.append(task_data["id"])
+    else:
+        console.print("[yellow]No project found for current directory — tasks not saved to database.[/yellow]")
 
-    console.print(f"\n[green]✓ Saved {len(saved_ids)} tasks to .sdlc/tasks/active/[/green]")
+    console.print(f"\n[green]✓ Saved {len(saved_ids)} tasks[/green]")
 
     # Optional sync
     provider = pm.get_enabled_plugin()
@@ -3422,7 +3709,7 @@ def _sync_tasks_to_external(pm, tasks, task_ids):
 
 
 # =============================================================================
-# Task CLI Commands (using SQLite database)
+# Task CLI Commands
 # =============================================================================
 
 
@@ -3443,9 +3730,9 @@ def tasks_list(status: str | None, sprint: str | None) -> None:
         a-sdlc tasks --status pending   # Pending tasks only
         a-sdlc tasks --sprint SPRINT-01 # Tasks in sprint
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
 
     # Get current project
     cwd = str(Path.cwd())
@@ -3516,9 +3803,9 @@ def show_task(task_id: str) -> None:
         a-sdlc show TASK-001
         a-sdlc show TASK-002
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     task = storage.get_task(task_id)
 
     if not task:
@@ -3570,9 +3857,9 @@ def start_task_cmd(task_id: str) -> None:
 
         a-sdlc start TASK-001
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     task = storage.update_task(task_id, status="in_progress")
 
     if not task:
@@ -3636,1753 +3923,40 @@ def ui_stop() -> None:
 
 
 # =============================================================================
-# Run Commands (Background Execution)
+# Utility Functions
 # =============================================================================
 
 
-def _load_project_config() -> dict:
-    """Load ``.sdlc/config.yaml`` from the current directory.
+def _health_check_with_retry(
+    url: str,
+    retries: int = 3,
+    backoff_delays: tuple[float, ...] = (0.5, 1.0, 2.0),
+) -> bool | str:
+    """Perform an HTTP health check with exponential backoff retry.
+
+    Tries to GET the given URL up to ``retries`` times, waiting with
+    exponential backoff between attempts.
 
     Returns:
-        Parsed YAML config dict, or empty dict if the file is missing
-        or unparseable.
+        True if the health check succeeds (HTTP 200).
+        False if all retries are exhausted (server unreachable).
+        A string with error details if the server responds but unhealthily.
     """
-    import yaml
+    import time as _time
+    import urllib.request
 
-    config_path = Path.cwd() / ".sdlc" / "config.yaml"
-    if not config_path.exists():
-        return {}
-    try:
-        with open(config_path) as f:
-            return yaml.safe_load(f) or {}
-    except Exception:
-        return {}
-
-
-@main.group()
-def run() -> None:
-    """Background execution of sprints, tasks, and goals.
-
-    Fire-and-forget commands that spawn headless Claude Code sessions
-    to execute work in background processes. Progress is tracked via
-    run state files in ~/.a-sdlc/runs/.
-
-    \b
-      a-sdlc run goal "<desc>"   Execute a natural language goal
-      a-sdlc run sprint <id>     Execute a sprint in background
-      a-sdlc run task <id>       Execute a single task in background
-      a-sdlc run status          Show status of all runs
-      a-sdlc run status <id>     Show detail for a specific run
-      a-sdlc run answer <id>     Provide answer to a paused run
-      a-sdlc run control <id>    Per-item intervention (pause/cancel/skip/retry/force-approve)
-      a-sdlc run comment <id>    Post a user comment to an artifact thread
-      a-sdlc run cancel <id>     Cancel a running execution
-    """
-    pass
-
-
-@run.command("goal")
-@click.argument("description")
-@click.option(
-    "--goal-file",
-    type=click.Path(exists=True),
-    default=None,
-    help="Path to a file containing a detailed objective specification.",
-)
-@click.option(
-    "--max-turns",
-    type=int,
-    default=None,
-    help="Max agentic turns for the orchestrator session (default: from config or 500).",
-)
-@click.option(
-    "--max-iterations",
-    type=int,
-    default=None,
-    help="Max SDLC iterations before stopping (default: from config or 5).",
-)
-@click.option(
-    "--max-concurrency",
-    type=int,
-    default=None,
-    help="Max concurrent agent sessions (default: from config or 3).",
-)
-@click.option(
-    "--adapter",
-    type=click.Choice(["claude", "gemini", "mock"]),
-    default=None,
-    help="Execution adapter (default: from config or 'claude').",
-)
-@click.option(
-    "--no-interactive",
-    is_flag=True,
-    default=False,
-    help="Fully autonomous mode -- skip all clarification pauses.",
-)
-def run_goal(
-    description: str,
-    goal_file: str | None,
-    max_turns: int | None,
-    max_iterations: int | None,
-    max_concurrency: int | None,
-    adapter: str | None,
-    no_interactive: bool,
-) -> None:
-    """Start an autonomous goal execution. Returns immediately.
-
-    Accepts a natural language goal description and spawns a detached
-    orchestrator process that drives the full SDLC cycle: analyse the
-    goal, create PRDs, split tasks, run sprints, and evaluate results.
-
-    The first agent interprets the goal, discovers any existing PRDs,
-    tasks, or sprints that match, and decides which phase to start from.
-
-    Examples:
-
-        a-sdlc run goal "Add JWT authentication"
-        a-sdlc run goal "pick up PROJ-P0001 from where I left off"
-        a-sdlc run goal "Refactor DB layer" --goal-file spec.md
-        a-sdlc run goal "Build REST API" --max-iterations 3 --no-interactive
-    """
-    import os
-    import shutil
-    import subprocess
-    import uuid
-
-    from a_sdlc.executor import _ensure_runs_dir, _update_run, _write_run
-
-    # --- Load config defaults ---
-    config = _load_project_config()
-    obj_config = config.get("objective", {})
-    if not isinstance(obj_config, dict):
-        obj_config = {}
-    daemon_config = config.get("daemon", {})
-    if not isinstance(daemon_config, dict):
-        daemon_config = {}
-    orch_config = config.get("orchestrator", {})
-    if not isinstance(orch_config, dict):
-        orch_config = {}
-
-    # Apply config defaults when CLI flags are not provided
-    if max_turns is None:
-        max_turns = orch_config.get(
-            "max_turns_per_phase",
-            obj_config.get("max_turns", 500),
-        )
-    if max_iterations is None:
-        max_iterations = orch_config.get(
-            "max_iterations",
-            obj_config.get("max_iterations", 5),
-        )
-    if max_concurrency is None:
-        max_concurrency = orch_config.get(
-            "max_concurrent",  # Map config field to CLI flag
-            config.get("execution", {}).get("max_concurrency", 3),
-        )
-    if adapter is None:
-        adapter = orch_config.get("adapter", daemon_config.get("adapter", "claude"))
-
-    # --- Check adapter CLI is available ---
-    adapter_cmd = adapter if adapter != "mock" else None
-    if adapter_cmd:
-        adapter_path = shutil.which(adapter_cmd)
-        if not adapter_path:
-            console.print(
-                f"[red]{adapter_cmd} CLI not found on PATH.[/red]\n"
-                "Install from: [cyan]https://claude.ai/code[/cyan]"
-            )
-            sys.exit(1)
-
-    # --- Generate run_id ---
-    run_id = f"R-{uuid.uuid4().hex[:8]}"
-
-    # --- Create run state file ---
-    runs_dir = _ensure_runs_dir()
-    _write_run(
-        run_id,
-        {
-            "run_id": run_id,
-            "type": "pipeline",
-            "entity_id": description[:80],
-            "status": "running",
-            "description": description,
-            "goal": description,  # Sync with orchestrator field name
-            "goal_file": goal_file,
-            "max_turns": max_turns,
-            "max_iterations": max_iterations,
-            "max_concurrency": max_concurrency,
-            "adapter": adapter,
-            "no_interactive": no_interactive,
-            "project_dir": str(Path.cwd()),
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "pid": None,
-        },
-    )
-
-    # --- Build orchestrator command ---
-    log_file = runs_dir / f"{run_id}.log"
-    cmd = [
-        sys.executable,
-        "-m",
-        "a_sdlc.orchestrator",
-        "--run-id",
-        run_id,
-        "--max-turns",
-        str(max_turns),
-        "--max-iterations",
-        str(max_iterations),
-        "--max-concurrency",
-        str(max_concurrency),
-        "--polling-interval",
-        str(orch_config.get("polling_interval", 30)),
-    ]
-    if goal_file:
-        cmd.extend(["--goal-file", goal_file])
-    if no_interactive:
-        cmd.append("--no-interactive")
-    if adapter:
-        cmd.extend(["--adapter", adapter])
-
-    # --- Spawn detached subprocess ---
-    with open(log_file, "w") as lf:
-        proc = subprocess.Popen(
-            cmd,
-            start_new_session=True,
-            stdout=lf,
-            stderr=subprocess.STDOUT,
-            cwd=os.getcwd(),
-        )
-
-    # Store PID in run state
-    _update_run(run_id, pid=proc.pid)
-
-    # --- Report to user and exit immediately ---
-    interactive_label = "no (autonomous)" if no_interactive else "yes"
-    console.print(
-        Panel(
-            f"[green]Goal execution started![/green]\n\n"
-            f"Run ID:        [bold]{run_id}[/bold]\n"
-            f"Goal:          {description[:60]}{'...' if len(description) > 60 else ''}\n"
-            f"Adapter:       {adapter}\n"
-            f"Max turns:     {max_turns}\n"
-            f"Max iterations: {max_iterations}\n"
-            f"Concurrency:    {max_concurrency}\n"
-            f"Interactive:   {interactive_label}\n"
-            f"PID:           {proc.pid}\n"
-            f"Log:           {log_file}\n\n"
-            f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
-            f"Detailed view:   [cyan]a-sdlc run status {run_id}[/cyan]\n"
-            f'Answer:          [cyan]a-sdlc run answer {run_id} -m "..."[/cyan]\n'
-            f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
-            title="[bold]Goal Execution[/bold]",
-            border_style="green",
-        )
-    )
-
-
-@run.command("sprint")
-@click.argument("sprint_id")
-@click.option(
-    "--max-turns",
-    type=int,
-    default=None,
-    help="Max agentic turns per Claude Code session (default: from config or 200).",
-)
-@click.option(
-    "--max-concurrency",
-    type=int,
-    default=None,
-    help="Override execution.max_concurrency from config.",
-)
-@click.option(
-    "--supervised",
-    is_flag=True,
-    default=None,
-    help="Pause between batches for user approval.",
-)
-def run_sprint(
-    sprint_id: str,
-    max_turns: int | None,
-    max_concurrency: int | None,
-    supervised: bool | None,
-) -> None:
-    """Start a background sprint execution. Returns immediately.
-
-    Spawns a headless Claude Code session that executes the sprint-run
-    workflow. The session has full access to MCP tools, file operations,
-    and the /sdlc:sprint-run skill template.
-
-    Use --supervised to pause between batches for manual review. The run
-    will show as "awaiting_confirmation" in `a-sdlc run status`. Use
-    `a-sdlc run approve <run_id>` to continue to the next batch.
-
-    Examples:
-
-        a-sdlc run sprint PROJ-S0001
-        a-sdlc run sprint PROJ-S0001 --supervised
-        a-sdlc run sprint PROJ-S0001 --max-turns 500
-    """
-    import os
-    import shutil
-    import subprocess
-    import uuid
-
-    from a_sdlc.executor import _ensure_runs_dir, _write_run
-    from a_sdlc.storage import get_storage
-
-    storage = get_storage()
-
-    # --- Validate sprint exists ---
-    sprint = storage.get_sprint(sprint_id)
-    if not sprint:
-        console.print(f"[red]Sprint not found: {sprint_id}[/red]")
-        sys.exit(1)
-
-    # --- Check claude CLI is available ---
-    claude_path = shutil.which("claude")
-    if not claude_path:
-        console.print(
-            "[red]Claude Code CLI not found on PATH.[/red]\n"
-            "Install from: [cyan]https://claude.ai/code[/cyan]"
-        )
-        sys.exit(1)
-
-    # --- Load config defaults for daemon and execution settings ---
-    config = _load_project_config()
-    daemon_config = config.get("daemon", {})
-
-    # Apply config defaults when CLI flags are not provided
-    if max_turns is None:
-        max_turns = daemon_config.get("max_turns", 200)
-
-    if supervised is None:
-        supervised = daemon_config.get("supervised", False)
-
-    if max_concurrency is None:
-        max_concurrency = config.get("execution", {}).get("max_concurrency", 3)
-
-    # --- Generate run_id ---
-    run_id = f"R-{uuid.uuid4().hex[:8]}"
-
-    # --- Create run state file ---
-    runs_dir = _ensure_runs_dir()
-    _write_run(
-        run_id,
-        {
-            "run_id": run_id,
-            "type": "sprint",
-            "entity_id": sprint_id,
-            "status": "running",
-            "max_turns": max_turns,
-            "max_concurrency": max_concurrency,
-            "supervised": supervised,
-            "project_dir": str(Path.cwd()),
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "pid": None,
-        },
-    )
-
-    # --- Build executor command ---
-    log_file = runs_dir / f"{run_id}.log"
-    cmd = [
-        sys.executable,
-        "-m",
-        "a_sdlc.executor",
-        "--mode",
-        "sprint",
-        "--sprint-id",
-        sprint_id,
-        "--run-id",
-        run_id,
-        "--max-turns",
-        str(max_turns),
-        "--max-concurrency",
-        str(max_concurrency),
-    ]
-    if supervised:
-        cmd.append("--supervised")
-
-    # --- Spawn detached subprocess ---
-    with open(log_file, "w") as lf:
-        proc = subprocess.Popen(
-            cmd,
-            start_new_session=True,
-            stdout=lf,
-            stderr=subprocess.STDOUT,
-            cwd=os.getcwd(),
-        )
-
-    # Store PID in run state
-    from a_sdlc.executor import _update_run
-
-    _update_run(run_id, pid=proc.pid)
-
-    # --- Report to user and exit immediately ---
-    console.print(
-        Panel(
-            f"[green]Sprint execution started![/green]\n\n"
-            f"Run ID:    [bold]{run_id}[/bold]\n"
-            f"Sprint:    {sprint_id}\n"
-            f"PID:       {proc.pid}\n"
-            f"Log:       {log_file}\n"
-            f"Supervised: {'yes' if supervised else 'no'}\n\n"
-            f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
-            f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
-            title="[bold]Background Run[/bold]",
-            border_style="green",
-        )
-    )
-
-
-@run.command("task")
-@click.argument("task_id")
-@click.option(
-    "--max-turns",
-    type=int,
-    default=None,
-    help="Max agentic turns for the Claude Code session (default: from config, capped at 50).",
-)
-def run_task(task_id: str, max_turns: int | None) -> None:
-    """Start a background single-task execution. Returns immediately.
-
-    Spawns a headless Claude Code session that executes the task-start
-    workflow for the given task.
-
-    Examples:
-
-        a-sdlc run task PROJ-T00001
-        a-sdlc run task PROJ-T00001 --max-turns 100
-    """
-    import os
-    import shutil
-    import subprocess
-    import uuid
-
-    from a_sdlc.executor import _ensure_runs_dir, _update_run, _write_run
-    from a_sdlc.storage import get_storage
-
-    storage = get_storage()
-
-    # --- Load config defaults for daemon settings ---
-    config = _load_project_config()
-    daemon_config = config.get("daemon", {})
-
-    # Apply config default when CLI flag is not provided (capped at 50 for tasks)
-    if max_turns is None:
-        max_turns = min(daemon_config.get("max_turns", 200), 50)
-
-    # --- Validate task exists ---
-    task = storage.get_task(task_id)
-    if not task:
-        console.print(f"[red]Task not found: {task_id}[/red]")
-        sys.exit(1)
-
-    # --- Check claude CLI is available ---
-    claude_path = shutil.which("claude")
-    if not claude_path:
-        console.print(
-            "[red]Claude Code CLI not found on PATH.[/red]\n"
-            "Install from: [cyan]https://claude.ai/code[/cyan]"
-        )
-        sys.exit(1)
-
-    # --- Generate run_id ---
-    run_id = f"R-{uuid.uuid4().hex[:8]}"
-
-    # --- Create run state file ---
-    runs_dir = _ensure_runs_dir()
-    _write_run(
-        run_id,
-        {
-            "run_id": run_id,
-            "type": "task",
-            "entity_id": task_id,
-            "status": "running",
-            "max_turns": max_turns,
-            "project_dir": str(Path.cwd()),
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "pid": None,
-        },
-    )
-
-    # --- Build executor command ---
-    log_file = runs_dir / f"{run_id}.log"
-    cmd = [
-        sys.executable,
-        "-m",
-        "a_sdlc.executor",
-        "--mode",
-        "task",
-        "--task-id",
-        task_id,
-        "--run-id",
-        run_id,
-        "--max-turns",
-        str(max_turns),
-    ]
-
-    # --- Spawn detached subprocess ---
-    with open(log_file, "w") as lf:
-        proc = subprocess.Popen(
-            cmd,
-            start_new_session=True,
-            stdout=lf,
-            stderr=subprocess.STDOUT,
-            cwd=os.getcwd(),
-        )
-
-    # Store PID in run state
-    _update_run(run_id, pid=proc.pid)
-
-    # --- Report to user and exit immediately ---
-    console.print(
-        Panel(
-            f"[green]Task execution started![/green]\n\n"
-            f"Run ID:  [bold]{run_id}[/bold]\n"
-            f"Task:    {task_id}\n"
-            f"PID:     {proc.pid}\n"
-            f"Log:     {log_file}\n\n"
-            f"Check progress:  [cyan]a-sdlc run status[/cyan]\n"
-            f"Cancel:          [cyan]a-sdlc run cancel {run_id}[/cyan]",
-            title="[bold]Background Run[/bold]",
-            border_style="green",
-        )
-    )
-
-
-def _extract_run_metrics(data: dict) -> dict:
-    """Extract queue depth, agent count, and failure count from run state data.
-
-    Parses ``progress_*`` and ``agent_*`` keys written by the executor
-    during parallel sprint execution.  For pipeline runs that use a
-    ``work_queue`` array, counts are derived from item statuses instead.
-
-    Args:
-        data: Run state dictionary loaded from the JSON state file.
-
-    Returns:
-        Dictionary with ``pending``, ``active``, ``completed``, ``failed``,
-        ``agent_count``, ``phase``, and ``thread_count`` fields.
-    """
-    pending = 0
-    active = 0
-    completed = 0
-    failed = 0
-    agent_count = 0
-    thread_count = 0
-    challenge_rounds = 0
-
-    run_type = data.get("type", "")
-
-    # Pipeline runs use work_queue and thread_entries arrays
-    work_queue = data.get("work_queue")
-    if isinstance(work_queue, list) and work_queue:
-        for item in work_queue:
-            s = item.get("status", "pending")
-            if s == "completed":
-                completed += 1
-            elif s == "failed":
-                failed += 1
-            elif s == "active":
-                active += 1
-            else:
-                pending += 1
-    else:
-        # Fall back to progress_*/agent_* keys for sprint/task/goal runs
-        for key, value in data.items():
-            if key.startswith("progress_") and isinstance(value, dict):
-                task_status = value.get("status", "")
-                if task_status == "completed":
-                    completed += 1
-                elif task_status == "failed":
-                    failed += 1
-                elif task_status in ("assigned", "in_progress"):
-                    active += 1
-                else:
-                    pending += 1
-            elif key.startswith("agent_") and isinstance(value, dict):
-                agent_count += 1
-
-    thread_entries = data.get("thread_entries")
-    if isinstance(thread_entries, list):
-        thread_count = len(thread_entries)
-
-    # Pipeline metrics may include agent_session_count and challenge_rounds
-    pipeline_metrics = data.get("metrics")
-    if isinstance(pipeline_metrics, dict):
-        if pipeline_metrics.get("agent_session_count"):
-            agent_count = pipeline_metrics["agent_session_count"]
-        if pipeline_metrics.get("challenge_rounds") is not None:
-            challenge_rounds = pipeline_metrics["challenge_rounds"]
-
-    # Determine phase: pipeline runs store it directly, others derive it
-    phase = ""
-    if run_type == "pipeline" and data.get("phase"):
-        phase = data["phase"]
-    else:
-        outcome = data.get("outcome")
-        if isinstance(outcome, dict):
-            phase = outcome.get("status", "")
-        elif data.get("status") == "running":
-            phase = "executing" if completed > 0 or active > 0 else "starting"
-        elif data.get("status") == "completed":
-            phase = "done"
-        elif data.get("status") == "failed":
-            phase = "failed"
-        elif data.get("status") == "awaiting_confirmation":
-            phase = "paused"
-        elif data.get("status") == "awaiting_clarification":
-            phase = "waiting"
-
-    return {
-        "pending": pending,
-        "active": active,
-        "completed": completed,
-        "failed": failed,
-        "agent_count": agent_count,
-        "phase": phase,
-        "thread_count": thread_count,
-        "challenge_rounds": challenge_rounds,
-    }
-
-
-def _resolve_run_status(data: dict) -> tuple[str, bool]:
-    """Determine the effective run status, checking PID liveness.
-
-    Args:
-        data: Run state dictionary.
-
-    Returns:
-        Tuple of ``(effective_status, pid_alive)``.
-    """
-    import os as _os
-
-    pid = data.get("pid")
-    pid_alive = False
-    if pid:
+    for attempt in range(retries):
         try:
-            _os.kill(pid, 0)
-            pid_alive = True
-        except (OSError, ProcessLookupError):
-            pid_alive = False
-
-    status = data.get("status", "unknown")
-    if status == "running" and pid and not pid_alive:
-        status = "crashed"
-
-    return status, pid_alive
-
-
-def _style_status(status: str) -> str:
-    """Return Rich-markup styled status string."""
-    return {
-        "running": "[green]running[/green]",
-        "completed": "[blue]completed[/blue]",
-        "failed": "[red]failed[/red]",
-        "cancelled": "[yellow]cancelled[/yellow]",
-        "crashed": "[red]crashed[/red]",
-        "awaiting_confirmation": "[magenta]awaiting approval[/magenta]",
-        "awaiting_clarification": "[magenta]awaiting input[/magenta]",
-    }.get(status, status)
-
-
-def _compute_duration(data: dict) -> str:
-    """Compute human-readable duration from started_at to now or completion.
-
-    Args:
-        data: Run state dictionary.
-
-    Returns:
-        Duration string like ``"5m 32s"`` or ``"-"`` if unavailable.
-    """
-    started_at = data.get("started_at", "")
-    if not started_at:
-        return "-"
-
-    try:
-        start = datetime.fromisoformat(started_at)
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        return "-"
-
-    # Use current time for active runs, or fall back to now
-    end = datetime.now(timezone.utc)
-
-    # If completed/failed, try to use outcome timestamp
-    status = data.get("status", "")
-    if status in ("completed", "failed", "cancelled"):
-        outcome = data.get("outcome")
-        if isinstance(outcome, dict) and outcome.get("completed_at"):
-            try:
-                end = datetime.fromisoformat(outcome["completed_at"])
-                if end.tzinfo is None:
-                    end = end.replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                pass
-
-    delta = end - start
-    total_seconds = int(delta.total_seconds())
-    if total_seconds < 0:
-        return "-"
-
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    if minutes > 0:
-        return f"{minutes}m {seconds}s"
-    return f"{seconds}s"
-
-
-def _show_run_detail(run_id_arg: str) -> None:
-    """Display detailed information for a single run (FR-010, FR-010a).
-
-    Shows operational metrics, queue state, agent sessions, task progress,
-    controls, answers, and comments in a Rich panel layout.
-
-    Args:
-        run_id_arg: The run identifier to display.
-    """
-    from a_sdlc.executor import _RUNS_DIR, _read_run
-
-    data = _read_run(run_id_arg)
-    if not data:
-        console.print(f"[red]Run not found: {run_id_arg}[/red]")
-        sys.exit(1)
-
-    status, pid_alive = _resolve_run_status(data)
-    metrics = _extract_run_metrics(data)
-    duration = _compute_duration(data)
-
-    # --- Header panel ---
-    started = data.get("started_at", "")
-    if started:
-        started = started[:19].replace("T", " ")
-
-    run_type = data.get("type", "?")
-    header_lines = [
-        f"[bold]Run ID:[/bold]     {run_id_arg}",
-        f"[bold]Type:[/bold]       {run_type}",
-        f"[bold]Entity:[/bold]     {data.get('entity_id', '?')}",
-        f"[bold]Status:[/bold]     {_style_status(status)}",
-        f"[bold]Phase:[/bold]      {metrics['phase'] or '-'}",
-        f"[bold]PID:[/bold]        {data.get('pid') or '-'}"
-        + (
-            " [green](alive)[/green]"
-            if pid_alive
-            else (" [red](dead)[/red]" if data.get("pid") else "")
-        ),
-        f"[bold]Started:[/bold]    {started or '-'}",
-        f"[bold]Duration:[/bold]   {duration}",
-    ]
-
-    # Pipeline-specific fields
-    if run_type == "pipeline":
-        goal = data.get("goal", "")
-        if goal:
-            header_lines.append(f"[bold]Goal:[/bold]       {goal[:80]}")
-
-    # Goal-specific fields
-    elif run_type == "goal":
-        desc = data.get("description", "")
-        if desc:
-            header_lines.append(f"[bold]Goal:[/bold]       {desc[:80]}")
-        header_lines.append(f"[bold]Adapter:[/bold]    {data.get('adapter', '?')}")
-        header_lines.append(f"[bold]Max Iter:[/bold]   {data.get('max_iterations', '?')}")
-
-    if data.get("supervised"):
-        header_lines.append("[bold]Mode:[/bold]      supervised")
-    if data.get("max_turns"):
-        header_lines.append(f"[bold]Max Turns:[/bold]  {data['max_turns']}")
-
-    console.print(
-        Panel(
-            "\n".join(header_lines),
-            title=f"[bold]Run Detail: {run_id_arg}[/bold]",
-            border_style="cyan",
-        )
-    )
-
-    # --- Queue State table ---
-    total_tasks = metrics["pending"] + metrics["active"] + metrics["completed"] + metrics["failed"]
-    if total_tasks > 0:
-        queue_table = Table(title="Queue State")
-        queue_table.add_column("Metric", style="bold")
-        queue_table.add_column("Count", justify="right")
-        queue_table.add_row("Pending", str(metrics["pending"]))
-        queue_table.add_row("Active", f"[green]{metrics['active']}[/green]")
-        queue_table.add_row("Completed", f"[blue]{metrics['completed']}[/blue]")
-        queue_table.add_row(
-            "Failed",
-            f"[red]{metrics['failed']}[/red]" if metrics["failed"] > 0 else "0",
-        )
-        queue_table.add_row("Total", str(total_tasks))
-        console.print(queue_table)
-
-    # --- Work Queue detail table (pipeline runs) ---
-    work_queue = data.get("work_queue")
-    if isinstance(work_queue, list) and work_queue:
-        wq_table = Table(title="Work Queue")
-        wq_table.add_column("ID", style="bold")
-        wq_table.add_column("Type")
-        wq_table.add_column("Artifact")
-        wq_table.add_column("Status")
-        wq_table.add_column("Persona")
-        wq_table.add_column("Started")
-        wq_table.add_column("Duration")
-
-        for item in work_queue:
-            item_started = item.get("started_at", "")
-            item_completed = item.get("completed_at")
-            item_duration = "-"
-            if item_started and item_completed:
-                try:
-                    s_dt = datetime.fromisoformat(item_started)
-                    e_dt = datetime.fromisoformat(item_completed)
-                    dur_sec = int((e_dt - s_dt).total_seconds())
-                    item_duration = f"{dur_sec}s"
-                except (ValueError, TypeError):
-                    item_duration = "?"
-            elif item_started and item.get("status") == "active":
-                item_duration = "running"
-
-            item_status = item.get("status", "?")
-            status_styled = {
-                "pending": "[dim]pending[/dim]",
-                "active": "[green]active[/green]",
-                "completed": "[blue]completed[/blue]",
-                "failed": "[red]failed[/red]",
-            }.get(item_status, item_status)
-
-            wq_table.add_row(
-                item.get("id", "?"),
-                item.get("type", "?"),
-                item.get("artifact_id", "-"),
-                status_styled,
-                item.get("persona", "-"),
-                item_started[:19].replace("T", " ") if item_started else "-",
-                item_duration,
-            )
-
-        console.print(wq_table)
-
-    # --- Operational Metrics ---
-    metrics_table = Table(title="Operational Metrics")
-    metrics_table.add_column("Metric", style="bold")
-    metrics_table.add_column("Value")
-    metrics_table.add_row("Total Duration", duration)
-    metrics_table.add_row("Agent Sessions", str(metrics["agent_count"]))
-    metrics_table.add_row("Threads", str(metrics["thread_count"]))
-    if metrics["challenge_rounds"] > 0:
-        metrics_table.add_row("Challenge Rounds", str(metrics["challenge_rounds"]))
-    metrics_table.add_row("Failures", str(metrics["failed"]))
-    if data.get("max_concurrency"):
-        metrics_table.add_row("Max Concurrency", str(data["max_concurrency"]))
-    console.print(metrics_table)
-
-    # --- Task Progress entries ---
-    progress_entries = []
-    for key, value in sorted(data.items()):
-        if key.startswith("progress_") and isinstance(value, dict):
-            task_id = value.get("task_id", key.removeprefix("progress_"))
-            task_status = value.get("status", "unknown")
-            agent_id = value.get("agent_id", "-")
-            progress_entries.append((task_id, task_status, agent_id))
-
-    if progress_entries:
-        progress_table = Table(title="Task Progress")
-        progress_table.add_column("Task ID", style="bold")
-        progress_table.add_column("Status")
-        progress_table.add_column("Agent")
-        for task_id, task_status, agent_id in progress_entries:
-            styled = {
-                "completed": "[blue]completed[/blue]",
-                "failed": "[red]failed[/red]",
-                "assigned": "[green]assigned[/green]",
-                "in_progress": "[green]in_progress[/green]",
-            }.get(task_status, task_status)
-            progress_table.add_row(task_id, styled, agent_id)
-        console.print(progress_table)
-
-    # --- Recent thread entries (pipeline runs) ---
-    thread_entries = data.get("thread_entries")
-    if isinstance(thread_entries, list) and thread_entries:
-        recent = thread_entries[-10:]
-        entry_lines = []
-        for entry in recent:
-            ts = entry.get("timestamp", "")[:19].replace("T", " ")
-            phase_label = entry.get("phase", "")
-            agent = entry.get("agent", "")
-            action = entry.get("action", "")
-            entry_lines.append(f"[dim]{ts}[/dim]  [{phase_label}] {agent}: {action}")
-        console.print(
-            Panel(
-                "\n".join(entry_lines),
-                title=f"[bold]Recent Activity ({len(thread_entries)} total)[/bold]",
-                border_style="cyan",
-            )
-        )
-
-    # --- Pipeline metrics panel ---
-    pipeline_metrics = data.get("metrics")
-    if isinstance(pipeline_metrics, dict) and pipeline_metrics:
-        metric_lines = []
-        if pipeline_metrics.get("total_duration_sec"):
-            mins, secs = divmod(pipeline_metrics["total_duration_sec"], 60)
-            metric_lines.append(f"Total duration:    {int(mins)}m {int(secs)}s")
-        if pipeline_metrics.get("phase_durations"):
-            phases = pipeline_metrics["phase_durations"]
-            phase_strs = [f"{k}: {v}s" for k, v in phases.items()]
-            metric_lines.append(f"Phase durations:   {', '.join(phase_strs)}")
-        if pipeline_metrics.get("agent_session_count") is not None:
-            metric_lines.append(f"Agent sessions:    {pipeline_metrics['agent_session_count']}")
-        if pipeline_metrics.get("challenge_rounds") is not None:
-            metric_lines.append(f"Challenge rounds:  {pipeline_metrics['challenge_rounds']}")
-        if pipeline_metrics.get("failure_count") is not None:
-            metric_lines.append(f"Failures:          {pipeline_metrics['failure_count']}")
-        if pipeline_metrics.get("total_cost_cents") is not None:
-            cost = pipeline_metrics["total_cost_cents"] / 100
-            metric_lines.append(f"Total cost:        ${cost:.2f}")
-        if pipeline_metrics.get("total_turns") is not None:
-            metric_lines.append(f"Total turns:       {pipeline_metrics['total_turns']}")
-
-        if metric_lines:
-            console.print(
-                Panel(
-                    "\n".join(metric_lines),
-                    title="[bold]Metrics[/bold]",
-                    border_style="green",
-                )
-            )
-
-    # --- Controls issued ---
-    controls = data.get("controls", [])
-    if controls:
-        ctrl_table = Table(title="Control Actions")
-        ctrl_table.add_column("Item", style="bold")
-        ctrl_table.add_column("Action")
-        ctrl_table.add_column("Issued At")
-        for ctrl in controls:
-            ctrl_table.add_row(
-                ctrl.get("item_id", "?"),
-                ctrl.get("action", "?"),
-                ctrl.get("issued_at", "")[:19],
-            )
-        console.print(ctrl_table)
-
-    # --- Answers provided ---
-    answers = data.get("answers", [])
-    if answers:
-        ans_table = Table(title="Answers")
-        ans_table.add_column("Item", style="bold")
-        ans_table.add_column("Message")
-        ans_table.add_column("Answered At")
-        for ans in answers:
-            ans_table.add_row(
-                ans.get("item_id", "-"),
-                ans.get("message", ""),
-                ans.get("answered_at", "")[:19],
-            )
-        console.print(ans_table)
-
-    # --- Comments ---
-    comments = data.get("comments", [])
-    if comments:
-        cmt_table = Table(title="Comments")
-        cmt_table.add_column("Artifact", style="bold")
-        cmt_table.add_column("Message")
-        cmt_table.add_column("Posted At")
-        for cmt in comments:
-            cmt_table.add_row(
-                cmt.get("artifact_id", "?"),
-                cmt.get("message", ""),
-                cmt.get("posted_at", "")[:19],
-            )
-        console.print(cmt_table)
-
-    # --- Error info ---
-    error = data.get("error")
-    if error:
-        console.print(
-            Panel(
-                f"[red]{error}[/red]",
-                title="[bold red]Error[/bold red]",
-                border_style="red",
-            )
-        )
-
-    # --- Outcome info ---
-    outcome = data.get("outcome")
-    if isinstance(outcome, dict):
-        outcome_lines = []
-        for k, v in outcome.items():
-            if k == "raw":
-                continue
-            outcome_lines.append(f"[bold]{k}:[/bold] {v}")
-        if outcome_lines:
-            console.print(
-                Panel(
-                    "\n".join(outcome_lines),
-                    title="[bold]Outcome[/bold]",
-                    border_style="blue",
-                )
-            )
-
-    # --- Clarification question panel ---
-    clarification = data.get("clarification_question")
-    if clarification:
-        console.print(
-            Panel(
-                f"[yellow]{clarification}[/yellow]\n\n"
-                f"Respond: [cyan]a-sdlc run answer {run_id_arg} -m 'your answer'[/cyan]",
-                title="[bold yellow]Clarification Needed[/bold yellow]",
-                border_style="yellow",
-            )
-        )
-
-    # --- Log file location ---
-    log_file = _RUNS_DIR / f"{run_id_arg}.log"
-    if log_file.exists():
-        console.print(f"\n[dim]Log file: {log_file}[/dim]")
-        console.print(f"[dim]View full log: tail -f {log_file}[/dim]")
-
-    # --- Approval / answer instructions ---
-    if status == "awaiting_confirmation":
-        console.print()
-        config_data = data.get("config", {})
-        if config_data.get("message"):
-            console.print(f"[bold magenta]{config_data['message']}[/bold magenta]")
-        console.print(f"  Approve: [cyan]a-sdlc run approve {run_id_arg}[/cyan]")
-        console.print(f"  Reject:  [cyan]a-sdlc run reject {run_id_arg} -m 'reason'[/cyan]")
-    elif status == "awaiting_clarification":
-        console.print()
-        config_data = data.get("config", {})
-        if config_data.get("message"):
-            console.print(f"[bold magenta]{config_data['message']}[/bold magenta]")
-        console.print(f"  Answer: [cyan]a-sdlc run answer {run_id_arg} -m 'your answer'[/cyan]")
-
-
-@run.command("status")
-@click.argument("run_id", required=False, default=None)
-def run_status(run_id: str | None) -> None:
-    """Show status of background runs.
-
-    Without arguments, displays a summary table of all active and recent
-    runs with phase, queue depth (pending/active/completed/failed),
-    active agent count, and duration.
-
-    With a RUN_ID argument, displays detailed information for that specific
-    run including operational metrics, task progress, and outcome data.
-
-    \b
-    Examples:
-        a-sdlc run status               # Summary of all runs
-        a-sdlc run status R-abc12345    # Detailed view of one run
-    """
-    from a_sdlc.executor import _RUNS_DIR, _read_run
-
-    # --- Per-run detail view ---
-    if run_id is not None:
-        _show_run_detail(run_id)
-        return
-
-    # --- Summary table view ---
-    runs_dir = _RUNS_DIR
-    if not runs_dir.exists():
-        console.print("[yellow]No runs found.[/yellow]")
-        return
-
-    # Collect all run state files
-    run_files = sorted(runs_dir.glob("R-*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not run_files:
-        console.print("[yellow]No runs found.[/yellow]")
-        return
-
-    table = Table(title="Background Runs")
-    table.add_column("Run ID", style="bold")
-    table.add_column("Type")
-    table.add_column("Entity")
-    table.add_column("Status")
-    table.add_column("Phase")
-    table.add_column("Queue (P/A/C/F)", justify="center")
-    table.add_column("Threads", justify="right")
-    table.add_column("Agents", justify="right")
-    table.add_column("Duration")
-    table.add_column("Started")
-
-    for run_file in run_files:
-        rid = run_file.stem
-        data = _read_run(rid)
-        if not data:
-            continue
-
-        status, _pid_alive = _resolve_run_status(data)
-        metrics = _extract_run_metrics(data)
-        duration = _compute_duration(data)
-
-        run_type = data.get("type", "?")
-
-        # Phase: derived from metrics for all run types (FR-009)
-        phase = metrics["phase"] or "-"
-
-        # Queue depth: Pending/Active/Completed/Failed for all run types
-        total_items = (
-            metrics["pending"] + metrics["active"] + metrics["completed"] + metrics["failed"]
-        )
-        if total_items > 0:
-            queue_str = (
-                f"{metrics['pending']}/"
-                f"{metrics['active']}/"
-                f"{metrics['completed']}/"
-                f"{metrics['failed']}"
-            )
-        else:
-            queue_str = "-"
-
-        # Threads: total thread entries (FR-009)
-        thread_str = str(metrics["thread_count"]) if metrics["thread_count"] > 0 else "-"
-
-        # Agent count: from agent_* keys or pipeline metrics
-        agent_str = str(metrics["agent_count"]) if metrics["agent_count"] > 0 else "-"
-
-        started = data.get("started_at", "")
-        if started:
-            started = started[:19].replace("T", " ")
-
-        table.add_row(
-            rid,
-            run_type,
-            data.get("entity_id", "?")[:20],
-            _style_status(status),
-            phase,
-            queue_str,
-            thread_str,
-            agent_str,
-            duration,
-            started,
-        )
-
-    console.print(table)
-
-    # Show approval/answer instructions for any awaiting runs
-    for run_file in run_files:
-        rid = run_file.stem
-        data = _read_run(rid)
-        if not data:
-            continue
-        if data.get("status") == "awaiting_confirmation":
-            console.print()
-            console.print(f"[bold magenta]Run {rid} is awaiting approval:[/bold magenta]")
-            config_data = data.get("config", {})
-            if config_data.get("message"):
-                console.print(f"  {config_data['message']}")
-            console.print(f"  Approve: [cyan]a-sdlc run approve {rid}[/cyan]")
-            console.print(f"  Reject:  [cyan]a-sdlc run reject {rid} -m 'reason'[/cyan]")
-        elif data.get("status") == "awaiting_clarification":
-            console.print()
-            console.print(f"[bold magenta]Run {rid} is awaiting an answer:[/bold magenta]")
-            # Show clarification_question (pipeline) or config.message (legacy)
-            clar_q = data.get("clarification_question", "")
-            if clar_q:
-                truncated = (clar_q[:80] + "...") if len(clar_q) > 80 else clar_q
-                console.print(f"  {truncated}")
-            else:
-                config_data = data.get("config", {})
-                if config_data.get("message"):
-                    console.print(f"  {config_data['message']}")
-            console.print(f"  Answer: [cyan]a-sdlc run answer {rid} -m 'your answer'[/cyan]")
-
-
-@run.command("cancel")
-@click.argument("run_id")
-def run_cancel(run_id: str) -> None:
-    """Cancel an in-progress background run.
-
-    Sends SIGTERM to the executor process and updates the run status
-    to cancelled.
-
-    Examples:
-
-        a-sdlc run cancel R-abc12345
-    """
-    import os
-    import signal as signal_mod
-
-    from a_sdlc.executor import _read_run, _update_run
-
-    data = _read_run(run_id)
-    if not data:
-        console.print(f"[red]Run not found: {run_id}[/red]")
-        sys.exit(1)
-
-    status = data.get("status")
-    if status in ("completed", "cancelled", "failed"):
-        console.print(f"[yellow]Run {run_id} is already {status}. Nothing to cancel.[/yellow]")
-        return
-
-    pid = data.get("pid")
-    if not pid:
-        console.print(f"[red]No PID recorded for run {run_id}.[/red]")
-        _update_run(run_id, status="cancelled")
-        return
-
-    # Check if process is alive and send SIGTERM
-    try:
-        os.kill(pid, 0)  # Check if alive
-    except (OSError, ProcessLookupError):
-        console.print(
-            f"[yellow]Process {pid} is no longer running. Marking run as cancelled.[/yellow]"
-        )
-        _update_run(run_id, status="cancelled")
-        return
-
-    try:
-        os.kill(pid, signal_mod.SIGTERM)
-        console.print(f"[green]Sent SIGTERM to process {pid}.[/green]")
-    except OSError as exc:
-        console.print(f"[red]Failed to send SIGTERM to process {pid}: {exc}[/red]")
-        sys.exit(1)
-
-    _update_run(run_id, status="cancelled")
-    console.print(f"[green]Run {run_id} cancelled.[/green]")
-
-
-@run.command("approve")
-@click.argument("run_id")
-@click.option("--message", "-m", default="", help="Optional message to the agent.")
-def run_approve(run_id: str, message: str) -> None:
-    """Approve a supervised run to continue to the next batch.
-
-    When a run is in --supervised mode, it pauses between batches
-    and shows status 'awaiting_confirmation'. This command resumes it.
-
-    Examples:
-
-        a-sdlc run approve R-abc12345
-        a-sdlc run approve R-abc12345 -m "Skip task T00003, it's handled"
-    """
-    from a_sdlc.executor import _read_run, _update_run
-
-    data = _read_run(run_id)
-    if not data:
-        console.print(f"[red]Run not found: {run_id}[/red]")
-        sys.exit(1)
-
-    if data.get("status") != "awaiting_confirmation":
-        console.print(
-            f"[yellow]Run {run_id} is not awaiting approval "
-            f"(status: {data.get('status', 'unknown')}).[/yellow]"
-        )
-        return
-
-    # Update state to running with approval message
-    config = data.get("config", {})
-    config["approval_message"] = message
-    _update_run(run_id, status="running", config=config)
-
-    console.print(f"[green]Run {run_id} approved. Executor will continue.[/green]")
-    if message:
-        console.print(f"[dim]Message: {message}[/dim]")
-
-
-@run.command("reject")
-@click.argument("run_id")
-@click.option(
-    "--message",
-    "-m",
-    required=True,
-    help="Reason for rejection.",
-)
-def run_reject(run_id: str, message: str) -> None:
-    """Reject a supervised batch and stop the run.
-
-    Marks remaining tasks as pending and stops the run gracefully.
-
-    Examples:
-
-        a-sdlc run reject R-abc12345 -m "Tests failing, need manual fix first"
-    """
-    import os
-    import signal as signal_mod
-
-    from a_sdlc.executor import _read_run, _update_run
-
-    data = _read_run(run_id)
-    if not data:
-        console.print(f"[red]Run not found: {run_id}[/red]")
-        sys.exit(1)
-
-    if data.get("status") != "awaiting_confirmation":
-        console.print(
-            f"[yellow]Run {run_id} is not awaiting approval "
-            f"(status: {data.get('status', 'unknown')}). Cannot reject.[/yellow]"
-        )
-        return
-
-    # Update state to cancelled with rejection reason
-    config = data.get("config", {})
-    config["rejection_reason"] = message
-    _update_run(run_id, status="cancelled", config=config)
-
-    # Also send SIGTERM if process is still alive
-    pid = data.get("pid")
-    if pid:
-        try:
-            os.kill(pid, 0)
-            os.kill(pid, signal_mod.SIGTERM)
-            console.print(f"[dim]Sent SIGTERM to process {pid}.[/dim]")
-        except (OSError, ProcessLookupError):
-            pass
-
-    console.print(f"[green]Run {run_id} rejected and cancelled.[/green]")
-    console.print(f"[dim]Reason: {message}[/dim]")
-
-
-@run.command("answer")
-@click.argument("run_id")
-@click.option(
-    "--message",
-    "-m",
-    required=True,
-    help="Answer to the clarification question.",
-)
-@click.option(
-    "--item",
-    default=None,
-    help="Specific work item ID to answer (for per-item clarification).",
-)
-def run_answer(run_id: str, message: str, item: str | None) -> None:
-    """Provide an answer to a paused pipeline clarification.
-
-    When a pipeline run or specific work item is in
-    'awaiting_clarification' status, this command supplies the answer
-    and resumes execution.
-
-    Examples:
-
-        a-sdlc run answer R-abc12345 -m "use RS256 algorithm"
-        a-sdlc run answer R-abc12345 --item PROJ-T00001 -m "skip auth for now"
-    """
-    from a_sdlc.executor import _read_run, _update_run
-
-    data = _read_run(run_id)
-    if not data:
-        console.print(f"[red]Run not found: {run_id}[/red]")
-        sys.exit(1)
-
-    status = data.get("status")
-    valid_statuses = ("awaiting_clarification", "awaiting_confirmation")
-    if status not in valid_statuses:
-        console.print(
-            f"[yellow]Run {run_id} is not awaiting an answer "
-            f"(status: {status}). Cannot answer.[/yellow]"
-        )
-        return
-
-    # Store the answer in the run state
-    answers = data.get("answers", [])
-    answer_entry = {
-        "message": message,
-        "answered_at": datetime.now(timezone.utc).isoformat(),
-    }
-    if item:
-        answer_entry["item_id"] = item
-    answers.append(answer_entry)
-
-    _update_run(run_id, status="running", answers=answers)
-
-    target = f" for item {item}" if item else ""
-    console.print(f"[green]Answer provided{target}. Run {run_id} resumed.[/green]")
-    console.print(f"[dim]Answer: {message}[/dim]")
-
-
-@run.command("control")
-@click.argument("item_id")
-@click.option(
-    "--action",
-    "-a",
-    required=True,
-    type=click.Choice(["pause", "cancel", "skip", "retry", "force-approve"]),
-    help="Intervention action to apply to the work item.",
-)
-@click.option(
-    "--run-id",
-    default=None,
-    help="Run ID (auto-detected from active runs if not specified).",
-)
-def run_control(item_id: str, action: str, run_id: str | None) -> None:
-    """Per-item intervention for a running pipeline.
-
-    Apply an action to a specific work item within an active pipeline
-    run. If --run-id is not specified, the most recent active run is
-    used.
-
-    Examples:
-
-        a-sdlc run control PROJ-T00001 --action pause
-        a-sdlc run control PROJ-T00001 --action skip --run-id R-abc12345
-        a-sdlc run control PROJ-T00001 -a retry
-        a-sdlc run control PROJ-T00001 -a force-approve
-    """
-    from a_sdlc.executor import _RUNS_DIR, _read_run, _update_run
-
-    # Auto-detect run_id if not provided
-    if not run_id:
-        runs_dir = _RUNS_DIR
-        if runs_dir.exists():
-            run_files = sorted(
-                runs_dir.glob("R-*.json"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            for rf in run_files:
-                candidate = _read_run(rf.stem)
-                if candidate and candidate.get("status") == "running":
-                    run_id = rf.stem
-                    break
-
-    if not run_id:
-        console.print("[red]No active run found. Specify --run-id explicitly.[/red]")
-        sys.exit(1)
-
-    data = _read_run(run_id)
-    if not data:
-        console.print(f"[red]Run not found: {run_id}[/red]")
-        sys.exit(1)
-
-    # Record the control action in the run state
-    controls = data.get("controls", [])
-    controls.append(
-        {
-            "item_id": item_id,
-            "action": action,
-            "issued_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    _update_run(run_id, controls=controls)
-
-    console.print(f"[green]Control action '{action}' issued for {item_id} in run {run_id}.[/green]")
-
-
-@run.command("comment")
-@click.argument("artifact_id")
-@click.option(
-    "--message",
-    "-m",
-    required=True,
-    help="Comment message to post to the artifact thread.",
-)
-@click.option(
-    "--run-id",
-    default=None,
-    help="Run ID (auto-detected from active runs if not specified).",
-)
-def run_comment(artifact_id: str, message: str, run_id: str | None) -> None:
-    """Post a user comment to an artifact's thread.
-
-    Adds a user_intervention entry to the thread associated with the
-    given artifact (PRD, design, or task) within an active run.
-
-    Examples:
-
-        a-sdlc run comment PROJ-P0001 -m "Focus on the REST endpoints first"
-        a-sdlc run comment PROJ-T00003 -m "Use PostgreSQL, not SQLite"
-    """
-    from a_sdlc.executor import _RUNS_DIR, _read_run, _update_run
-
-    # Auto-detect run_id if not provided
-    if not run_id:
-        runs_dir = _RUNS_DIR
-        if runs_dir.exists():
-            run_files = sorted(
-                runs_dir.glob("R-*.json"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            for rf in run_files:
-                candidate = _read_run(rf.stem)
-                if candidate and candidate.get("status") == "running":
-                    run_id = rf.stem
-                    break
-
-    if not run_id:
-        console.print("[red]No active run found. Specify --run-id explicitly.[/red]")
-        sys.exit(1)
-
-    data = _read_run(run_id)
-    if not data:
-        console.print(f"[red]Run not found: {run_id}[/red]")
-        sys.exit(1)
-
-    # Record the comment in the run state
-    comments = data.get("comments", [])
-    comments.append(
-        {
-            "artifact_id": artifact_id,
-            "message": message,
-            "type": "user_intervention",
-            "posted_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    _update_run(run_id, comments=comments)
-
-    console.print(f"[green]Comment posted to {artifact_id} in run {run_id}.[/green]")
-    console.print(f"[dim]{message}[/dim]")
-
-
-# =============================================================================
-# Daemon Commands (Background Daemon Lifecycle)
-# =============================================================================
-
-
-def _run_daemon_foreground() -> None:
-    """Run daemon in foreground (blocking).
-
-    Loads ``.sdlc/config.yaml`` and starts the daemon event loop.
-    Blocks until the user presses Ctrl+C or a signal is received.
-    """
-    from a_sdlc.daemon import (
-        _cleanup_stale_pid,
-        _get_pid,
-        _is_process_running,
-        run_daemon,
-    )
-
-    # Cleanup stale PID file if exists
-    if _cleanup_stale_pid():
-        click.echo("Cleaned up stale daemon PID file")
-
-    # Check if already running
-    pid = _get_pid()
-    if pid and _is_process_running(pid):
-        click.echo(f"Daemon already running (PID: {pid})", err=True)
-        sys.exit(1)
-
-    # Load config
-    config = _load_project_config()
-    if not config:
-        config_path = Path.cwd() / ".sdlc" / "config.yaml"
-        click.echo(f"Warning: No config loaded from {config_path}", err=True)
-
-    # Run daemon (blocking)
-    click.echo("Starting daemon in foreground (Ctrl+C to stop)...")
-    run_daemon(config)
-
-
-@main.group(invoke_without_command=True)
-@click.pass_context
-def daemon(ctx: click.Context) -> None:
-    """Long-running background daemon for scheduled execution.
-
-    The daemon monitors .sdlc/config.yaml schedules and automatically
-    triggers sprint execution, sync operations, etc. at configured times.
-
-    Examples:
-
-        a-sdlc daemon              # Start daemon (foreground)
-        a-sdlc daemon start        # Start daemon (background)
-        a-sdlc daemon stop         # Stop daemon
-        a-sdlc daemon status       # Show daemon health
-    """
-    if ctx.invoked_subcommand is None:
-        # Default: run daemon in foreground
-        _run_daemon_foreground()
-
-
-@daemon.command("start")
-def daemon_start() -> None:
-    """Start the daemon as a background process.
-
-    Spawns the daemon in a detached subprocess that survives terminal
-    close.  Writes PID to ~/.a-sdlc/daemon.pid.
-
-    Examples:
-
-        a-sdlc daemon start
-    """
-    import subprocess
-    import time
-
-    from a_sdlc.daemon import (
-        _cleanup_stale_pid,
-        _get_pid,
-        _is_process_running,
-    )
-
-    # Cleanup stale PID
-    if _cleanup_stale_pid():
-        click.echo("Cleaned up stale daemon PID file")
-
-    # Check if already running
-    pid = _get_pid()
-    if pid and _is_process_running(pid):
-        click.echo(f"Daemon already running (PID: {pid})", err=True)
-        sys.exit(1)
-
-    # Validate config exists
-    config_path = Path.cwd() / ".sdlc" / "config.yaml"
-    if not config_path.exists():
-        click.echo("Error: .sdlc/config.yaml not found", err=True)
-        click.echo("Initialize a project first with: a-sdlc init", err=True)
-        sys.exit(1)
-
-    # Daemonize via subprocess
-    import os
-
-    log_file = Path.home() / ".a-sdlc" / "daemon.log"
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(log_file, "a") as lf:
-        subprocess.Popen(
-            [sys.executable, "-m", "a_sdlc.daemon"],
-            start_new_session=True,
-            stdout=lf,
-            stderr=subprocess.STDOUT,
-            cwd=os.getcwd(),
-        )
-
-    # Give it a moment to start and write PID
-    time.sleep(1)
-
-    # Verify it started
-    pid = _get_pid()
-    if pid and _is_process_running(pid):
-        click.echo(f"Daemon started (PID: {pid})")
-        click.echo(f"Logs: {log_file}")
-    else:
-        click.echo(
-            f"Error: Daemon failed to start. Check logs at: {log_file}",
-            err=True,
-        )
-        sys.exit(1)
-
-
-@daemon.command("stop")
-def daemon_stop() -> None:
-    """Gracefully stop the daemon.
-
-    Sends SIGTERM to the daemon process and waits for graceful
-    shutdown.  If the process does not stop within 10 seconds,
-    it is force-killed.
-
-    Examples:
-
-        a-sdlc daemon stop
-    """
-    from a_sdlc.daemon import (
-        _cleanup_stale_pid,
-        _get_pid,
-        _is_process_running,
-        stop_daemon,
-    )
-
-    pid = _get_pid()
-
-    if not pid:
-        click.echo("Daemon is not running")
-        return
-
-    if not _is_process_running(pid):
-        click.echo("Daemon PID file exists but process not running (cleaning up)")
-        _cleanup_stale_pid()
-        return
-
-    click.echo(f"Stopping daemon (PID: {pid})...")
-
-    if stop_daemon():
-        click.echo("Daemon stopped successfully")
-    else:
-        click.echo("Failed to stop daemon", err=True)
-        sys.exit(1)
-
-
-@daemon.command("status")
-def daemon_status() -> None:
-    """Show daemon health and active runs.
-
-    Displays whether the daemon is running, recent log lines from
-    ~/.a-sdlc/daemon.log, and any active execution runs.
-
-    Examples:
-
-        a-sdlc daemon status
-    """
-    from a_sdlc.daemon import (
-        LOG_FILE,
-        _get_pid,
-        _is_process_running,
-    )
-
-    pid = _get_pid()
-
-    if not pid:
-        click.echo("Daemon: not running")
-        return
-
-    if not _is_process_running(pid):
-        click.echo("Daemon: stale PID file (process not running)")
-        click.echo("Run 'a-sdlc daemon stop' to clean up")
-        return
-
-    # Daemon is running
-    click.echo(f"Daemon: running (PID: {pid})")
-
-    # Show log tail
-    log_file = LOG_FILE
-    if log_file.exists():
-        click.echo(f"\nRecent logs ({log_file}):")
-        with open(log_file) as f:
-            lines = f.readlines()
-            for line in lines[-10:]:  # Last 10 lines
-                click.echo(f"  {line.rstrip()}")
-    else:
-        click.echo(f"\nNo log file found at {log_file}")
-
-    # Show active runs from ~/.a-sdlc/runs/
-    from a_sdlc.executor import _RUNS_DIR
-
-    runs_dir = _RUNS_DIR
-    if runs_dir.exists():
-        import json as json_mod
-        import os
-
-        run_files = sorted(
-            runs_dir.glob("R-*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        active_runs = []
-        for run_file in run_files:
-            try:
-                data = json_mod.loads(run_file.read_text())
-                status = data.get("status", "")
-                if status in ("running", "awaiting_confirmation"):
-                    # Verify the process is actually alive
-                    run_pid = data.get("pid")
-                    if run_pid:
-                        try:
-                            os.kill(run_pid, 0)
-                            active_runs.append(data)
-                        except (OSError, ProcessLookupError):
-                            pass
-            except (json_mod.JSONDecodeError, OSError):
-                continue
-
-        if active_runs:
-            click.echo(f"\nActive runs: {len(active_runs)}")
-            for ar in active_runs:
-                click.echo(
-                    f"  {ar.get('run_id', '?')}: "
-                    f"{ar.get('type', '?')} "
-                    f"{ar.get('entity_id', '?')} "
-                    f"[{ar.get('status', '?')}]"
-                )
-        else:
-            click.echo("\nNo active runs")
-    else:
-        click.echo("\nNo active runs")
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    return True
+                return f"HTTP {resp.status}"
+        except Exception:
+            if attempt < retries - 1:
+                delay = backoff_delays[min(attempt, len(backoff_delays) - 1)]
+                _time.sleep(delay)
+    return False
 
 
 @main.command("complete")
@@ -5396,9 +3970,9 @@ def complete_task_cmd(task_id: str) -> None:
 
         a-sdlc complete TASK-001
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     task = storage.update_task(task_id, status="completed")
 
     if not task:
@@ -5448,9 +4022,9 @@ def connect_linear(api_key: str, team_id: str, default_project: str | None) -> N
         a-sdlc connect linear --api-key <key> --team-id ENG
         a-sdlc connect linear  # Interactive prompts
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -5510,9 +4084,9 @@ def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_t
         a-sdlc connect jira --url https://company.atlassian.net --email user@example.com --project-key PROJ
         a-sdlc connect jira  # Interactive prompts
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -5580,9 +4154,9 @@ def connect_confluence(
         a-sdlc connect confluence --url https://company.atlassian.net --email user@example.com --space-key PROJ
         a-sdlc connect confluence  # Interactive prompts
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -5656,9 +4230,9 @@ def connect_github(token: str, save_global: bool) -> None:
         )
         console.print("[dim]Token saved to ~/.config/a-sdlc/config.yaml[/dim]")
     else:
-        from a_sdlc.storage import get_storage
+        from a_sdlc.storage import init_storage
 
-        storage = get_storage()
+        storage = init_storage()
         cwd = str(Path.cwd())
         project = storage.get_project_by_path(cwd)
 
@@ -5719,9 +4293,9 @@ def disconnect(system: str, yes: bool, remove_global: bool) -> None:
             console.print("[yellow]No global GitHub configuration found.[/yellow]")
         return
 
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -5755,9 +4329,9 @@ def integrations() -> None:
 
         a-sdlc integrations
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -5896,9 +4470,9 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
       a-sdlc sync jira pull --sprint 456 --dry-run     # Preview import
     """
     from a_sdlc.server.sync import ExternalSyncService, JiraClient
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -6035,9 +4609,9 @@ def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
       a-sdlc sync jira push SPRINT-01 --dry-run
     """
     from a_sdlc.server.sync import ExternalSyncService
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -6097,9 +4671,9 @@ def jira_status(sprint_id: str | None) -> None:
       a-sdlc sync jira status              # All linked sprints
       a-sdlc sync jira status SPRINT-01    # Specific sprint
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -6211,9 +4785,9 @@ def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run
       a-sdlc sync linear pull --cycle <id> --dry-run   # Preview import
     """
     from a_sdlc.server.sync import ExternalSyncService, LinearClient
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -6331,9 +4905,9 @@ def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
       a-sdlc sync linear push SPRINT-01 --dry-run
     """
     from a_sdlc.server.sync import ExternalSyncService
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -6393,9 +4967,9 @@ def linear_status(sprint_id: str | None) -> None:
       a-sdlc sync linear status              # All linked sprints
       a-sdlc sync linear status SPRINT-01    # Specific sprint
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
     project = storage.get_project_by_path(cwd)
 
@@ -6480,9 +5054,9 @@ def init_project_cmd(name: str | None) -> None:
         a-sdlc init                    # Use folder name
         a-sdlc init --name "My Project"  # Custom name
     """
-    from a_sdlc.storage import get_storage
+    from a_sdlc.storage import init_storage
 
-    storage = get_storage()
+    storage = init_storage()
     cwd = str(Path.cwd())
 
     # Check if already exists
@@ -6530,9 +5104,9 @@ def init_project_cmd(name: str | None) -> None:
 @main.command("projects")
 def project_list() -> None:
     """List all registered projects."""
-    from a_sdlc.core.database import Database
+    from a_sdlc.storage import init_storage
 
-    db = Database()
+    db = init_storage().db
     projects = db.get_all_projects_with_stats()
     if not projects:
         console.print("[yellow]No projects found.[/yellow]")
@@ -6558,249 +5132,6 @@ def project_list() -> None:
             p.get("active_sprint_title") or "-",
         )
     console.print(table)
-
-
-@main.group()
-def agent() -> None:
-    """Manage agent governance and lifecycle.
-
-    \b
-      a-sdlc agent list              List all registered agents
-      a-sdlc agent approve <id>      Approve a proposed agent
-      a-sdlc agent inspect <id>      Show detailed agent info
-      a-sdlc agent budget <id>       View/set agent budget
-      a-sdlc agent suspend <id>      Suspend an agent
-      a-sdlc agent performance       Show performance metrics
-      a-sdlc agent team              Show team composition
-    """
-    pass
-
-
-@agent.command("list")
-@click.option(
-    "--status",
-    type=click.Choice(["active", "proposed", "suspended", "retired"]),
-    default=None,
-    help="Filter by agent status",
-)
-def agent_list(status: str | None) -> None:
-    """List all registered agents."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-    project = storage.get_most_recent_project()
-    if not project:
-        console.print("[red]No project found.[/red]")
-        return
-
-    agents = storage.list_agents(project["id"], status=status)
-    if not agents:
-        console.print("[yellow]No agents found.[/yellow]")
-        return
-
-    table = Table(title="Agents")
-    table.add_column("ID", style="cyan")
-    table.add_column("Display Name")
-    table.add_column("Persona", style="blue")
-    table.add_column("Status", style="green")
-    table.add_column("Score")
-    for a in agents:
-        score = (
-            f"{a.get('performance_score', 50.0):.0f}"
-            if a.get("performance_score") is not None
-            else "-"
-        )
-        table.add_row(a["id"], a["display_name"], a["persona_type"], a["status"], score)
-    console.print(table)
-
-
-@agent.command("approve")
-@click.argument("agent_id")
-def agent_approve(agent_id: str) -> None:
-    """Approve a proposed agent."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-    agent_obj = storage.get_agent(agent_id)
-    if not agent_obj:
-        console.print(f"[red]Agent not found: {agent_id}[/red]")
-        return
-
-    if agent_obj["status"] != "proposed":
-        console.print(
-            f"[yellow]Agent {agent_id} is not in 'proposed' status "
-            f"(current: {agent_obj['status']})[/yellow]"
-        )
-        return
-
-    storage.update_agent_status(agent_id, "active")
-    storage.append_audit_log(
-        agent_obj["project_id"], "agent_approved", "success", agent_id=agent_id
-    )
-    console.print(f"[green]Agent {agent_id} approved and activated.[/green]")
-
-
-@agent.command("inspect")
-@click.argument("agent_id")
-def agent_inspect(agent_id: str) -> None:
-    """Show detailed agent information."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-    agent_obj = storage.get_agent(agent_id)
-    if not agent_obj:
-        console.print(f"[red]Agent not found: {agent_id}[/red]")
-        return
-
-    info = f"[bold]{agent_obj['display_name']}[/bold] ({agent_obj['persona_type']})\n"
-    info += f"Status: {agent_obj['status']}\n"
-    info += f"Score: {agent_obj.get('performance_score', 'N/A')}\n"
-    info += f"Team: {agent_obj.get('team_id', 'None')}\n"
-    info += f"Created: {agent_obj['created_at']}"
-    console.print(Panel(info, title=f"Agent {agent_id}", border_style="cyan"))
-
-    # Recent audit entries
-    audit = storage.get_audit_log(agent_obj["project_id"], agent_id=agent_id, limit=10)
-    if audit:
-        table = Table(title="Recent Audit Entries")
-        table.add_column("Time", style="dim")
-        table.add_column("Action")
-        table.add_column("Outcome")
-        table.add_column("Details")
-        for entry in audit:
-            table.add_row(
-                str(entry["created_at"]),
-                entry["action_type"],
-                entry["outcome"],
-                entry.get("details", ""),
-            )
-        console.print(table)
-
-
-@agent.command("budget")
-@click.argument("agent_id")
-@click.option("--token-limit", type=int, default=None, help="Set token limit")
-@click.option("--cost-limit", type=int, default=None, help="Set cost limit in cents")
-def agent_budget(agent_id: str, token_limit: int | None, cost_limit: int | None) -> None:
-    """View or set agent budget."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-
-    if token_limit is not None or cost_limit is not None:
-        storage.create_agent_budget(agent_id, token_limit=token_limit, cost_limit_cents=cost_limit)
-        console.print(f"[green]Budget updated for {agent_id}.[/green]")
-
-    budget = storage.get_agent_budget(agent_id)
-    if not budget:
-        console.print(f"[yellow]No budget set for {agent_id}.[/yellow]")
-        return
-
-    info = f"Token Limit: {budget.get('token_limit', 'unlimited')}\n"
-    info += f"Token Used: {budget.get('token_used', 0)}\n"
-    info += f"Cost Limit: {budget.get('cost_limit_cents', 'unlimited')}\u00a2\n"
-    info += f"Cost Used: {budget.get('cost_used_cents', 0)}\u00a2"
-    console.print(Panel(info, title=f"Budget: {agent_id}", border_style="green"))
-
-
-@agent.command("suspend")
-@click.argument("agent_id")
-@click.option("--reason", default="manual", help="Reason for suspension")
-def agent_suspend(agent_id: str, reason: str) -> None:
-    """Suspend an active agent."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-    agent_obj = storage.get_agent(agent_id)
-    if not agent_obj:
-        console.print(f"[red]Agent not found: {agent_id}[/red]")
-        return
-
-    storage.suspend_agent(agent_id)
-    storage.append_audit_log(
-        agent_obj["project_id"],
-        "agent_suspended",
-        "success",
-        agent_id=agent_id,
-        details=reason,
-    )
-    console.print(f"[yellow]Agent {agent_id} suspended. Reason: {reason}[/yellow]")
-
-
-@agent.command("performance")
-@click.argument("agent_id", required=False)
-def agent_performance(agent_id: str | None) -> None:
-    """Show agent performance metrics."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-    project = storage.get_most_recent_project()
-    if not project:
-        console.print("[red]No project found.[/red]")
-        return
-
-    if agent_id:
-        perf = storage.compute_agent_performance(agent_id)
-        console.print(f"Agent: {agent_id}")
-        console.print(f"  Completed: {perf.get('total_completed', 0)}")
-        console.print(f"  Failed: {perf.get('total_failed', 0)}")
-        console.print(f"  Quality: {perf.get('overall_quality', 'N/A')}")
-        console.print(f"  Sprints: {perf.get('sprint_count', 0)}")
-    else:
-        agents = storage.list_agents(project["id"])
-        table = Table(title="Agent Performance")
-        table.add_column("Agent", style="cyan")
-        table.add_column("Score")
-        table.add_column("Status")
-        for a in agents:
-            score = (
-                f"{a.get('performance_score', 50.0):.0f}"
-                if a.get("performance_score") is not None
-                else "-"
-            )
-            table.add_row(a["id"], score, a["status"])
-        console.print(table)
-
-
-@agent.command("team")
-@click.argument("team_id", required=False, type=int)
-def agent_team(team_id: int | None) -> None:
-    """Show team composition."""
-    from a_sdlc.storage import HybridStorage
-
-    storage = HybridStorage()
-    project = storage.get_most_recent_project()
-    if not project:
-        console.print("[red]No project found.[/red]")
-        return
-
-    if team_id:
-        try:
-            team = storage.get_team_composition(team_id)
-            console.print(f"[bold]Team: {team['name']}[/bold]")
-            console.print(f"Lead: {team.get('lead_agent_id', 'None')}")
-            table = Table(title="Members")
-            table.add_column("Agent ID", style="cyan")
-            table.add_column("Name")
-            table.add_column("Persona")
-            table.add_column("Status")
-            for m in team.get("members", []):
-                table.add_row(m["id"], m["display_name"], m["persona_type"], m["status"])
-            console.print(table)
-        except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
-    else:
-        teams = storage.list_agent_teams(project["id"])
-        if not teams:
-            console.print("[yellow]No teams found.[/yellow]")
-            return
-        table = Table(title="Agent Teams")
-        table.add_column("ID")
-        table.add_column("Name")
-        table.add_column("Lead")
-        for t in teams:
-            table.add_row(str(t["id"]), t["name"], t.get("lead_agent_id", ""))
-        console.print(table)
 
 
 @main.group()
@@ -7199,6 +5530,465 @@ def quality_waive(req_id: str, reason: str, sprint_id: str | None) -> None:
         },
     )
     console.print(f"[green]Requirement {req_id} waived. Reason: {reason}[/green]")
+
+
+# =============================================================================
+# Server Log Viewer
+# =============================================================================
+
+_SERVER_LOG_PATH = Path.home() / ".a-sdlc" / "server.log"
+
+_LOG_LEVEL_COLORS: dict[str, str] = {
+    "DEBUG": "blue",
+    "INFO": "green",
+    "WARNING": "yellow",
+    "ERROR": "red",
+    "CRITICAL": "red",
+}
+
+_LOG_LEVEL_PRIORITY: dict[str, int] = {
+    "DEBUG": 10,
+    "INFO": 20,
+    "WARNING": 30,
+    "ERROR": 40,
+    "CRITICAL": 50,
+}
+
+
+def _format_log_line(line: str, level_filter: str | None) -> str | None:
+    """Parse a JSON log line and return a formatted string, or None to skip.
+
+    Non-JSON lines are returned as-is (dimmed) unless a level filter is active.
+    """
+    line = line.rstrip()
+    if not line:
+        return None
+
+    try:
+        entry = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        # Non-JSON line (old format) — show as-is unless filtering by level
+        if level_filter:
+            return None
+        return click.style(line, dim=True)
+
+    level = entry.get("level", "INFO").upper()
+
+    # Apply level filter
+    if level_filter:
+        min_priority = _LOG_LEVEL_PRIORITY.get(level_filter.upper(), 0)
+        line_priority = _LOG_LEVEL_PRIORITY.get(level, 0)
+        if line_priority < min_priority:
+            return None
+
+    ts = entry.get("ts", "")
+    # Shorten ISO timestamp for display: keep date + time, drop timezone offset
+    if ts and "T" in ts:
+        ts = ts.replace("T", " ")
+        # Strip trailing +00:00 or Z
+        if ts.endswith("+00:00"):
+            ts = ts[:-6]
+        elif ts.endswith("Z"):
+            ts = ts[:-1]
+
+    event = entry.get("event", "")
+    color = _LOG_LEVEL_COLORS.get(level, "white")
+    level_tag = click.style(f"[{level:<7s}]", fg=color)
+    ts_tag = click.style(ts, dim=True)
+
+    parts = [ts_tag, level_tag, event]
+
+    # Append extra structured fields
+    tool = entry.get("tool")
+    if tool:
+        parts.append(click.style(f"tool={tool}", dim=True))
+    duration = entry.get("duration_ms")
+    if duration is not None:
+        parts.append(click.style(f"{duration}ms", dim=True))
+    status = entry.get("status")
+    if status:
+        parts.append(click.style(f"status={status}", dim=True))
+    error_msg = entry.get("error_message")
+    if error_msg:
+        parts.append(click.style(f"err={error_msg}", fg="red"))
+
+    return " ".join(parts)
+
+
+@main.command("logs")
+@click.option(
+    "--follow", "-f", is_flag=True, help="Stream new log entries in real-time"
+)
+@click.option(
+    "--level",
+    "-l",
+    "level_filter",
+    type=click.Choice(["debug", "info", "warning", "error"], case_sensitive=False),
+    default=None,
+    help="Minimum log level to display",
+)
+@click.option(
+    "--lines",
+    "-n",
+    "num_lines",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Number of recent lines to show",
+)
+def logs_cmd(follow: bool, level_filter: str | None, num_lines: int) -> None:
+    """View server log entries with optional filtering and streaming.
+
+    Reads JSON-formatted log entries from ~/.a-sdlc/server.log and displays
+    them with color-coded severity levels.
+
+    Examples:
+
+    \b
+        a-sdlc logs                  # Show last 50 entries
+        a-sdlc logs -n 100           # Show last 100 entries
+        a-sdlc logs --level error    # Show only ERROR and above
+        a-sdlc logs --follow         # Stream new entries (Ctrl+C to stop)
+        a-sdlc logs -f -l warning    # Stream warnings and errors
+    """
+    log_file = _SERVER_LOG_PATH
+
+    if not log_file.exists():
+        click.echo(
+            f"No log file found at {log_file}\n"
+            "The server log is created when the MCP server runs.\n"
+            "Start the server with: a-sdlc serve"
+        )
+        return
+
+    # Read and display the last N lines
+    try:
+        with open(log_file) as f:
+            all_lines = f.readlines()
+    except OSError as e:
+        click.echo(f"Error reading log file: {e}", err=True)
+        sys.exit(1)
+
+    if not all_lines:
+        click.echo("Log file is empty.")
+        return
+
+    tail_lines = all_lines[-num_lines:] if len(all_lines) > num_lines else all_lines
+    displayed = 0
+    for line in tail_lines:
+        formatted = _format_log_line(line, level_filter)
+        if formatted is not None:
+            click.echo(formatted)
+            displayed += 1
+
+    if displayed == 0 and level_filter:
+        click.echo(
+            f"No log entries found at level '{level_filter.upper()}' or above."
+        )
+
+    if not follow:
+        return
+
+    # Follow mode: poll for new lines
+    click.echo(click.style("--- following (Ctrl+C to stop) ---", dim=True))
+    import time
+
+    try:
+        with open(log_file) as f:
+            # Seek to end of file
+            f.seek(0, 2)
+            while True:
+                new_line = f.readline()
+                if new_line:
+                    formatted = _format_log_line(new_line, level_filter)
+                    if formatted is not None:
+                        click.echo(formatted)
+                else:
+                    time.sleep(0.5)
+    except KeyboardInterrupt:
+        click.echo(click.style("\nStopped.", dim=True))
+
+
+# =============================================================================
+# Database migration commands
+# =============================================================================
+
+
+def _get_alembic_config() -> "AlembicConfig":
+    """Build an Alembic Config pointing at the package's alembic directory.
+
+    The alembic.ini lives at the project/package root. We resolve it
+    relative to *this* file so it works regardless of the user's cwd.
+    The database URL is injected from ``StorageConfig`` so that
+    environment variables, project config, and global config are
+    respected.
+    """
+    import alembic.config
+
+    from a_sdlc.core.storage_config import load_storage_config
+
+    # alembic.ini is at the repo root (two levels up from src/a_sdlc/)
+    package_dir = Path(__file__).resolve().parent  # src/a_sdlc/
+    repo_root = package_dir.parent.parent  # repo root
+    ini_path = repo_root / "alembic.ini"
+
+    if not ini_path.exists():
+        # Fallback: check if installed as a package (alembic dir might be
+        # located relative to site-packages or via importlib)
+        import importlib.resources
+
+        try:
+            ref = importlib.resources.files("a_sdlc").joinpath("../../alembic.ini")
+            ini_path = Path(str(ref))
+        except (TypeError, FileNotFoundError):
+            pass
+
+    cfg = alembic.config.Config(str(ini_path))
+
+    # Override the script_location to an absolute path so Alembic finds
+    # the migrations regardless of the user's cwd.
+    script_dir = ini_path.parent / "alembic"
+    cfg.set_main_option("script_location", str(script_dir))
+
+    # Inject database URL from StorageConfig
+    try:
+        storage_config = load_storage_config(validate=False)
+        cfg.set_main_option("sqlalchemy.url", storage_config.database_url)
+    except Exception:
+        pass  # Fall through to alembic.ini default
+
+    return cfg
+
+
+def _check_server_running() -> bool:
+    """Check if the MCP server is running.
+
+    Returns True if a running server was detected via PID file.
+    """
+    try:
+        from a_sdlc.server import _MCP_PID_FILE
+    except ImportError:
+        return False
+
+    if not _MCP_PID_FILE.exists():
+        return False
+
+    try:
+        pid = int(_MCP_PID_FILE.read_text().strip())
+        import os as _os
+
+        _os.kill(pid, 0)  # Check if process is alive
+        return True
+    except (ValueError, OSError, ProcessLookupError):
+        return False
+
+
+@main.group()
+def db() -> None:
+    """Database migration management.
+
+    Manage Alembic database migrations for the a-sdlc storage layer.
+
+    \b
+      a-sdlc db status     Show current migration state
+      a-sdlc db migrate    Apply pending migrations
+      a-sdlc db rollback   Revert migrations
+    """
+    pass
+
+
+@db.command("status")
+def db_status() -> None:
+    """Show current database migration state.
+
+    Displays the current Alembic revision, the latest available
+    revision (head), and the number of pending migrations.
+
+    Examples:
+
+    \b
+        a-sdlc db status
+    """
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+
+    from a_sdlc.core.storage_config import load_storage_config
+
+    try:
+        storage_config = load_storage_config(validate=False)
+    except Exception as exc:
+        console.print(f"[red]Failed to load storage config: {exc}[/red]")
+        sys.exit(1)
+
+    db_url = storage_config.database_url
+    console.print(f"[dim]Database: {db_url}[/dim]")
+    console.print()
+
+    try:
+        cfg = _get_alembic_config()
+        script = ScriptDirectory.from_config(cfg)
+    except Exception as exc:
+        console.print(f"[red]Failed to load Alembic configuration: {exc}[/red]")
+        sys.exit(1)
+
+    # Get head revision(s)
+    heads = script.get_heads()
+    head_rev = heads[0] if heads else None
+
+    # Connect and get current revision
+    try:
+        engine = create_engine(db_url)
+        with engine.connect() as conn:
+            context = MigrationContext.configure(conn)
+            current_rev = context.get_current_revision()
+        engine.dispose()
+    except Exception as exc:
+        console.print(f"[red]Failed to connect to database: {exc}[/red]")
+        sys.exit(1)
+
+    # Count pending migrations
+    pending = 0
+    if current_rev != head_rev:
+        try:
+            if current_rev is None:
+                # All migrations are pending
+                pending = len(list(script.walk_revisions()))
+            else:
+                # Count revisions between current and head
+                for _rev in script.walk_revisions(head_rev, current_rev):
+                    if _rev.revision != current_rev:
+                        pending += 1
+        except Exception:
+            pending = -1  # Unknown
+
+    # Display status
+    current_display = current_rev[:12] if current_rev else "[yellow]None (not initialized)[/yellow]"
+    head_display = head_rev[:12] if head_rev else "[yellow]None[/yellow]"
+
+    status_color = "green" if current_rev == head_rev else "yellow"
+    status_text = "Up to date" if current_rev == head_rev else f"{pending} pending"
+
+    console.print(
+        Panel(
+            f"Current revision: [cyan]{current_display}[/cyan]\n"
+            f"Head revision:    [cyan]{head_display}[/cyan]\n"
+            f"Status:           [{status_color}]{status_text}[/{status_color}]",
+            title="[bold]Migration Status[/bold]",
+            border_style="blue",
+        )
+    )
+
+
+@db.command("migrate")
+@click.option(
+    "--revision",
+    "-r",
+    default="head",
+    show_default=True,
+    help="Target revision to migrate to",
+)
+def db_migrate(revision: str) -> None:
+    """Apply pending database migrations.
+
+    Runs Alembic upgrade to the specified revision (defaults to head,
+    applying all pending migrations).
+
+    Examples:
+
+    \b
+        a-sdlc db migrate              # Apply all pending migrations
+        a-sdlc db migrate -r head      # Same as above
+        a-sdlc db migrate -r abc123    # Migrate to a specific revision
+    """
+    import alembic.command
+
+    if _check_server_running():
+        console.print(
+            "[yellow]Warning: MCP server appears to be running. "
+            "Consider stopping it before running migrations.[/yellow]"
+        )
+        if not click.confirm("Continue anyway?", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    try:
+        cfg = _get_alembic_config()
+    except Exception as exc:
+        console.print(f"[red]Failed to load Alembic configuration: {exc}[/red]")
+        sys.exit(1)
+
+    console.print(f"[bold]Migrating database to revision: {revision}[/bold]")
+
+    try:
+        alembic.command.upgrade(cfg, revision)
+        console.print(f"[green]Successfully migrated to {revision}.[/green]")
+    except Exception as exc:
+        console.print(f"[red]Migration failed: {exc}[/red]")
+        sys.exit(1)
+
+
+@db.command("rollback")
+@click.option(
+    "--revision",
+    "-r",
+    default="-1",
+    show_default=True,
+    help="Target revision to rollback to (use relative like -1 or absolute revision id)",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+def db_rollback(revision: str, yes: bool) -> None:
+    """Revert database migrations.
+
+    Runs Alembic downgrade to the specified revision. Defaults to
+    reverting exactly one migration step (-1).
+
+    Examples:
+
+    \b
+        a-sdlc db rollback             # Revert one migration step
+        a-sdlc db rollback -r -2       # Revert two steps
+        a-sdlc db rollback -r base     # Revert all migrations
+        a-sdlc db rollback -y          # Skip confirmation
+    """
+    import alembic.command
+
+    if _check_server_running():
+        console.print(
+            "[yellow]Warning: MCP server appears to be running. "
+            "Consider stopping it before running rollback.[/yellow]"
+        )
+        if not click.confirm("Continue anyway?", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    if not yes:
+        console.print(
+            f"[yellow]This will downgrade the database to revision: {revision}[/yellow]"
+        )
+        if not click.confirm("Are you sure?", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    try:
+        cfg = _get_alembic_config()
+    except Exception as exc:
+        console.print(f"[red]Failed to load Alembic configuration: {exc}[/red]")
+        sys.exit(1)
+
+    console.print(f"[bold]Rolling back database to revision: {revision}[/bold]")
+
+    try:
+        alembic.command.downgrade(cfg, revision)
+        console.print(f"[green]Successfully rolled back to {revision}.[/green]")
+    except Exception as exc:
+        console.print(f"[red]Rollback failed: {exc}[/red]")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

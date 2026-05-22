@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}Health Dashboard{% endblock %}
+
+{% block content %}
+<div class="card-header">
+    <h1>Health Dashboard</h1>
+    <span id="health-connection-status" class="badge badge-muted">Connecting...</span>
+</div>
+
+<!-- Status Banner -->
+<div id="health-status-banner" class="health-banner health-banner-{{ status }}" role="status" aria-live="polite">
+    <div class="health-banner-indicator"></div>
+    <div class="health-banner-text">
+        <strong>Server Status: {{ status_label }}</strong>
+        <span class="health-banner-detail">{{ status_detail }}</span>
+    </div>
+</div>
+
+<!-- Metrics Cards -->
+<div class="stats-grid" id="health-metrics">
+    <div class="stat-card">
+        <div class="stat-value" id="metric-uptime">{{ metrics.uptime }}</div>
+        <div class="stat-label">Uptime</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="metric-memory">{{ metrics.memory_mb }} MB</div>
+        <div class="stat-label">Memory Usage</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="metric-connections">{{ metrics.active_connections }}</div>
+        <div class="stat-label">Active Connections</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value {% if metrics.error_count > 0 %}status-failed{% endif %}" id="metric-errors">{{ metrics.error_count }}</div>
+        <div class="stat-label">Errors (last hour)</div>
+    </div>
+</div>
+
+<style>
+    /* Health Banner */
+    .health-banner {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem 1.25rem;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        border: 1px solid var(--border);
+    }
+    .health-banner-indicator {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        animation: pulse 2s infinite;
+    }
+    .health-banner-text {
+        display: flex;
+        flex-direction: column;
+        gap: 0.125rem;
+    }
+    .health-banner-detail {
+        font-size: 0.875rem;
+        color: var(--text-muted);
+    }
+
+    .health-banner-healthy {
+        background: rgba(63, 185, 80, 0.08);
+        border-color: rgba(63, 185, 80, 0.3);
+    }
+    .health-banner-healthy .health-banner-indicator {
+        background: var(--success);
+        box-shadow: 0 0 8px rgba(63, 185, 80, 0.5);
+    }
+
+    .health-banner-degraded {
+        background: rgba(210, 153, 34, 0.08);
+        border-color: rgba(210, 153, 34, 0.3);
+    }
+    .health-banner-degraded .health-banner-indicator {
+        background: var(--warning);
+        box-shadow: 0 0 8px rgba(210, 153, 34, 0.5);
+    }
+
+    .health-banner-unhealthy {
+        background: rgba(248, 81, 73, 0.08);
+        border-color: rgba(248, 81, 73, 0.3);
+    }
+    .health-banner-unhealthy .health-banner-indicator {
+        background: var(--danger);
+        box-shadow: 0 0 8px rgba(248, 81, 73, 0.5);
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+</style>
+
+<script>
+(function() {
+    var ws = null;
+    var reconnectDelay = 1000;
+    var maxReconnectDelay = 30000;
+    var statusEl = document.getElementById('health-connection-status');
+
+    function connectWebSocket() {
+        var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var wsUrl = protocol + '//' + window.location.host + '/ws/health';
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = function() {
+            reconnectDelay = 1000;
+            if (statusEl) {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'badge badge-success';
+            }
+        };
+
+        ws.onmessage = function(event) {
+            try {
+                var data = JSON.parse(event.data);
+                updateDashboard(data);
+            } catch (e) {
+                console.error('Failed to parse health data:', e);
+            }
+        };
+
+        ws.onclose = function() {
+            if (statusEl) {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'badge badge-danger';
+            }
+            scheduleReconnect();
+        };
+
+        ws.onerror = function() {
+            if (statusEl) {
+                statusEl.textContent = 'Error';
+                statusEl.className = 'badge badge-danger';
+            }
+        };
+    }
+
+    function scheduleReconnect() {
+        setTimeout(function() {
+            if (statusEl) {
+                statusEl.textContent = 'Reconnecting...';
+                statusEl.className = 'badge badge-warning';
+            }
+            connectWebSocket();
+            reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+        }, reconnectDelay);
+    }
+
+    function updateDashboard(data) {
+        if (data.type !== 'health_update') return;
+
+        // Update status banner
+        var banner = document.getElementById('health-status-banner');
+        if (banner && data.status) {
+            banner.className = 'health-banner health-banner-' + data.status;
+            var textEl = banner.querySelector('.health-banner-text strong');
+            if (textEl) textEl.textContent = 'Server Status: ' + (data.status_label || data.status);
+            var detailEl = banner.querySelector('.health-banner-detail');
+            if (detailEl) detailEl.textContent = data.status_detail || '';
+        }
+
+        // Update metrics
+        if (data.metrics) {
+            var m = data.metrics;
+            updateText('metric-uptime', m.uptime);
+            updateText('metric-memory', m.memory_mb + ' MB');
+            updateText('metric-connections', m.active_connections);
+            var errEl = document.getElementById('metric-errors');
+            if (errEl) {
+                errEl.textContent = m.error_count;
+                if (m.error_count > 0) {
+                    errEl.classList.add('status-failed');
+                } else {
+                    errEl.classList.remove('status-failed');
+                }
+            }
+        }
+    }
+
+    function updateText(id, value) {
+        var el = document.getElementById(id);
+        if (el && value !== undefined) el.textContent = value;
+    }
+
+    // Start connection
+    connectWebSocket();
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', function() {
+        if (ws) ws.close();
+    });
+})();
+</script>
+{% endblock %}
