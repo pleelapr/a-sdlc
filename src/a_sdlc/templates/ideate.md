@@ -486,12 +486,8 @@ After all PRDs are processed, display:
 🅿️ Parking Lot (deferred ideas):
 - {Idea} — {reason deferred}
 
-🔗 Next steps:
-- Review PRDs: /sdlc:prd-list
-- Refine a PRD: /sdlc:prd-update "{prd-id}"
-- Design architecture: /sdlc:prd-architect "{prd-id}"  ← recommended before splitting
-- Split into tasks: /sdlc:prd-split "{prd-id}"
-- Investigate feasibility: /sdlc:prd-investigate "{prd-id}"
+🔗 Next step:
+- Design architecture: /sdlc:prd-architect "{prd-id}"  ← required before splitting into tasks
 ```
 
 ## ⛔ STOP HERE
@@ -500,9 +496,10 @@ After all PRDs are processed, display:
 
 The user must explicitly run one of these commands to continue:
 - `/sdlc:prd-update` — To refine a PRD
-- `/sdlc:prd-architect` — To design architecture before splitting (recommended next step)
-- `/sdlc:prd-split` — To create tasks from a PRD (run architect first)
+- `/sdlc:prd-architect` — To design architecture (**required** before splitting into tasks)
 - `/sdlc:prd-investigate` — To validate a PRD against the codebase
+
+**Do NOT suggest `/sdlc:prd-split` directly.** The architecture step (`/sdlc:prd-architect`) is a required prerequisite before splitting a PRD into tasks.
 
 **Wait for user's next instruction.**
 

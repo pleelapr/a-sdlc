@@ -809,11 +809,8 @@ After the challenge completes:
 - 3 acceptance criteria
 - 2 affected components
 
-🔗 Next steps for user:
-- View PRD: /sdlc:prd-list
-- Mark ready: /sdlc:prd-update "feature-auth" --status ready
-- Design architecture: /sdlc:prd-architect "feature-auth"  ← recommended before splitting
-- Split into tasks: /sdlc:prd-split "feature-auth"
+🔗 Next step:
+- Design architecture: /sdlc:prd-architect "feature-auth"  ← required before splitting into tasks
 ```
 
 ## ⛔ STOP HERE
@@ -821,10 +818,11 @@ After the challenge completes:
 **Do NOT proceed further.** The PRD generation workflow is complete.
 
 The user must explicitly run one of these commands to continue:
-- `/sdlc:prd-update` - To edit the PRD
-- `/sdlc:prd-architect` - To design architecture before splitting (recommended next step)
-- `/sdlc:prd-split` - To create tasks from the PRD (run architect first)
-- `/sdlc:investigate` - To analyze codebase before splitting
+- `/sdlc:prd-update` — To edit the PRD
+- `/sdlc:prd-architect` — To design architecture (**required** before splitting into tasks)
+- `/sdlc:investigate` — To analyze codebase before architecture design
+
+**Do NOT suggest `/sdlc:prd-split` directly.** The architecture step (`/sdlc:prd-architect`) is a required prerequisite before splitting a PRD into tasks.
 
 **Wait for user's next instruction.**
 
@@ -941,10 +939,8 @@ User selects: **Cost metrics + Latency benchmarks + Integration tests**, **Promp
 - 3 acceptance criteria
 - 3 affected components
 
-🔗 Next steps for user:
-- View: /sdlc:prd-list
-- Design architecture: /sdlc:prd-architect "model-downgrade-gpt4"  ← recommended before splitting
-- Split: /sdlc:prd-split "model-downgrade-gpt4"
+🔗 Next step:
+- Design architecture: /sdlc:prd-architect "model-downgrade-gpt4"  ← required before splitting into tasks
 ```
 
 ## MCP Tools Used
@@ -974,4 +970,4 @@ New PRDs are created with status `draft`. Use `/sdlc:prd-update` to change statu
 - PRDs can optionally be assigned to a sprint after creation
 - **PRD Creation Only:** This skill creates PRD documents ONLY.
   It does NOT split into tasks or implement features.
-  Use `/sdlc:prd-architect` to design architecture, then `/sdlc:prd-split` to create tasks.
+  The required next step is `/sdlc:prd-architect` to design architecture, then `/sdlc:prd-split` to create tasks.
