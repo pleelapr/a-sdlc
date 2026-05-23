@@ -47,7 +47,12 @@ This skill launches subagents to execute a-sdlc tasks. Key distinction:
 ### 1. Validate Sprint & Detect Mode
 
 1. Use `mcp__asdlc__get_sprint(sprint_id)` to get sprint details
-2. Verify status is ACTIVE
+2. If status is `planned`, auto-activate it:
+   ```
+   mcp__asdlc__update_sprint(sprint_id=sprint_id, status="active")
+   ```
+   Display: `Sprint {sprint_id} auto-activated (was planned).`
+3. If status is `completed`, STOP with error: "Sprint is already completed. Create a new sprint."
 3. Use `mcp__asdlc__get_sprint_tasks(sprint_id, group_by_prd=True)` to load tasks grouped by PRD
 4. **Check git safety configuration** before deciding on isolated mode:
    ```
