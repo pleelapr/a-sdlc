@@ -376,7 +376,7 @@ def split_prd(
 
             # Check if file was pre-written (multi-agent workflow)
             file_path = content_mgr.get_task_path(pid, task_id)
-            file_existed = file_path.exists()
+            file_existed = content_mgr._backend.exists(str(file_path))
 
             if file_existed:
                 # File was pre-written by Content Generation Agent
@@ -444,15 +444,17 @@ def split_prd(
             # Ensure requirements are parsed for this PRD
             existing_reqs = db.get_requirements(prd_id)
             if not existing_reqs:
-                # Auto-parse requirements from PRD content
+                # Auto-parse requirements from PRD content via backend
                 prd_data = db.get_prd(prd_id)
                 prd_file = (
                     prd_data.get("file_path", "") if prd_data else ""
                 )
-                if prd_file and Path(prd_file).exists():
-                    prd_content = Path(prd_file).read_text(
-                        encoding="utf-8"
-                    )
+                prd_content = (
+                    content_mgr.read_content(prd_file)
+                    if prd_file
+                    else None
+                )
+                if prd_content:
                     _server._auto_parse_requirements(db, prd_id, prd_content)
                     existing_reqs = db.get_requirements(prd_id)
 

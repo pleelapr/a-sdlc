@@ -2932,16 +2932,12 @@ class TestSplitPrdAutoLinkage:
         db.link_task_requirement.return_value = {}
         db.get_coverage_stats.return_value = {"total": 1, "linked": 1, "orphaned": 0, "by_type": {}}
         db.get_orphaned_requirements.return_value = []
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write("## Requirements\n**FR-001**: Users can log in\n")
-            prd_file = f.name
-        try:
-            db.get_prd.return_value = {"id": "P-001", "file_path": prd_file}
-            result = split_prd(prd_id="P-001", task_specs=[{"title": "T1", "traces_to": ["FR-001"]}])
-            assert result["status"] == "success"
-            db.upsert_requirement.assert_called()
-        finally:
-            Path(prd_file).unlink(missing_ok=True)
+        prd_content = "## Requirements\n**FR-001**: Users can log in\n"
+        db.get_prd.return_value = {"id": "P-001", "file_path": "content/proj/prds/P-001.md"}
+        cm.read_content.return_value = prd_content
+        result = split_prd(prd_id="P-001", task_specs=[{"title": "T1", "traces_to": ["FR-001"]}])
+        assert result["status"] == "success"
+        db.upsert_requirement.assert_called()
 
 
 class TestCrossPrdRecommendations:
