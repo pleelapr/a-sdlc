@@ -131,8 +131,9 @@ def storage(db_backend):
     """Create a HybridStorage instance using the parametrized database backend.
 
     For SQLite, uses base_path mode (which creates its own Database instance).
-    For PostgreSQL (SessionDatabase), passes the pre-built db instance
-    along with a local ContentManager so the same tests exercise the ORM layer.
+    For PostgreSQL (SessionDatabase), uses base_path mode for initial setup,
+    then swaps the internal ``_db`` to the SessionDatabase instance so the
+    same tests exercise the ORM layer.
 
     The returned storage has an additional ``_test_backend`` attribute set to
     the backend name ("sqlite" or "postgresql") for tests that need to handle
@@ -141,14 +142,9 @@ def storage(db_backend):
     tmp_path = db_backend["tmp_path"]
 
     if db_backend["backend"] == "postgresql":
-        content_mgr = ContentManager(base_path=tmp_path / "storage" / "content")
-        s = HybridStorage(
-            db=db_backend["db"],
-            content_mgr=content_mgr,
-        )
-        # Override _base_path for templates and other base_path-dependent logic
-        s._base_path = tmp_path / "storage"
-        s._base_path.mkdir(parents=True, exist_ok=True)
+        # Use base_path mode for setup, then swap DB to SessionDatabase
+        s = HybridStorage(base_path=tmp_path / "storage")
+        s._db = db_backend["db"]
         s._test_backend = "postgresql"
         yield s
     else:

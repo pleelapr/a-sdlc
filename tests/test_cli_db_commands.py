@@ -896,7 +896,7 @@ class TestDbImport:
             )
             mock_importer.return_value = mock_instance
 
-            result = runner.invoke(
+            runner.invoke(
                 main,
                 [
                     "db",

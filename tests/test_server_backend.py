@@ -76,9 +76,9 @@ class TestInitStorageBackend:
         mock_config = MagicMock(spec=StorageConfig)
         mock_config.is_postgresql = False
         mock_config.database_url = "sqlite:///test/data.db"
-        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config):
-            with pytest.raises(StorageConfigError, match="PostgreSQL is required"):
-                _init_storage_backend()
+        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
+             pytest.raises(StorageConfigError, match="PostgreSQL is required"):
+            _init_storage_backend()
 
     def test_postgresql_backend_triggers_migration(self):
         """PostgreSQL config triggers auto-migration."""

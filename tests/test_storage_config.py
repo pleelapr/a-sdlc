@@ -316,9 +316,9 @@ class TestLoadStorageConfigDefaults:
 
     def test_no_config_files_raises_without_database_url(self, clean_env):
         """Without any config files or env vars, raises StorageConfigError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
-                load_storage_config(Path(tmpdir))
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
+            load_storage_config(Path(tmpdir))
 
     def test_config_yaml_without_storage_section_raises(self, clean_env):
         """A config.yaml with no storage section raises StorageConfigError."""
@@ -671,9 +671,9 @@ class TestLoadStorageConfigValidation:
 
     def test_no_database_url_raises_before_validation(self, clean_env):
         """Missing database_url raises in __post_init__ even with validate=False."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
-                load_storage_config(Path(tmpdir), validate=False)
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
+            load_storage_config(Path(tmpdir), validate=False)
 
 
 # =============================================================================
@@ -686,9 +686,9 @@ class TestLoadStorageConfigErrorHandling:
 
     def test_missing_config_file_raises(self, clean_env):
         """Missing config file with no database_url raises StorageConfigError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
-                load_storage_config(Path(tmpdir))
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
+            load_storage_config(Path(tmpdir))
 
     def test_missing_config_file_with_env_database_url(self, clean_env):
         """Missing config file succeeds when database_url is in env."""
@@ -958,9 +958,9 @@ class TestGetStorageConfig:
 
     def test_raises_without_database_url(self, clean_env):
         """get_storage_config raises StorageConfigError when no database_url."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
-                get_storage_config(Path(tmpdir))
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
+            get_storage_config(Path(tmpdir))
 
 
 # =============================================================================
@@ -973,9 +973,9 @@ class TestRequiredDatabaseUrl:
 
     def test_no_config_yaml_at_all_raises(self, clean_env):
         """A project with no config.yaml and no env var raises StorageConfigError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
-                load_storage_config(Path(tmpdir))
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             pytest.raises(StorageConfigError, match="A_SDLC_DATABASE_URL is required"):
+            load_storage_config(Path(tmpdir))
 
     def test_config_yaml_without_storage_section_raises(self, clean_env):
         """A config.yaml with no storage section raises StorageConfigError."""
