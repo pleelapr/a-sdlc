@@ -55,6 +55,9 @@ class TestContentBackendABC:
             def list_content(self, d: str, suffix: str = ".md") -> list[str]:
                 return []
 
+            def list_content_recursive(self, prefix: str, suffix: str = ".md") -> list[str]:
+                return []
+
             def exists(self, fp: str) -> bool:
                 return False
 

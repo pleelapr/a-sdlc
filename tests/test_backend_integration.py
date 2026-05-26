@@ -1511,9 +1511,10 @@ class TestMigrationRoundTrip:
         # 3. Target: a fresh in-memory SQLite via SessionDatabase
         target_db_path = tmp_path / "target.db"
         target_url = f"sqlite:///{target_db_path}"
+        source_url = f"sqlite:///{source_db_path}"
 
         importer = DataImporter(
-            source_db_path=source_db_path,
+            source_url=source_url,
             target_url=target_url,
         )
         result = importer.run()

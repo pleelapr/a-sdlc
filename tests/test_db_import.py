@@ -28,9 +28,12 @@ from a_sdlc.core.db_import import (
     _get_source_tables,
     _is_target_empty,
     _row_to_model,
+    count_content_files,
+    get_source_summary,
 )
-from a_sdlc.core.engine import reset_engine_cache
+from a_sdlc.core.engine import get_engine, reset_engine_cache
 from a_sdlc.core.models import ALL_MODELS, Project, SchemaVersion, Task
+from a_sdlc.core.storage_config import StorageConfig
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -47,7 +50,10 @@ def _clean_engine_cache():
 
 @pytest.fixture
 def source_db(tmp_path):
-    """Create a source SQLite database with sample data using the Database class."""
+    """Create a source SQLite database with sample data using the Database class.
+
+    Yields (source_url, db) where source_url is a SQLAlchemy URL.
+    """
     db_path = tmp_path / "source" / "data.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(db_path=db_path)
@@ -81,7 +87,8 @@ def source_db(tmp_path):
         file_path="/tmp/tasks/TEST-T00002.md",
     )
 
-    yield db_path, db
+    source_url = f"sqlite:///{db_path}"
+    yield source_url, db
 
 
 @pytest.fixture
@@ -116,55 +123,58 @@ class TestSourceHelpers:
     """Tests for source database helper functions."""
 
     def test_get_source_schema_version(self, source_db):
-        db_path, _ = source_db
-        conn = sqlite3.connect(str(db_path))
-        version = _get_source_schema_version(conn)
+        source_url, _ = source_db
+        config = StorageConfig(database_url=source_url)
+        engine = get_engine(config)
+        version = _get_source_schema_version(engine)
         assert version == SCHEMA_VERSION
-        conn.close()
 
     def test_get_source_schema_version_no_table(self, tmp_path):
         db_path = tmp_path / "empty.db"
         conn = sqlite3.connect(str(db_path))
         conn.execute("CREATE TABLE dummy (id INTEGER)")
-        version = _get_source_schema_version(conn)
-        assert version is None
+        conn.commit()
         conn.close()
+        config = StorageConfig(database_url=f"sqlite:///{db_path}")
+        engine = get_engine(config)
+        version = _get_source_schema_version(engine)
+        assert version is None
 
     def test_get_source_tables(self, source_db):
-        db_path, _ = source_db
-        conn = sqlite3.connect(str(db_path))
-        tables = _get_source_tables(conn)
+        source_url, _ = source_db
+        config = StorageConfig(database_url=source_url)
+        engine = get_engine(config)
+        tables = _get_source_tables(engine)
         assert "projects" in tables
         assert "tasks" in tables
         assert "sprints" in tables
         assert "prds" in tables
         assert "schema_version" in tables
-        conn.close()
 
     def test_get_source_row_count(self, source_db):
-        db_path, _ = source_db
-        conn = sqlite3.connect(str(db_path))
-        count = _get_source_row_count(conn, "tasks")
+        source_url, _ = source_db
+        config = StorageConfig(database_url=source_url)
+        engine = get_engine(config)
+        count = _get_source_row_count(engine, "tasks")
         assert count == 2
-        conn.close()
 
     def test_get_source_rows(self, source_db):
-        db_path, _ = source_db
-        conn = sqlite3.connect(str(db_path))
-        rows = _get_source_rows(conn, "projects")
+        source_url, _ = source_db
+        config = StorageConfig(database_url=source_url)
+        engine = get_engine(config)
+        rows = _get_source_rows(engine, "projects")
         assert len(rows) == 1
         assert rows[0]["id"] == "proj-001"
         assert rows[0]["name"] == "Test Project"
-        conn.close()
 
     def test_get_source_rows_returns_dicts(self, source_db):
-        db_path, _ = source_db
-        conn = sqlite3.connect(str(db_path))
-        rows = _get_source_rows(conn, "tasks")
+        source_url, _ = source_db
+        config = StorageConfig(database_url=source_url)
+        engine = get_engine(config)
+        rows = _get_source_rows(engine, "tasks")
         assert isinstance(rows, list)
         assert all(isinstance(r, dict) for r in rows)
         assert len(rows) == 2
-        conn.close()
 
 
 class TestRowToModel:
@@ -242,9 +252,7 @@ class TestImportOrder:
         assert IMPORT_ORDER.index("tasks") < IMPORT_ORDER.index("reviews")
 
     def test_requirements_before_links(self):
-        assert IMPORT_ORDER.index("requirements") < IMPORT_ORDER.index(
-            "requirement_links"
-        )
+        assert IMPORT_ORDER.index("requirements") < IMPORT_ORDER.index("requirement_links")
 
 
 # ---------------------------------------------------------------------------
@@ -256,9 +264,9 @@ class TestPreflightChecks:
     """Tests for DataImporter.preflight()."""
 
     def test_preflight_passes_with_valid_source(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
         )
         errors = importer.preflight()
@@ -266,7 +274,7 @@ class TestPreflightChecks:
 
     def test_preflight_fails_source_not_found(self, tmp_path, target_db_url):
         importer = DataImporter(
-            source_db_path=tmp_path / "nonexistent.db",
+            source_url=f"sqlite:///{tmp_path / 'nonexistent.db'}",
             target_url=target_db_url,
         )
         errors = importer.preflight()
@@ -282,7 +290,7 @@ class TestPreflightChecks:
         conn.close()
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=f"sqlite:///{db_path}",
             target_url=target_db_url,
         )
         errors = importer.preflight()
@@ -296,19 +304,19 @@ class TestPreflightChecks:
         conn.close()
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=f"sqlite:///{db_path}",
             target_url=target_db_url,
         )
         errors = importer.preflight()
         assert any("no schema_version" in e for e in errors)
 
     def test_preflight_fails_target_not_empty(self, source_db, tmp_path):
-        db_path, _ = source_db
+        source_url, _ = source_db
         # First, run a successful import
         target_url = f"sqlite:///{tmp_path / 'target1' / 'data.db'}"
         (tmp_path / "target1").mkdir(parents=True)
         importer1 = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
         )
         importer1.run()
@@ -316,19 +324,19 @@ class TestPreflightChecks:
 
         # Now try to import again without --force
         importer2 = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
         )
         errors = importer2.preflight()
         assert any("not empty" in e for e in errors)
 
     def test_preflight_passes_target_not_empty_with_force(self, source_db, tmp_path):
-        db_path, _ = source_db
+        source_url, _ = source_db
         target_url = f"sqlite:///{tmp_path / 'target2' / 'data.db'}"
         (tmp_path / "target2").mkdir(parents=True)
         # First import
         importer1 = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
         )
         importer1.run()
@@ -336,7 +344,7 @@ class TestPreflightChecks:
 
         # Second import with force
         importer2 = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
             force=True,
         )
@@ -344,9 +352,9 @@ class TestPreflightChecks:
         assert errors == []
 
     def test_preflight_migrate_content_no_backend(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
             migrate_content=True,
             target_content_backend=None,
@@ -359,9 +367,9 @@ class TestDataImport:
     """Tests for the full import flow."""
 
     def test_successful_import(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
         )
         result = importer.run()
@@ -372,9 +380,9 @@ class TestDataImport:
         assert result.errors == []
 
     def test_row_counts_match(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
         )
         result = importer.run()
@@ -390,9 +398,9 @@ class TestDataImport:
         assert result.row_counts["prds"]["imported"] == 1
 
     def test_all_counts_match_source_imported(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
         )
         result = importer.run()
@@ -404,33 +412,35 @@ class TestDataImport:
             )
 
     def test_source_not_modified(self, source_db, target_db_url):
-        db_path, db = source_db
+        source_url, db = source_db
         # Record source state
-        conn = sqlite3.connect(str(db_path))
-        original_count = _get_source_row_count(conn, "projects")
-        conn.close()
+        config = StorageConfig(database_url=source_url)
+        engine = get_engine(config)
+        original_count = _get_source_row_count(engine, "projects")
 
+        reset_engine_cache()
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
         )
         importer.run()
 
         # Verify source unchanged
-        conn = sqlite3.connect(str(db_path))
-        after_count = _get_source_row_count(conn, "projects")
-        conn.close()
+        reset_engine_cache()
+        config2 = StorageConfig(database_url=source_url)
+        engine2 = get_engine(config2)
+        after_count = _get_source_row_count(engine2, "projects")
         assert original_count == after_count
 
     def test_import_with_progress_callback(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         callback_calls = []
 
         def callback(table, current, total):
             callback_calls.append((table, current, total))
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
             progress_callback=callback,
         )
@@ -450,7 +460,7 @@ class TestDataImport:
         db.create_project("proj-minimal", "Minimal Project", "/tmp/minimal")
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=f"sqlite:///{db_path}",
             target_url=target_db_url,
         )
         result = importer.run()
@@ -463,13 +473,13 @@ class TestDataImport:
                 assert counts["source"] == counts["imported"]
 
     def test_force_import_overwrites(self, source_db, tmp_path):
-        db_path, _ = source_db
+        source_url, _ = source_db
         target_url = f"sqlite:///{tmp_path / 'force_target' / 'data.db'}"
         (tmp_path / "force_target").mkdir(parents=True)
 
         # First import
         importer1 = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
         )
         result1 = importer1.run()
@@ -478,7 +488,7 @@ class TestDataImport:
 
         # Second import with force
         importer2 = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
             force=True,
         )
@@ -486,14 +496,12 @@ class TestDataImport:
         assert result2.success is True
         # Counts should match (data replaced, not duplicated)
         for tbl, counts in result2.row_counts.items():
-            assert counts["source"] == counts["imported"], (
-                f"Force import mismatch for '{tbl}'"
-            )
+            assert counts["source"] == counts["imported"], f"Force import mismatch for '{tbl}'"
 
     def test_duration_recorded(self, source_db, target_db_url):
-        db_path, _ = source_db
+        source_url, _ = source_db
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
         )
         result = importer.run()
@@ -502,7 +510,7 @@ class TestDataImport:
     def test_preflight_error_raises(self, tmp_path, target_db_url):
         """run() should raise PreflightError when checks fail."""
         importer = DataImporter(
-            source_db_path=tmp_path / "nonexistent.db",
+            source_url=f"sqlite:///{tmp_path / 'nonexistent.db'}",
             target_url=target_db_url,
         )
         with pytest.raises(PreflightError, match="not found"):
@@ -513,12 +521,12 @@ class TestContentMigration:
     """Tests for content file migration."""
 
     def test_content_migration(self, source_db, target_db_url, source_content_dir):
-        db_path, _ = source_db
+        source_url, _ = source_db
         mock_backend = MagicMock()
         mock_backend.write_content.return_value = "ok"
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
             migrate_content=True,
             target_content_backend=mock_backend,
@@ -531,12 +539,12 @@ class TestContentMigration:
         assert mock_backend.write_content.call_count == 2
 
     def test_content_migration_no_source_dir(self, source_db, target_db_url, tmp_path):
-        db_path, _ = source_db
+        source_url, _ = source_db
         mock_backend = MagicMock()
         empty_dir = tmp_path / "empty_content"
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
             migrate_content=True,
             target_content_backend=mock_backend,
@@ -550,12 +558,12 @@ class TestContentMigration:
     def test_content_migration_handles_write_error(
         self, source_db, target_db_url, source_content_dir
     ):
-        db_path, _ = source_db
+        source_url, _ = source_db
         mock_backend = MagicMock()
         mock_backend.write_content.side_effect = Exception("S3 error")
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_db_url,
             migrate_content=True,
             target_content_backend=mock_backend,
@@ -566,6 +574,32 @@ class TestContentMigration:
         # Import succeeds but content migration logs warnings
         assert result.success is True
         assert result.content_files_migrated == 0
+
+    def test_content_migration_from_backend(self, source_db, target_db_url):
+        """Content migration from a source ContentBackend (e.g. S3)."""
+        source_url, _ = source_db
+        source_backend = MagicMock()
+        source_backend.list_content_recursive.return_value = [
+            "proj/prds/P0001.md",
+            "proj/tasks/T00001.md",
+        ]
+        source_backend.read_content.side_effect = ["# PRD Content", "# Task Content"]
+
+        target_backend = MagicMock()
+        target_backend.write_content.return_value = "ok"
+
+        importer = DataImporter(
+            source_url=source_url,
+            target_url=target_db_url,
+            migrate_content=True,
+            target_content_backend=target_backend,
+            source_content_backend=source_backend,
+        )
+        result = importer.run()
+
+        assert result.success is True
+        assert result.content_files_migrated == 2
+        assert target_backend.write_content.call_count == 2
 
 
 class TestImportResult:
@@ -631,12 +665,12 @@ class TestTargetHelpers:
         from a_sdlc.core.engine import get_engine
         from a_sdlc.core.storage_config import StorageConfig
 
-        db_path, _ = source_db
+        source_url, _ = source_db
         target_url = f"sqlite:///{tmp_path / 'notempty' / 'data.db'}"
         (tmp_path / "notempty").mkdir(parents=True)
 
         importer = DataImporter(
-            source_db_path=db_path,
+            source_url=source_url,
             target_url=target_url,
         )
         importer.run()
@@ -645,6 +679,89 @@ class TestTargetHelpers:
         engine = get_engine(config)
         assert _is_target_empty(engine) is False
 
+
+class TestGetSourceSummary:
+    """Tests for get_source_summary() helper."""
+
+    def test_valid_db(self, source_db):
+        source_url, _ = source_db
+        summary = get_source_summary(source_url)
+        assert summary["exists"] is True
+        assert summary["schema_version"] == SCHEMA_VERSION
+        assert summary["type"] == "SQLite"
+        assert summary["projects"] == 1
+        assert summary["tasks"] == 2
+        assert summary["sprints"] == 1
+        assert summary["prds"] == 1
+        assert summary["total_rows"] > 0
+        assert isinstance(summary["tables"], list)
+
+    def test_nonexistent_db(self, tmp_path):
+        summary = get_source_summary(f"sqlite:///{tmp_path / 'nope.db'}")
+        assert summary["exists"] is False
+        assert "schema_version" not in summary
+
+    def test_corrupt_db(self, tmp_path):
+        bad = tmp_path / "corrupt.db"
+        bad.write_bytes(b"not a database")
+        summary = get_source_summary(f"sqlite:///{bad}")
+        assert summary["exists"] is True
+        assert summary["schema_version"] is None
+
+
+class TestCountContentFiles:
+    """Tests for count_content_files() helper."""
+
+    def test_counts_md_files(self, source_content_dir):
+        count = count_content_files(source_content_dir)
+        assert count == 2  # TEST-P0001.md + TEST-T00001.md
+
+    def test_empty_dir(self, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        assert count_content_files(empty) == 0
+
+    def test_missing_dir(self, tmp_path):
+        assert count_content_files(tmp_path / "nonexistent") == 0
+
+    def test_count_via_backend(self):
+        """count_content_files with a backend uses list_content_recursive."""
+        mock_backend = MagicMock()
+        mock_backend.list_content_recursive.return_value = ["a.md", "b.md", "c.md"]
+        assert count_content_files(backend=mock_backend) == 3
+        mock_backend.list_content_recursive.assert_called_once_with("", suffix=".md")
+
+
+class TestImportResultMergeFields:
+    """Tests for merge-related fields on ImportResult."""
+
+    def test_default_merge_fields(self):
+        result = ImportResult()
+        assert result.rows_skipped == 0
+        assert result.rows_remapped == 0
+        assert result.id_remap_summary == {}
+
+    def test_summary_with_skipped(self):
+        result = ImportResult(
+            success=True,
+            tables_imported=3,
+            total_rows=50,
+            rows_skipped=5,
+            duration_seconds=1.0,
+        )
+        summary = result.summary()
+        assert "Rows skipped: 5" in summary
+
+    def test_summary_with_remapped(self):
+        result = ImportResult(
+            success=True,
+            tables_imported=3,
+            total_rows=50,
+            rows_remapped=3,
+            duration_seconds=1.0,
+        )
+        summary = result.summary()
+        assert "Rows remapped: 3" in summary
 
 
 class TestSchemaVersionConstant:

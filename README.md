@@ -386,6 +386,62 @@ a-sdlc db rollback              # Revert one migration step
 a-sdlc db rollback -r base      # Revert all migrations
 ```
 
+### Data Migration
+
+`a-sdlc db import` migrates data between any combination of SQLite and PostgreSQL databases. Content files (markdown) are migrated alongside database records.
+
+#### Migration Scenarios
+
+**SQLite → PostgreSQL (initial deployment):**
+
+```bash
+# Source is auto-detected from ~/.a-sdlc/data.db
+a-sdlc db import
+
+# Or specify the source explicitly
+a-sdlc db import --source /path/to/data.db
+```
+
+**PostgreSQL → PostgreSQL (environment promotion):**
+
+```bash
+a-sdlc db import --source postgresql://staging-host/asdlc \
+  --source-s3-bucket staging-content \
+  --source-s3-endpoint http://staging-minio:9000 \
+  --source-s3-access-key KEY \
+  --source-s3-secret-key SECRET
+```
+
+**Merge data without overwriting:**
+
+```bash
+# Merge from another SQLite DB — conflicting IDs are auto-bumped
+a-sdlc db import --source /other/data.db --merge
+
+# Merge from another PostgreSQL instance
+a-sdlc db import --source postgresql://other-host/asdlc --merge \
+  --source-s3-bucket other-bucket \
+  --source-s3-endpoint http://other-minio:9000
+```
+
+**Skip content migration** (metadata only):
+
+```bash
+a-sdlc db import --source /path/to/data.db --skip-content
+```
+
+#### How It Works
+
+| Source Type | Database Access | Content Access |
+|-------------|----------------|----------------|
+| SQLite path | SQLAlchemy reads the `.db` file | Local filesystem `~/.a-sdlc/content/` |
+| PostgreSQL URL | SQLAlchemy connects to the PG server | `--source-s3-*` flags specify the source S3 bucket |
+
+- The **target** is always the currently configured database (`A_SDLC_DATABASE_URL`) and content backend
+- `--merge` resolves ID collisions by bumping conflicting IDs in the source data and cascading FK references
+- Tables are imported in FK dependency order to maintain referential integrity
+- Use `--force` to import into a non-empty target; add `-y` to skip the confirmation prompt
+
 ### Entity Hierarchy
 
 ```
@@ -681,6 +737,11 @@ a-sdlc db migrate                              # Apply all pending migrations
 a-sdlc db migrate -r <revision>                # Migrate to a specific revision
 a-sdlc db rollback                             # Revert one migration step
 a-sdlc db rollback -r base                     # Revert all migrations
+a-sdlc db import                               # Import from auto-detected SQLite source
+a-sdlc db import --source path/to/data.db      # Import from explicit SQLite path
+a-sdlc db import --source postgresql://host/db  # Import from PostgreSQL
+a-sdlc db import --merge                       # Merge without overwriting (bumps conflicting IDs)
+a-sdlc db import --skip-content                # Metadata only, skip .md files
 
 # Server logs
 a-sdlc logs                  # View server logs (last 50 entries)

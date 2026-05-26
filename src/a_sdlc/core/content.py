@@ -118,6 +118,20 @@ class ContentBackend(ABC):
         """
 
     @abstractmethod
+    def list_content_recursive(self, prefix: str, suffix: str = ".md") -> list[str]:
+        """List all objects recursively under *prefix* matching *suffix*.
+
+        Unlike :meth:`list_content`, this includes nested subdirectories.
+
+        Args:
+            prefix: Directory path (or S3 prefix) to search under.
+            suffix: File suffix filter (default ``".md"``).
+
+        Returns:
+            Sorted list of matching file paths (strings).
+        """
+
+    @abstractmethod
     def exists(self, file_path: str) -> bool:
         """Check whether an object exists at the given path.
 
@@ -162,6 +176,13 @@ class LocalContentBackend(ContentBackend):
         pattern = f"*{suffix}" if suffix else "*"
         return sorted(str(p) for p in dir_path.glob(pattern))
 
+    def list_content_recursive(self, prefix: str, suffix: str = ".md") -> list[str]:
+        dir_path = Path(prefix) if prefix else Path(".")
+        if not dir_path.exists():
+            return []
+        pattern = f"*{suffix}" if suffix else "*"
+        return sorted(str(p) for p in dir_path.rglob(pattern) if p.is_file())
+
     def exists(self, file_path: str) -> bool:
         return Path(file_path).exists()
 
@@ -197,8 +218,7 @@ class S3ContentBackend(ContentBackend):
             import boto3  # type: ignore[import-untyped]
         except ImportError as exc:
             raise ImportError(
-                "boto3 is required for S3ContentBackend. "
-                "Install it with: pip install 'a-sdlc[s3]'"
+                "boto3 is required for S3ContentBackend. Install it with: pip install 'a-sdlc[s3]'"
             ) from exc
 
         self._bucket = bucket
@@ -224,7 +244,7 @@ class S3ContentBackend(ContentBackend):
         """
         path_str = str(file_path)
         if self._base_path and path_str.startswith(self._base_path):
-            path_str = path_str[len(self._base_path):]
+            path_str = path_str[len(self._base_path) :]
         return path_str.lstrip("/")
 
     def _dir_to_prefix(self, directory: str) -> str:
@@ -272,8 +292,22 @@ class S3ContentBackend(ContentBackend):
                 if suffix and not key.endswith(suffix):
                     continue
                 # Only direct children (no nested subdirectories)
-                relative = key[len(prefix):]
+                relative = key[len(prefix) :]
                 if "/" not in relative:
+                    results.append(key)
+        return sorted(results)
+
+    def list_content_recursive(self, prefix: str, suffix: str = ".md") -> list[str]:
+        s3_prefix = self._to_key(prefix) if prefix else ""
+        if s3_prefix and not s3_prefix.endswith("/"):
+            s3_prefix += "/"
+        results: list[str] = []
+        paginator = self._client.get_paginator("list_objects_v2")
+        kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": s3_prefix}
+        for page in paginator.paginate(**kwargs):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not suffix or key.endswith(suffix):
                     results.append(key)
         return sorted(results)
 
@@ -560,13 +594,13 @@ class ContentManager:
 
 **Status:** {status}
 **Priority:** {priority}
-**Component:** {component or 'N/A'}
-**PRD:** {prd_id or 'N/A'}
+**Component:** {component or "N/A"}
+**PRD:** {prd_id or "N/A"}
 **Dependencies:** {deps_str}
 
 ## Description
 
-{description or '_No description_'}
+{description or "_No description_"}
 {traces_section}{design_section}"""
 
         return self.write_content(file_path, content)
@@ -646,7 +680,7 @@ class ContentManager:
         result: dict[str, Any] = {}
 
         # Extract description section
-        desc_match = re.search(r'## Description\s*\n(.+?)(?:\n##|\Z)', content, re.DOTALL)
+        desc_match = re.search(r"## Description\s*\n(.+?)(?:\n##|\Z)", content, re.DOTALL)
         if desc_match:
             desc = desc_match.group(1).strip()
             if desc != "_No description_":

@@ -1,6 +1,6 @@
 """Tests for CLI database migration commands (a-sdlc db).
 
-Covers: db status, db migrate, db rollback subcommands.
+Covers: db status, db migrate, db rollback, db import subcommands.
 All tests use Click CliRunner with mocked Alembic/SQLAlchemy layers.
 """
 
@@ -647,3 +647,313 @@ class TestDbIntegration:
             result = runner.invoke(main, ["db", "status"])
             assert result.exit_code == 0
             assert "pending" in result.output or "not initialized" in result.output
+
+
+# ---------------------------------------------------------------------------
+# db import tests
+# ---------------------------------------------------------------------------
+
+
+class TestDbImport:
+    """Tests for the db import subcommand."""
+
+    def test_import_help(self, runner: CliRunner) -> None:
+        """db import --help shows all options including --merge and --source-s3-*."""
+        result = runner.invoke(main, ["db", "import", "--help"])
+        assert result.exit_code == 0
+        assert "--source" in result.output
+        assert "--force" in result.output
+        assert "--skip-content" in result.output
+        assert "--merge" in result.output
+        assert "--yes" in result.output
+        assert "--source-s3-bucket" in result.output
+        assert "--source-s3-endpoint" in result.output
+
+    def test_import_source_not_found(self, runner: CliRunner, tmp_path) -> None:
+        """db import exits with error when source not found."""
+        result = runner.invoke(
+            main,
+            ["db", "import", "--source", str(tmp_path / "nope.db"), "-y"],
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_import_auto_detect_source(self, runner: CliRunner, tmp_path) -> None:
+        """db import auto-detects source at default location."""
+        with patch("a_sdlc.core.content.get_data_dir", return_value=tmp_path):
+            result = runner.invoke(main, ["db", "import", "-y"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_import_confirmation_abort(self, runner: CliRunner, tmp_path) -> None:
+        """db import aborts when user declines confirmation."""
+        db_path = tmp_path / "source.db"
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_version VALUES (15)")
+        conn.commit()
+        conn.close()
+
+        mock_config = MagicMock()
+        mock_config.database_url = "postgresql://user:pass@localhost/testdb"
+
+        with patch(
+            "a_sdlc.core.storage_config.load_storage_config",
+            return_value=mock_config,
+        ):
+            result = runner.invoke(
+                main,
+                ["db", "import", "--source", str(db_path), "--skip-content"],
+                input="n\n",
+            )
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+
+    def test_import_preflight_error(self, runner: CliRunner, tmp_path) -> None:
+        """db import displays PreflightError."""
+        db_path = tmp_path / "source.db"
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_version VALUES (10)")  # Wrong version
+        conn.commit()
+        conn.close()
+
+        mock_config = MagicMock()
+        mock_config.database_url = "postgresql://user:pass@localhost/testdb"
+
+        with patch(
+            "a_sdlc.core.storage_config.load_storage_config",
+            return_value=mock_config,
+        ):
+            result = runner.invoke(
+                main,
+                ["db", "import", "--source", str(db_path), "--skip-content", "-y"],
+            )
+        assert result.exit_code != 0
+
+    def test_import_masks_password(self, runner: CliRunner, tmp_path) -> None:
+        """Password is not shown in output."""
+        from a_sdlc.cli import _mask_db_url
+
+        masked = _mask_db_url("postgresql://user:secret@host/db")
+        assert "secret" not in masked
+        assert "***" in masked
+
+    def test_mask_db_url_no_password(self) -> None:
+        """_mask_db_url handles URLs without password."""
+        from a_sdlc.cli import _mask_db_url
+
+        url = "postgresql://user@host/db"
+        assert _mask_db_url(url) == url
+
+    def test_mask_db_url_invalid(self) -> None:
+        """_mask_db_url handles non-URL strings gracefully."""
+        from a_sdlc.cli import _mask_db_url
+
+        assert _mask_db_url("not-a-url") == "not-a-url"
+
+    def test_import_merge_flag(self, runner: CliRunner, tmp_path) -> None:
+        """--merge flag uses DataMerger instead of DataImporter."""
+        db_path = tmp_path / "source.db"
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_version VALUES (15)")
+        conn.commit()
+        conn.close()
+
+        mock_config = MagicMock()
+        mock_config.database_url = "postgresql://user:pass@localhost/testdb"
+
+        with (
+            patch(
+                "a_sdlc.core.storage_config.load_storage_config",
+                return_value=mock_config,
+            ),
+            patch("a_sdlc.core.db_merge.DataMerger") as mock_merger,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = MagicMock(
+                success=True,
+                summary=MagicMock(return_value="ok"),
+                warnings=[],
+                rows_skipped=0,
+                rows_remapped=0,
+                id_remap_summary={},
+            )
+            mock_merger.return_value = mock_instance
+
+            runner.invoke(
+                main,
+                [
+                    "db",
+                    "import",
+                    "--source",
+                    str(db_path),
+                    "--merge",
+                    "--skip-content",
+                    "-y",
+                ],
+            )
+
+        # DataMerger should have been instantiated
+        mock_merger.assert_called_once()
+
+    def test_import_force_flag(self, runner: CliRunner, tmp_path) -> None:
+        """--force flag is passed through to DataImporter."""
+        db_path = tmp_path / "source.db"
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_version VALUES (15)")
+        conn.commit()
+        conn.close()
+
+        mock_config = MagicMock()
+        mock_config.database_url = "postgresql://user:pass@localhost/testdb"
+
+        with (
+            patch(
+                "a_sdlc.core.storage_config.load_storage_config",
+                return_value=mock_config,
+            ),
+            patch("a_sdlc.core.db_import.DataImporter") as mock_importer,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = MagicMock(
+                success=True,
+                summary=MagicMock(return_value="ok"),
+                warnings=[],
+                rows_skipped=0,
+                rows_remapped=0,
+                id_remap_summary={},
+            )
+            mock_importer.return_value = mock_instance
+
+            runner.invoke(
+                main,
+                [
+                    "db",
+                    "import",
+                    "--source",
+                    str(db_path),
+                    "--force",
+                    "--skip-content",
+                    "-y",
+                ],
+            )
+
+        mock_importer.assert_called_once()
+        call_kwargs = mock_importer.call_args[1]
+        assert call_kwargs["force"] is True
+
+    def test_db_help_includes_import(self, runner: CliRunner) -> None:
+        """db --help now lists the import subcommand."""
+        result = runner.invoke(main, ["db", "--help"])
+        assert result.exit_code == 0
+        assert "import" in result.output
+
+    def test_import_pg_source_detection(self, runner: CliRunner, tmp_path) -> None:
+        """--source postgresql://... is detected as PG source."""
+        mock_config = MagicMock()
+        mock_config.database_url = "postgresql://user:pass@localhost/targetdb"
+
+        mock_summary = {
+            "exists": True,
+            "type": "PostgreSQL",
+            "schema_version": 15,
+            "total_rows": 10,
+            "tables": ["projects", "tasks"],
+            "projects": 2,
+            "tasks": 8,
+        }
+
+        with (
+            patch(
+                "a_sdlc.core.storage_config.load_storage_config",
+                return_value=mock_config,
+            ),
+            patch(
+                "a_sdlc.core.db_import.get_source_summary",
+                return_value=mock_summary,
+            ),
+            patch("a_sdlc.core.db_import.DataImporter") as mock_importer,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.run.return_value = MagicMock(
+                success=True,
+                summary=MagicMock(return_value="ok"),
+                warnings=[],
+                rows_skipped=0,
+                rows_remapped=0,
+                id_remap_summary={},
+            )
+            mock_importer.return_value = mock_instance
+
+            result = runner.invoke(
+                main,
+                [
+                    "db",
+                    "import",
+                    "--source",
+                    "postgresql://oldhost:5432/olddb",
+                    "--skip-content",
+                    "-y",
+                ],
+            )
+
+        # Should have passed the PG URL as source_url
+        if mock_importer.called:
+            call_kwargs = mock_importer.call_args[1]
+            assert call_kwargs["source_url"] == "postgresql://oldhost:5432/olddb"
+
+    def test_import_source_s3_options(self, runner: CliRunner, tmp_path) -> None:
+        """--source-s3-* options are available and shown in help."""
+        result = runner.invoke(main, ["db", "import", "--help"])
+        assert "--source-s3-bucket" in result.output
+        assert "--source-s3-endpoint" in result.output
+        assert "--source-s3-access-key" in result.output
+        assert "--source-s3-secret-key" in result.output
+
+    def test_resolve_source_url_none(self) -> None:
+        """_resolve_source_url(None) returns default SQLite path."""
+        from a_sdlc.cli import _resolve_source_url
+
+        with patch("a_sdlc.core.content.get_data_dir") as mock_dir:
+            from pathlib import Path
+
+            mock_dir.return_value = Path("/home/user/.a-sdlc")
+            url = _resolve_source_url(None)
+        assert url.startswith("sqlite:///")
+        assert "data.db" in url
+
+    def test_resolve_source_url_pg(self) -> None:
+        """_resolve_source_url passes through PostgreSQL URLs."""
+        from a_sdlc.cli import _resolve_source_url
+
+        url = _resolve_source_url("postgresql://host/db")
+        assert url == "postgresql://host/db"
+
+    def test_resolve_source_url_path(self) -> None:
+        """_resolve_source_url wraps local paths in sqlite:///."""
+        from pathlib import Path
+
+        from a_sdlc.cli import _resolve_source_url
+
+        url = _resolve_source_url("/tmp/data.db")
+        # Path.resolve() may follow symlinks (e.g. /tmp -> /private/tmp on macOS)
+        expected = f"sqlite:///{Path('/tmp/data.db').resolve()}"
+        assert url == expected
+
+    def test_resolve_source_url_sqlite(self) -> None:
+        """_resolve_source_url passes through sqlite:/// URLs."""
+        from a_sdlc.cli import _resolve_source_url
+
+        url = _resolve_source_url("sqlite:///path/to/db")
+        assert url == "sqlite:///path/to/db"

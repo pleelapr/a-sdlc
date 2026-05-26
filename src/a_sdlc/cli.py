@@ -1457,10 +1457,7 @@ def _doctor_live_mode() -> None:
                     fg="cyan",
                 )
                 status_styled = click.style("unreachable", fg="red", bold=True)
-                click.echo(
-                    f"[{timestamp}] {status_styled}  "
-                    f"Cannot reach {health_url}"
-                )
+                click.echo(f"[{timestamp}] {status_styled}  Cannot reach {health_url}")
 
             _time.sleep(2)
     except KeyboardInterrupt:
@@ -1870,9 +1867,7 @@ def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
     try:
         import urllib.request
 
-        _health_req = urllib.request.Request(
-            "http://127.0.0.1:8765/health", method="GET"
-        )
+        _health_req = urllib.request.Request("http://127.0.0.1:8765/health", method="GET")
         with urllib.request.urlopen(_health_req, timeout=3) as _resp:
             if _resp.status == 200:
                 _health_body = json.loads(_resp.read().decode())
@@ -2360,7 +2355,9 @@ def plugins_configure(plugin_name: str, save_global: bool) -> None:
     sys.exit(1)
 
 
-def _configure_linear_plugin(pm: "PluginManager", target: Literal["global", "project"] = "project") -> None:
+def _configure_linear_plugin(
+    pm: "PluginManager", target: Literal["global", "project"] = "project"
+) -> None:
     """Interactive configuration for Linear plugin."""
     location = "global config" if target == "global" else "project config"
     console.print(
@@ -2390,7 +2387,9 @@ def _configure_linear_plugin(pm: "PluginManager", target: Literal["global", "pro
     console.print(f"[green]Linear plugin configured in {location}![/green]")
 
 
-def _configure_jira_plugin(pm: "PluginManager", target: Literal["global", "project"] = "project") -> None:
+def _configure_jira_plugin(
+    pm: "PluginManager", target: Literal["global", "project"] = "project"
+) -> None:
     """Interactive configuration for Jira plugin."""
     location = "global config" if target == "global" else "project config"
     console.print(
@@ -2426,7 +2425,9 @@ def _configure_jira_plugin(pm: "PluginManager", target: Literal["global", "proje
     console.print(f"[green]Jira plugin configured in {location}![/green]")
 
 
-def _configure_confluence_plugin(apm: "ArtifactPluginManager", target: Literal["global", "project"] = "project") -> None:
+def _configure_confluence_plugin(
+    apm: "ArtifactPluginManager", target: Literal["global", "project"] = "project"
+) -> None:
     """Interactive configuration for Confluence plugin."""
     location = "global config" if target == "global" else "project config"
     console.print(
@@ -3551,13 +3552,17 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
             task_data = storage.create_task(
                 title=task.title,
                 project_id=project["id"],
-                priority=task.priority.value if hasattr(task.priority, "value") else str(task.priority),
+                priority=task.priority.value
+                if hasattr(task.priority, "value")
+                else str(task.priority),
                 component=task.component or "",
             )
             if task_data:
                 saved_ids.append(task_data["id"])
     else:
-        console.print("[yellow]No project found for current directory — tasks not saved to database.[/yellow]")
+        console.print(
+            "[yellow]No project found for current directory — tasks not saved to database.[/yellow]"
+        )
 
     console.print(f"\n[green]✓ Saved {len(saved_ids)} tasks[/green]")
 
@@ -5616,9 +5621,7 @@ def _format_log_line(line: str, level_filter: str | None) -> str | None:
 
 
 @main.command("logs")
-@click.option(
-    "--follow", "-f", is_flag=True, help="Stream new log entries in real-time"
-)
+@click.option("--follow", "-f", is_flag=True, help="Stream new log entries in real-time")
 @click.option(
     "--level",
     "-l",
@@ -5682,9 +5685,7 @@ def logs_cmd(follow: bool, level_filter: str | None, num_lines: int) -> None:
             displayed += 1
 
     if displayed == 0 and level_filter:
-        click.echo(
-            f"No log entries found at level '{level_filter.upper()}' or above."
-        )
+        click.echo(f"No log entries found at level '{level_filter.upper()}' or above.")
 
     if not follow:
         return
@@ -5783,6 +5784,24 @@ def _check_server_running() -> bool:
         return False
 
 
+def _mask_db_url(url: str) -> str:
+    """Mask the password in a database URL for display.
+
+    Replaces the password component with ``***`` so URLs can be printed
+    safely in logs and terminal output.
+    """
+    try:
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(url)
+        if parsed.password:
+            netloc = parsed.netloc.replace(f":{parsed.password}@", ":***@", 1)
+            return urlunparse(parsed._replace(netloc=netloc))
+    except Exception:
+        pass
+    return url
+
+
 @main.group()
 def db() -> None:
     """Database migration management.
@@ -5793,6 +5812,7 @@ def db() -> None:
       a-sdlc db status     Show current migration state
       a-sdlc db migrate    Apply pending migrations
       a-sdlc db rollback   Revert migrations
+      a-sdlc db import     Import data from legacy SQLite
     """
     pass
 
@@ -5968,9 +5988,7 @@ def db_rollback(revision: str, yes: bool) -> None:
             return
 
     if not yes:
-        console.print(
-            f"[yellow]This will downgrade the database to revision: {revision}[/yellow]"
-        )
+        console.print(f"[yellow]This will downgrade the database to revision: {revision}[/yellow]")
         if not click.confirm("Are you sure?", default=False):
             console.print("[dim]Aborted.[/dim]")
             return
@@ -5989,6 +6007,330 @@ def db_rollback(revision: str, yes: bool) -> None:
     except Exception as exc:
         console.print(f"[red]Rollback failed: {exc}[/red]")
         sys.exit(1)
+
+
+def _resolve_source_url(source: str | None) -> str:
+    """Convert a user-provided source string to a SQLAlchemy URL.
+
+    - ``None`` -> default ``sqlite:///<data_dir>/data.db``
+    - Strings starting with ``postgresql://``, ``postgres://``, or ``sqlite:///``
+      are returned as-is (already valid SQLAlchemy URLs).
+    - Otherwise treated as a local file path and wrapped in ``sqlite:///``.
+    """
+    if source is None:
+        from a_sdlc.core.content import get_data_dir
+
+        return f"sqlite:///{get_data_dir() / 'data.db'}"
+    if source.startswith(("postgresql://", "postgres://", "sqlite:///")):
+        return source
+    return f"sqlite:///{Path(source).resolve()}"
+
+
+@db.command("import")
+@click.option(
+    "--source",
+    type=str,
+    default=None,
+    help="Source database (path or URL, default: auto-detect ~/.a-sdlc/data.db)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Allow import into a non-empty target database",
+)
+@click.option(
+    "--skip-content",
+    is_flag=True,
+    help="Skip content file migration",
+)
+@click.option(
+    "--merge",
+    is_flag=True,
+    help="Merge into existing data (bump conflicting IDs instead of overwriting)",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+@click.option("--source-s3-bucket", default=None, help="Source S3 bucket (for PG source)")
+@click.option("--source-s3-endpoint", default=None, help="Source S3 endpoint URL")
+@click.option("--source-s3-access-key", default=None, help="Source S3 access key")
+@click.option("--source-s3-secret-key", default=None, help="Source S3 secret key")
+def db_import(
+    source: str | None,
+    force: bool,
+    skip_content: bool,
+    merge: bool,
+    yes: bool,
+    source_s3_bucket: str | None,
+    source_s3_endpoint: str | None,
+    source_s3_access_key: str | None,
+    source_s3_secret_key: str | None,
+) -> None:
+    """Import data from a source database.
+
+    Migrates all data from a source database (SQLite or PostgreSQL) to
+    the configured target database.  Use --merge to incrementally add
+    data without overwriting existing records.
+
+    Examples:
+
+    \b
+        a-sdlc db import                           # Auto-detect SQLite source
+        a-sdlc db import --source /path/data.db    # Explicit SQLite path
+        a-sdlc db import --source postgresql://host/db  # PG to PG
+        a-sdlc db import --source postgresql://host/db \\
+            --source-s3-bucket old-bucket \\
+            --source-s3-endpoint http://old-minio:9000
+        a-sdlc db import --merge                   # Merge without overwriting
+        a-sdlc db import --skip-content            # Skip .md file migration
+        a-sdlc db import --force -y                # Force, no confirmation
+    """
+    from a_sdlc.core.content import get_data_dir
+    from a_sdlc.core.db_import import (
+        DataImporter,
+        PreflightError,
+        count_content_files,
+        get_source_summary,
+    )
+    from a_sdlc.core.storage_config import load_storage_config
+
+    # 1. Resolve source database URL
+    source_url = _resolve_source_url(source)
+    source_is_pg = source_url.startswith(("postgresql://", "postgres://"))
+
+    # For SQLite sources, check file existence early
+    if not source_is_pg:
+        source_path = Path(source_url.replace("sqlite:///", "", 1))
+        if not source_path.exists():
+            console.print(f"[red]Source database not found: {source_path}[/red]")
+            sys.exit(1)
+
+    # 2. Show source summary
+    summary = get_source_summary(source_url)
+    if not summary.get("exists"):
+        display = source_url if source_is_pg else source_url.replace("sqlite:///", "", 1)
+        console.print(f"[red]Source database not found: {display}[/red]")
+        sys.exit(1)
+
+    schema_ver = summary.get("schema_version")
+    total_rows = summary.get("total_rows", 0)
+    source_type = summary.get("type", "Unknown")
+
+    source_table = Table(title="Source Database", border_style="blue")
+    source_table.add_column("Property", style="cyan")
+    source_table.add_column("Value")
+    source_table.add_row("Type", source_type)
+    source_table.add_row(
+        "URL",
+        _mask_db_url(source_url) if source_is_pg else source_url.replace("sqlite:///", "", 1),
+    )
+    source_table.add_row(
+        "Schema version", str(schema_ver) if schema_ver else "[yellow]Unknown[/yellow]"
+    )
+    source_table.add_row("Total rows", str(total_rows))
+
+    # Add per-entity counts
+    for table_name in [
+        "projects",
+        "sprints",
+        "prds",
+        "tasks",
+        "designs",
+        "worktrees",
+        "reviews",
+        "requirements",
+    ]:
+        count = summary.get(table_name)
+        if count is not None and count > 0:
+            source_table.add_row(f"  {table_name}", str(count))
+
+    console.print(source_table)
+    console.print()
+
+    # 3. Count content files
+    content_count = 0
+    source_content_backend = None
+
+    if not skip_content:
+        if source_is_pg:
+            # For PG sources, content is in S3 — need source S3 config
+            if source_s3_bucket:
+                from a_sdlc.core.content import S3ContentBackend
+
+                source_content_backend = S3ContentBackend(
+                    bucket=source_s3_bucket,
+                    endpoint_url=source_s3_endpoint,
+                    access_key=source_s3_access_key,
+                    secret_key=source_s3_secret_key,
+                )
+                content_count = count_content_files(backend=source_content_backend)
+            else:
+                console.print(
+                    "[dim]No --source-s3-bucket provided; "
+                    "skipping content migration for PG source.[/dim]"
+                )
+        else:
+            content_dir = get_data_dir() / "content"
+            content_count = count_content_files(content_dir)
+
+        if content_count > 0:
+            console.print(f"[dim]Content files found: {content_count}[/dim]")
+        elif not source_is_pg or source_s3_bucket:
+            console.print("[dim]No content files found for migration.[/dim]")
+        console.print()
+
+    # 4. Resolve target database URL
+    try:
+        storage_config = load_storage_config(validate=False)
+        target_url = storage_config.database_url
+    except Exception:
+        target_url = None
+
+    if not target_url:
+        target_url = click.prompt(
+            "Target database URL (e.g. postgresql://user:pass@host/db)",
+            type=str,
+        )
+
+    masked_url = _mask_db_url(target_url)
+
+    # 5. Resolve target S3 config if content migration needed
+    migrate_content = not skip_content and content_count > 0
+    target_content_backend = None
+    source_content_dir_path: Path | None = None
+
+    if migrate_content:
+        try:
+            storage_config = load_storage_config(validate=False)
+            s3_bucket = getattr(storage_config, "s3_bucket", None)
+        except Exception:
+            s3_bucket = None
+
+        if not s3_bucket:
+            console.print("[yellow]S3 configuration needed for content migration.[/yellow]")
+            s3_bucket = click.prompt("S3 bucket name")
+            s3_endpoint = click.prompt("S3 endpoint URL (e.g. http://localhost:9000)")
+            s3_access_key = click.prompt("S3 access key")
+            s3_secret_key = click.prompt("S3 secret key", hide_input=True)
+
+            from a_sdlc.core.content import S3ContentBackend
+
+            target_content_backend = S3ContentBackend(
+                bucket=s3_bucket,
+                endpoint_url=s3_endpoint,
+                access_key=s3_access_key,
+                secret_key=s3_secret_key,
+            )
+        else:
+            from a_sdlc.core.content import S3ContentBackend
+
+            target_content_backend = S3ContentBackend(
+                bucket=s3_bucket,
+                endpoint_url=getattr(storage_config, "s3_endpoint", None),
+                access_key=getattr(storage_config, "s3_access_key", None),
+                secret_key=getattr(storage_config, "s3_secret_key", None),
+            )
+
+        # Source content dir only needed for local filesystem sources
+        if not source_is_pg:
+            source_content_dir_path = get_data_dir() / "content"
+
+    # 6. Show summary panel
+    mode = (
+        "[cyan]merge[/cyan] (bump conflicting IDs)"
+        if merge
+        else "[cyan]import[/cyan] (full replacement)"
+    )
+    source_display = (
+        _mask_db_url(source_url) if source_is_pg else source_url.replace("sqlite:///", "", 1)
+    )
+    panel_text = f"Source:  {source_display}\nTarget:  {masked_url}\nMode:    {mode}\nRows:    {total_rows}\n"
+    if migrate_content:
+        panel_text += f"Content: {content_count} files\n"
+    if force and not merge:
+        panel_text += "Force:   [yellow]Yes (will overwrite existing data)[/yellow]\n"
+
+    console.print(
+        Panel(panel_text.rstrip(), title="[bold]Import Summary[/bold]", border_style="blue")
+    )
+    console.print()
+
+    # 7. Confirm
+    if not yes and not click.confirm("Proceed with import?", default=False):
+        console.print("[dim]Aborted.[/dim]")
+        return
+
+    # 8. Build importer and run
+    importer: DataImporter
+    if merge:
+        from a_sdlc.core.db_merge import DataMerger
+
+        importer = DataMerger(
+            source_url=source_url,
+            target_url=target_url,
+            migrate_content=migrate_content,
+            target_content_backend=target_content_backend,
+            source_content_backend=source_content_backend,
+            source_content_dir=source_content_dir_path,
+        )
+    else:
+        importer = DataImporter(
+            source_url=source_url,
+            target_url=target_url,
+            force=force,
+            migrate_content=migrate_content,
+            target_content_backend=target_content_backend,
+            source_content_backend=source_content_backend,
+            source_content_dir=source_content_dir_path,
+        )
+
+    # Progress callback
+    from rich.progress import BarColumn, Progress, TextColumn
+
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        console=console,
+    )
+    progress_tasks: dict[str, object] = {}
+
+    def on_progress(table: str, current: int, total: int) -> None:
+        if table not in progress_tasks:
+            progress_tasks[table] = progress.add_task(table, total=total)
+        progress.update(progress_tasks[table], completed=current)
+
+    importer.progress_callback = on_progress
+
+    try:
+        with progress:
+            import_result = importer.run()
+    except PreflightError as exc:
+        console.print(f"[red]Pre-flight check failed: {exc}[/red]")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Import failed: {exc}[/red]")
+        sys.exit(1)
+
+    # 9. Display results
+    if import_result.success:
+        console.print(f"\n[green]{import_result.summary()}[/green]")
+        if import_result.rows_remapped:
+            console.print(f"[cyan]  Remapped IDs: {import_result.rows_remapped}[/cyan]")
+            for tbl, cnt in import_result.id_remap_summary.items():
+                console.print(f"[dim]    {tbl}: {cnt}[/dim]")
+        if import_result.rows_skipped:
+            console.print(f"[yellow]  Skipped (duplicates): {import_result.rows_skipped}[/yellow]")
+    else:
+        console.print(f"\n[red]{import_result.summary()}[/red]")
+        sys.exit(1)
+
+    if import_result.warnings:
+        for w in import_result.warnings:
+            console.print(f"[yellow]  Warning: {w}[/yellow]")
 
 
 if __name__ == "__main__":
