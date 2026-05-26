@@ -85,6 +85,8 @@ class TestEngineInit:
             db = SessionDatabase(db_path=db_path)
             assert db is not None
             assert db_path.exists()
+            # Dispose engine so Windows can clean up the temp directory
+            db._engine.dispose()
 
     def test_tables_created(self, db: SessionDatabase):
         # Simple smoke test: we can create a project

@@ -222,7 +222,7 @@ class S3ContentBackend(ContentBackend):
             ) from exc
 
         self._bucket = bucket
-        self._base_path = str(base_path).rstrip("/") + "/" if base_path else ""
+        self._base_path = str(base_path).replace("\\", "/").rstrip("/") + "/" if base_path else ""
 
         kwargs: dict[str, Any] = {}
         if endpoint_url:
@@ -240,9 +240,10 @@ class S3ContentBackend(ContentBackend):
         """Convert an absolute (or relative) file path to an S3 key.
 
         Strips *base_path* prefix and any leading slashes so keys are
-        always relative.
+        always relative.  Backslashes are normalised to forward slashes
+        for Windows compatibility.
         """
-        path_str = str(file_path)
+        path_str = str(file_path).replace("\\", "/")
         if self._base_path and path_str.startswith(self._base_path):
             path_str = path_str[len(self._base_path) :]
         return path_str.lstrip("/")

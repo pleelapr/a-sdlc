@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2877,6 +2878,7 @@ class TestMCPAcquirePid:
                 os.close(srv._mcp_pid_fd)
             srv._mcp_pid_fd = original_fd
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="fcntl not available on Windows")
     def test_acquire_pid_fails_when_locked(self, tmp_path):
         """Returns False when another process holds the flock."""
         import fcntl

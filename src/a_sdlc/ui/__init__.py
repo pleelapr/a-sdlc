@@ -15,7 +15,11 @@ import atexit
 import contextlib
 import logging
 import os
-import resource
+
+try:
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
 import signal
 import sys
 import time
@@ -105,13 +109,15 @@ class HealthDataProvider:
         uptime_str = _format_uptime(uptime_secs)
 
         try:
-            mem_usage = resource.getrusage(resource.RUSAGE_SELF)
-            memory_mb = round(mem_usage.ru_maxrss / (1024 * 1024), 1)
-            # macOS reports bytes; Linux reports KB
-            if sys.platform == "darwin":
-                memory_mb = round(mem_usage.ru_maxrss / (1024 * 1024), 1)
+            if resource is not None:
+                mem_usage = resource.getrusage(resource.RUSAGE_SELF)
+                # macOS reports bytes; Linux reports KB
+                if sys.platform == "darwin":
+                    memory_mb = round(mem_usage.ru_maxrss / (1024 * 1024), 1)
+                else:
+                    memory_mb = round(mem_usage.ru_maxrss / 1024, 1)
             else:
-                memory_mb = round(mem_usage.ru_maxrss / 1024, 1)
+                memory_mb = 0.0
         except Exception:
             memory_mb = 0.0
 

@@ -180,7 +180,7 @@ class TestGenerateConfigYaml:
         config_file = sdlc_dir / "config.yaml"
         # Write a complete config using the template itself
         template = _load_template("config.template.yaml")
-        config_file.write_text(template)
+        config_file.write_text(template, encoding="utf-8")
 
         result = generate_config_yaml(temp_project)
         assert result["status"] == "exists"

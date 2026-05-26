@@ -114,7 +114,7 @@ class TestInitStorageBackend:
              patch("a_sdlc.storage.init_storage", return_value=mock_storage), \
              patch("a_sdlc.server._run_auto_migration"), \
              patch("a_sdlc.server._migrate_local_content_to_s3") as mock_s3_migrate:
-            with caplog.at_level(logging.INFO, logger="a-sdlc-server"):
+            with caplog.at_level(logging.INFO):
                 _init_storage_backend()
             mock_s3_migrate.assert_called_once_with(mock_storage)
             assert "s3 content backend" in caplog.text.lower()
@@ -194,7 +194,7 @@ class TestRunAutoMigration:
 
         with (
             patch.object(Path, "exists", return_value=True),
-            caplog.at_level(logging.INFO, logger="a-sdlc-server"),
+            caplog.at_level(logging.INFO),
         ):
             _run_auto_migration(config)
 
