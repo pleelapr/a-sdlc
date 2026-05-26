@@ -8,13 +8,43 @@ a-sdlc gives Claude Code a structured development workflow: ideation, PRD genera
 
 ## Install
 
+a-sdlc requires **PostgreSQL** and **S3-compatible storage** (MinIO or AWS S3). Docker Compose is the fastest way to get everything running.
+
+### Docker Compose (recommended)
+
 ```bash
-uv tool install git+https://github.com/pleelapr/a-sdlc.git
-a-sdlc setup       # guided wizard: skills, MCP config, optional integrations
-a-sdlc doctor      # verify everything works
+git clone https://github.com/pleelapr/a-sdlc.git && cd a-sdlc
+cp .env.example .env       # edit passwords if needed
+docker compose up -d        # starts PostgreSQL + MinIO + a-sdlc server
 ```
 
-To upgrade:
+Then install the CLI and connect it to the running server:
+
+```bash
+uv tool install git+https://github.com/pleelapr/a-sdlc.git
+a-sdlc setup               # guided wizard: skills, MCP config, optional integrations
+a-sdlc doctor              # verify everything works
+```
+
+### Manual setup (bring your own PostgreSQL + S3)
+
+```bash
+uv tool install git+https://github.com/pleelapr/a-sdlc.git
+
+# Configure storage (required before a-sdlc can operate)
+export A_SDLC_DATABASE_URL="postgresql://user:pass@localhost/asdlc"
+export A_SDLC_S3_BUCKET="asdlc-content"
+export A_SDLC_S3_ENDPOINT="http://localhost:9000"   # MinIO or S3-compatible
+export A_SDLC_S3_ACCESS_KEY="minioadmin"
+export A_SDLC_S3_SECRET_KEY="minioadmin"
+
+a-sdlc db migrate          # create schema
+a-sdlc serve &             # start MCP + UI server
+a-sdlc setup               # install skills + MCP config
+a-sdlc doctor              # verify everything works
+```
+
+### Upgrade
 
 ```bash
 uv tool install --force git+https://github.com/pleelapr/a-sdlc.git
@@ -25,7 +55,7 @@ a-sdlc setup --upgrade
 
 ## Quick Start
 
-In Claude Code, inside your project directory:
+With the server running (via Docker Compose or `a-sdlc serve`), open Claude Code inside your project directory:
 
 ```
 /sdlc:init      # initialize .sdlc/ structure and register project
@@ -331,15 +361,15 @@ a-sdlc uses a hybrid storage model: a database for metadata and relationships, a
 
 | Backend | URL Scheme | Notes |
 |---------|-----------|-------|
-| PostgreSQL | `postgresql://user:pass@host/db` | Connection pooling, production standard |
-| SQLite | `sqlite:///path/to/data.db` | WAL mode, FK enforcement, local development only |
+| PostgreSQL | `postgresql://user:pass@host/db` | **Required.** Connection pooling, production standard |
+| SQLite | `sqlite:///path/to/data.db` | Tests only. Rejected in production by `StorageConfig` |
 
 ### Content Backends
 
 | Backend | Config Value | Storage |
 |---------|-------------|---------|
-| S3-compatible (default) | `content_backend: s3` | S3 bucket (or MinIO) via boto3 |
-| Local | `content_backend: local` | Filesystem content directory |
+| S3-compatible | `content_backend: s3` | **Default.** S3 bucket (or MinIO) via boto3 |
+| Local | `content_backend: local` | Tests only. Filesystem content directory |
 
 ### Storage Configuration
 
