@@ -97,6 +97,12 @@ services:
       - "${A_SDLC_UI_PORT:-3847}:3847"    # Web UI dashboard
     volumes:
       - asdlc-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     # Entrypoint is set in Dockerfile; no command override needed.
     # Override ports with: --mcp-port and --ui-port if needed.
 

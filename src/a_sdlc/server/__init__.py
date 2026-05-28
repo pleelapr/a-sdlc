@@ -790,6 +790,7 @@ def run_server(
         host=host,
         port=mcp_port,
         log_level="info",
+        timeout_keep_alive=120,
     )
     mcp_server = uvicorn.Server(mcp_config)
 
@@ -798,6 +799,7 @@ def run_server(
         host=host,
         port=ui_port,
         log_level="info",
+        timeout_keep_alive=120,
     )
     ui_server = uvicorn.Server(ui_config)
 
