@@ -490,9 +490,7 @@ Combine all findings into systematic analysis:
 3. Call MCP tool to create PRD
 
 ```
-result = mcp__asdlc__create_prd(title="Fix: {Problem Summary}")
-# Then write content to the returned file_path:
-Write(file_path=result["file_path"], content="{Generated PRD from findings}")
+result = mcp__asdlc__create_prd(title="Fix: {Problem Summary}", content="{Generated PRD from findings}")
 ```
 
 **Generated PRD Structure:**

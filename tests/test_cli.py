@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -89,65 +89,74 @@ class TestDoctorSchemaVersion:
     """Tests for database schema version check in doctor command."""
 
     def test_doctor_schema_version_pass(self, runner: CliRunner) -> None:
-        """Test doctor reports PASS when schema version matches."""
+        """Test doctor reports PASS when Alembic revision is found."""
         from unittest.mock import MagicMock
 
-        from a_sdlc.core.database import SCHEMA_VERSION
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
-        mock_db = MagicMock()
-        mock_db.db_path = ":memory:"
+        mock_cfg = MagicMock()
+        mock_cfg.database_url = "postgresql://user:pass@localhost/db"
+
+        mock_context = MagicMock()
+        mock_context.get_current_revision.return_value = "0001"
 
         with (
-            patch("a_sdlc.core.database.Database", return_value=mock_db),
-            patch("sqlite3.connect") as mock_connect,
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
+            patch("sqlalchemy.create_engine") as mock_engine_fn,
+            patch("alembic.runtime.migration.MigrationContext.configure", return_value=mock_context),
         ):
+            mock_engine = MagicMock()
+            mock_engine_fn.return_value = mock_engine
             mock_conn = MagicMock()
-            mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-            mock_connect.return_value.__exit__ = MagicMock(return_value=False)
-            mock_conn.execute.return_value.fetchone.return_value = (SCHEMA_VERSION,)
+            mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
 
             result = runner.invoke(main, ["doctor"])
 
         assert "Database schema version" in result.output
-        assert f"v{SCHEMA_VERSION} (current)" in result.output
+        assert "Alembic revision: 0001" in result.output
 
     def test_doctor_schema_version_warn(self, runner: CliRunner) -> None:
-        """Test doctor reports WARN when schema version is outdated."""
+        """Test doctor reports WARN when no Alembic revision found."""
         from unittest.mock import MagicMock
 
-        from a_sdlc.core.database import SCHEMA_VERSION
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
-        mock_db = MagicMock()
-        mock_db.db_path = ":memory:"
-        old_version = SCHEMA_VERSION - 1
+        mock_cfg = MagicMock()
+        mock_cfg.database_url = "postgresql://user:pass@localhost/db"
+
+        mock_context = MagicMock()
+        mock_context.get_current_revision.return_value = None
 
         with (
-            patch("a_sdlc.core.database.Database", return_value=mock_db),
-            patch("sqlite3.connect") as mock_connect,
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
+            patch("sqlalchemy.create_engine") as mock_engine_fn,
+            patch("alembic.runtime.migration.MigrationContext.configure", return_value=mock_context),
         ):
+            mock_engine = MagicMock()
+            mock_engine_fn.return_value = mock_engine
             mock_conn = MagicMock()
-            mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-            mock_connect.return_value.__exit__ = MagicMock(return_value=False)
-            mock_conn.execute.return_value.fetchone.return_value = (old_version,)
+            mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
 
             result = runner.invoke(main, ["doctor"])
 
         assert "Database schema version" in result.output
-        assert f"v{old_version}" in result.output
-        assert f"expected v{SCHEMA_VERSION}" in result.output
-        # Rich table may wrap the text across lines, so check parts separately
-        assert "a-sdlc install" in result.output
-        assert "--upgrade" in result.output
+        assert "No Alembic revision found" in result.output
+        assert "a-sdlc db migrate" in result.output
 
     def test_doctor_schema_version_fail_on_error(self, runner: CliRunner) -> None:
-        """Test doctor reports FAIL when database cannot be checked."""
-        with patch("a_sdlc.core.database.Database", side_effect=Exception("DB not found")):
+        """Test doctor reports FAIL when database cannot be connected."""
+        with patch("a_sdlc.storage.init_storage", side_effect=Exception("Connection refused")):
             result = runner.invoke(main, ["doctor"])
 
         assert "Database Accessible" in result.output
-        assert "Cannot open database" in result.output
+        assert "Cannot connect to database" in result.output
         assert "Database schema version" in result.output
-        assert "Skipped" in result.output
 
 
 def test_plugins_list(runner: CliRunner) -> None:
@@ -448,6 +457,8 @@ class TestSetupUpgrade:
     def test_upgrade_force_installs_templates(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test --upgrade calls installer.install(force=True)."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
         with (
             patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
@@ -455,7 +466,7 @@ class TestSetupUpgrade:
             patch("a_sdlc.cli.Installer") as mock_installer_cls,
             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}),
-            patch("a_sdlc.core.database.Database.__init__", return_value=None),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
         ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
@@ -468,8 +479,10 @@ class TestSetupUpgrade:
         mock_installer.install.assert_called_once_with(force=True)
 
     def test_upgrade_runs_db_migration(self, runner: CliRunner, tmp_path: Path) -> None:
-        """Test --upgrade triggers Database init for migration."""
+        """Test --upgrade verifies database connectivity via init_storage."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
         with (
             patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
@@ -477,7 +490,7 @@ class TestSetupUpgrade:
             patch("a_sdlc.cli.Installer") as mock_installer_cls,
             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}),
-            patch("a_sdlc.core.database.Database.__init__", return_value=None) as mock_db_init,
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init,
         ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
@@ -487,11 +500,13 @@ class TestSetupUpgrade:
             result = runner.invoke(main, ["setup", "--upgrade"], input=self.DECLINE_ALL_OPTIONAL)
 
         assert result.exit_code == 0
-        mock_db_init.assert_called_once()
+        mock_init.assert_called_once()
 
     def test_upgrade_refreshes_mcp_config(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test --upgrade calls configure_mcp_server(force=True)."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
         with (
             patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
@@ -499,7 +514,7 @@ class TestSetupUpgrade:
             patch("a_sdlc.cli.Installer") as mock_installer_cls,
             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}) as mock_mcp,
-            patch("a_sdlc.core.database.Database.__init__", return_value=None),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
         ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
@@ -514,6 +529,8 @@ class TestSetupUpgrade:
     def test_upgrade_shows_upgrade_banner(self, runner: CliRunner, tmp_path: Path) -> None:
         """Test --upgrade shows upgrade-specific banner and completion message."""
         claude_json, templates_dir = self._make_setup_context(tmp_path)
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
         with (
             patch("a_sdlc.cli.check_python_version", return_value=(True, "3.12.0")),
@@ -521,7 +538,7 @@ class TestSetupUpgrade:
             patch("a_sdlc.cli.Installer") as mock_installer_cls,
             patch("a_sdlc.cli.get_claude_settings_path", return_value=claude_json),
             patch("a_sdlc.cli.configure_mcp_server", return_value={"status": "ok"}),
-            patch("a_sdlc.core.database.Database.__init__", return_value=None),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
         ):
             mock_installer = mock_installer_cls.return_value
             mock_installer.check_template_version.return_value = (False, "0.1.0", "0.2.0")
@@ -622,42 +639,41 @@ class TestDoctorDatabaseAccessible:
 
     def test_doctor_db_accessible_pass(self, runner: CliRunner) -> None:
         """Test doctor reports PASS when database is accessible."""
-        import os
-        import tempfile
         from unittest.mock import MagicMock
 
-        # Create a real temp file to represent the database
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
 
-        try:
-            mock_db = MagicMock()
-            mock_db.db_path = db_path
+        mock_cfg = MagicMock()
+        mock_cfg.database_url = "postgresql://user:pass@localhost/db"
 
-            with (
-                patch("a_sdlc.core.database.Database", return_value=mock_db),
-                patch("sqlite3.connect") as mock_connect,
-            ):
-                mock_conn = MagicMock()
-                mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-                mock_connect.return_value.__exit__ = MagicMock(return_value=False)
-                from a_sdlc.core.database import SCHEMA_VERSION
+        mock_context = MagicMock()
+        mock_context.get_current_revision.return_value = "0001"
 
-                mock_conn.execute.return_value.fetchone.return_value = (SCHEMA_VERSION,)
+        with (
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
+            patch("sqlalchemy.create_engine") as mock_engine_fn,
+            patch("alembic.runtime.migration.MigrationContext.configure", return_value=mock_context),
+        ):
+            mock_engine = MagicMock()
+            mock_engine_fn.return_value = mock_engine
+            mock_conn = MagicMock()
+            mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+            mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
 
-                result = runner.invoke(main, ["doctor"])
-
-            assert "Database Accessible" in result.output
-        finally:
-            os.unlink(db_path)
-
-    def test_doctor_db_accessible_fail_on_error(self, runner: CliRunner) -> None:
-        """Test doctor reports FAIL when database cannot be instantiated."""
-        with patch("a_sdlc.core.database.Database", side_effect=Exception("Permission denied")):
             result = runner.invoke(main, ["doctor"])
 
         assert "Database Accessible" in result.output
-        assert "Cannot open database" in result.output
+        assert "Connected via configured backend" in result.output
+
+    def test_doctor_db_accessible_fail_on_error(self, runner: CliRunner) -> None:
+        """Test doctor reports FAIL when database cannot be connected."""
+        with patch("a_sdlc.storage.init_storage", side_effect=Exception("Permission denied")):
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Database Accessible" in result.output
+        assert "Cannot connect to database" in result.output
         assert "Fix:" in result.output
 
 

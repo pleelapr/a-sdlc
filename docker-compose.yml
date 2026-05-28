@@ -1,0 +1,115 @@
+# docker-compose.yml — a-sdlc with PostgreSQL and MinIO
+#
+# Usage:
+#   cp .env.example .env   # Edit with your values
+#   docker compose up -d   # Start all services
+#   docker compose logs -f # Follow logs
+#   docker compose down    # Stop (data persists in named volumes)
+#   docker compose down -v # Stop and remove volumes (destroys data)
+
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL 16 — metadata store
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-asdlc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-asdlc_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-asdlc}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-asdlc} -d ${POSTGRES_DB:-asdlc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # MinIO — S3-compatible object storage for content files
+  # --------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # MinIO bucket initialization (runs once, then exits)
+  # --------------------------------------------------------------------------
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    volumes:
+      - ./docker/minio/init.sh:/init.sh:ro
+    command: /init.sh
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${A_SDLC_S3_BUCKET:-asdlc-content}
+
+  # --------------------------------------------------------------------------
+  # a-sdlc combined MCP + UI server
+  # --------------------------------------------------------------------------
+  a-sdlc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # Data directory (matches Dockerfile VOLUME)
+      A_SDLC_DATA_DIR: /data
+      # Database — use PostgreSQL instead of built-in SQLite
+      A_SDLC_DATABASE_URL: postgresql://${POSTGRES_USER:-asdlc}:${POSTGRES_PASSWORD:-asdlc_dev}@postgres:5432/${POSTGRES_DB:-asdlc}
+      # Content storage — use MinIO (S3-compatible)
+      A_SDLC_CONTENT_BACKEND: s3
+      A_SDLC_S3_BUCKET: ${A_SDLC_S3_BUCKET:-asdlc-content}
+      A_SDLC_S3_ENDPOINT: http://minio:9000
+      A_SDLC_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      A_SDLC_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${A_SDLC_MCP_PORT:-8765}:8765"   # MCP server
+      - "${A_SDLC_UI_PORT:-3847}:3847"    # Web UI dashboard
+    volumes:
+      - asdlc-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # Entrypoint is set in Dockerfile; no command override needed.
+    # Override ports with: --mcp-port and --ui-port if needed.
+
+volumes:
+  pgdata:
+    driver: local
+  miniodata:
+    driver: local
+  asdlc-data:
+    driver: local

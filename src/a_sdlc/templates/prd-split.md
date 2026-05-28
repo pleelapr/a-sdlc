@@ -1312,37 +1312,26 @@ Proceed to Step 6: Persistence.
 
 ### Step 6: Persistence
 
-Write task files and persist to database:
+Persist tasks to database with content in a single atomic call:
 
-**6.1: Write Task Files**
+**6.1: Call split_prd() with task content**
 
-For each task, write the generated content:
+Include task content directly in the `content` field of each task spec. The `split_prd()` tool writes content through the configured backend (local filesystem or S3), so this works correctly in Docker/cloud deployments.
 
-```
-# Use the Write tool to write each task file
-Write tool:
-  file_path: ~/.a-sdlc/content/{project_id}/tasks/{task_id}.md
-  content: {generated_task_content}
-```
-
-**6.2: Call split_prd() with task_ids**
-
-Once all files are written, persist to database. Include `traces_to` and `design_compliance` data from each task in the `data` dict so traceability information is stored alongside the task metadata:
+Include `traces_to` and `design_compliance` data from each task so traceability information is stored alongside the task metadata:
 
 ```
 mcp__asdlc__split_prd(
     prd_id="{prd_id}",
     task_specs=[
         {
-            "task_id": "{task_id}",  # Pre-written file
             "title": "{title}",
             "priority": "{priority}",
             "component": "{component}",
             "dependencies": ["{dep_id}", ...],
-            "data": {
-                "traces_to": ["FR-001", "AC-002"],       # PRD requirement IDs this task addresses
-                "design_compliance": ["DD-1", "DD-3"]     # Design decision IDs this task implements
-            }
+            "traces_to": ["FR-001", "AC-002"],       # PRD requirement IDs this task addresses
+            "design_compliance": ["DD-1", "DD-3"],    # Design decision IDs this task implements
+            "content": "{generated_task_content}"      # Full task markdown written through backend
         },
         ...
     ]
@@ -1353,6 +1342,22 @@ The tool will:
 - Detect pre-written files
 - Register tasks in database
 - Update PRD status to "split"
+
+**6.3: Verify Split Succeeded (MANDATORY — do not skip)**
+
+After `split_prd()` returns, verify the PRD status was updated:
+```
+prd_check = mcp__asdlc__get_prd(prd_id="{prd_id}")
+```
+Confirm `prd_check["status"]` is `"split"`. If not, report an error and stop.
+
+Then verify all tasks exist:
+```
+tasks_check = mcp__asdlc__list_tasks(prd_id="{prd_id}")
+```
+Confirm the task count matches the expected number. If any tasks are missing, report which ones failed.
+
+**Do NOT proceed to Step 6.5 or Step 7 until verification passes.**
 
 ---
 
@@ -1676,9 +1681,9 @@ Solution: Run `/sdlc:scan` first for better task generation, or proceed with lim
 
 **Task file write fails:**
 ```
-Error: Permission denied writing to ~/.a-sdlc/content/...
+Error: Permission denied writing to content backend...
 ```
-Solution: Check directory permissions.
+Solution: Check storage backend permissions (S3 credentials or filesystem permissions).
 
 ---
 

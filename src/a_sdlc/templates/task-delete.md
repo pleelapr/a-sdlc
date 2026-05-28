@@ -23,7 +23,7 @@ mcp__asdlc__delete_task(task_id="<task-id>")
 ## Behavior
 
 - Deletes task from database
-- Removes content file from ~/.a-sdlc/content/{project}/tasks/
+- Removes content file from the configured storage backend
 - Does NOT affect parent PRD
 
 ## Output

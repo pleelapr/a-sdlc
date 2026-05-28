@@ -2,12 +2,15 @@
 Core storage and database functionality for a-sdlc.
 
 This module provides the foundational storage layer:
-- Database: SQLite metadata and file path references
+- Database: Metadata storage and file path references
 - ContentManager: Markdown content file operations
 """
 
 from a_sdlc.core.content import ContentManager, get_content_manager
-from a_sdlc.core.database import Database, get_data_dir, get_db, get_db_path
+
+# Legacy re-exports kept for backward compatibility — prefer SessionDatabase
+# and init_storage() for new code.
+from a_sdlc.core.database import Database, get_data_dir, get_db, get_db_path  # noqa: F401
 
 __all__ = [
     "Database",

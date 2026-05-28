@@ -688,21 +688,34 @@ Follow the same challenge round loop as the PRD challenge gate:
 
 For a **new** design:
 ```
-result = mcp__asdlc__create_design(prd_id="{prd_id}")
-# Then write content to the returned file_path:
-Write(file_path=result["file_path"], content="{assembled_markdown}")
+result = mcp__asdlc__create_design(prd_id="{prd_id}", content="{assembled_markdown}")
 ```
 
-If design already existed and user chose to overwrite, get the file path and edit directly:
+**CRITICAL: If `create_design` returns an error, STOP IMMEDIATELY.** Report the error to the user. The `content` parameter writes through the configured backend (local or S3).
+
+If design already existed and user chose to overwrite:
 ```
-design = mcp__asdlc__get_design(prd_id="{prd_id}")
-Write(file_path=design["design"]["file_path"], content="{assembled_markdown}")
+mcp__asdlc__update_design(prd_id="{prd_id}", content="{assembled_markdown}")
 ```
 
-### 6. Display Summary
+### 6. Verify Design Saved (MANDATORY — do not skip)
+
+After writing the design file, confirm it was persisted:
+```
+verification = mcp__asdlc__get_design(prd_id="{prd_id}")
+```
+
+If `verification` returns the design with content, the save was successful.
+If it returns an error or empty content, retry the Write/create_design operation.
+
+**Do NOT display the summary or claim completion until this verification passes.**
+
+### 7. Display Summary
 
 ```
-Design document saved for PRD {prd_id}
+✅ Design Document Complete
+
+Design document saved and verified for PRD {prd_id}
 
 Summary:
 - {N} sections included
@@ -745,4 +758,4 @@ The user must explicitly run one of these commands to continue:
 - Design documents have a 1:1 relationship with PRDs
 - Every design decision must cite either a PRD requirement or a codebase file
 - The design document is used by `/sdlc:prd-split` to create better task breakdowns
-- Design documents are stored as markdown in `~/.a-sdlc/content/{project}/designs/`
+- Design documents are stored as markdown via the configured content backend

@@ -240,15 +240,15 @@ After initialization, the following MCP tools are available:
 ### PRD Management
 - `mcp__asdlc__list_prds()` - List PRDs
 - `mcp__asdlc__get_prd(prd_id)` - Get full PRD with file_path
-- `mcp__asdlc__create_prd(title)` - Create PRD (returns file_path → Write content)
-- `mcp__asdlc__update_prd(prd_id, status?, version?)` - Update PRD metadata
+- `mcp__asdlc__create_prd(title, content?)` - Create PRD (optional content written through backend)
+- `mcp__asdlc__update_prd(prd_id, status?, version?, content?)` - Update PRD metadata and/or content
 - `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
 
 ### Task Management
 - `mcp__asdlc__list_tasks()` - List tasks (filterable)
 - `mcp__asdlc__get_task(task_id)` - Get task details with file_path
-- `mcp__asdlc__create_task(title, prd_id?, priority?)` - Create task (returns file_path → Write content)
-- `mcp__asdlc__update_task(task_id, status?, priority?)` - Update task metadata (use status="in_progress"/"completed"/"blocked")
+- `mcp__asdlc__create_task(title, prd_id?, priority?, content?)` - Create task (optional content written through backend)
+- `mcp__asdlc__update_task(task_id, status?, priority?, content?)` - Update task metadata and/or content
 - `mcp__asdlc__delete_task(task_id)` - Delete task
 
 ### Sprint Management
@@ -361,7 +361,7 @@ Agent: ✓ Project initialized: a-sdlc
 
 ## Notes
 
-- All data is stored in user-level SQLite database (`~/.a-sdlc/data.db`)
+- All data is stored in the configured database backend
 - The `.sdlc/` directory is created in the repository for artifacts and cache
 - `.sdlc/.cache/` is always gitignored (contains checksums and metadata)
 - `.sdlc/artifacts/` can optionally be tracked in git (user's choice)

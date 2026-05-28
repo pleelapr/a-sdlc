@@ -4,7 +4,7 @@ import re
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -406,14 +406,20 @@ class TestTemplateOperations:
 
     def test_get_template_path_package(self):
         """Test finding template in package."""
-        path = get_template_path("task.template.md")
+        mock_storage = MagicMock()
+        mock_storage.templates_dir = Path("/tmp/nonexistent_templates")
+        with patch("a_sdlc.storage.get_storage", return_value=mock_storage):
+            path = get_template_path("task.template.md")
         assert path is not None
         assert path.exists()
         assert path.name == "task.template.md"
 
     def test_get_template_path_not_found(self):
         """Test template not found returns None."""
-        path = get_template_path("nonexistent.template.md")
+        mock_storage = MagicMock()
+        mock_storage.templates_dir = Path("/tmp/nonexistent_templates")
+        with patch("a_sdlc.storage.get_storage", return_value=mock_storage):
+            path = get_template_path("nonexistent.template.md")
         assert path is None
 
 

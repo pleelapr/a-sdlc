@@ -897,7 +897,7 @@ class TestConnectGitHubCLI:
 
         runner = CliRunner()
         with patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
-             patch("a_sdlc.storage.get_storage", return_value=mock_storage):
+             patch("a_sdlc.storage.init_storage", return_value=mock_storage):
             result = runner.invoke(main, ["connect", "github", "--token", "ghp_test"])
 
         assert result.exit_code == 0
@@ -940,7 +940,7 @@ class TestConnectGitHubCLI:
         runner = CliRunner()
         with patch("a_sdlc.server.github.GitHubClient", mock_gh_client_cls), \
              patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
-             patch("a_sdlc.storage.get_storage", return_value=mock_storage):
+             patch("a_sdlc.storage.init_storage", return_value=mock_storage):
             result = runner.invoke(main, ["connect", "github", "--token", "ghp_test"])
 
         assert result.exit_code == 1
@@ -962,7 +962,7 @@ class TestDisconnectGitHubCLI:
 
         runner = CliRunner()
         with patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
-             patch("a_sdlc.storage.get_storage", return_value=mock_storage):
+             patch("a_sdlc.storage.init_storage", return_value=mock_storage):
             result = runner.invoke(main, ["disconnect", "github", "-y"])
 
         assert result.exit_code == 0

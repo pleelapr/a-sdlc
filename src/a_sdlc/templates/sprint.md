@@ -21,23 +21,15 @@ Sprint (SPRINT-001)
 | `/sdlc:sprint-create "<name>"` | Create a new sprint |
 | `/sdlc:sprint-list` | List all sprints |
 | `/sdlc:sprint-show <id>` | Show sprint details + PRDs + tasks |
-| `/sdlc:sprint-start <id>` | Activate a sprint |
+| `/sdlc:sprint-start <id>` | Activate a sprint (optional — sprint-run auto-activates) |
 | `/sdlc:sprint-complete <id>` | Close a sprint |
-| `/sdlc:sprint-run <id>` | Execute sprint tasks in parallel |
+| `/sdlc:sprint-run <id>` | Execute sprint tasks in parallel (auto-activates if planned) |
 
 ## Quick Start Workflow
 
-1. **Create sprint**: `/sdlc:sprint-create "Auth Sprint"`
-2. **Create or get PRD**: `/sdlc:prd-generate "Auth feature"` or use existing
-3. **Assign PRD to sprint**:
-   ```
-   mcp__asdlc__manage_sprint_prds(action="add", prd_id="feature-auth", sprint_id="SPRINT-01")
-   ```
-4. **Generate tasks from PRD**: `/sdlc:prd-split "feature-auth"`
-5. **View sprint**: `/sdlc:sprint-show SPRINT-01`
-6. **Start sprint**: `/sdlc:sprint-start SPRINT-01`
-7. **Run tasks**: `/sdlc:sprint-run SPRINT-01`
-8. **Complete**: `/sdlc:sprint-complete SPRINT-01`
+1. **Create sprint + link PRDs**: `/sdlc:sprint-create "Auth Sprint"` (prompts to link PRDs)
+2. **Run tasks**: `/sdlc:sprint-run SPRINT-01` (auto-activates the sprint)
+3. **Complete**: `/sdlc:sprint-complete SPRINT-01`
 
 ## Sprint Statuses
 
@@ -71,7 +63,7 @@ When you create tasks for a PRD that's assigned to a sprint:
 
 ## Storage
 
-All sprint data is stored in the SQLite database at `~/.a-sdlc/data.db`. No file-based storage is used.
+All sprint data is stored in the configured database (PostgreSQL via Docker Compose). No file-based storage is used.
 
 ## Notes
 

@@ -24,6 +24,9 @@ mcp__asdlc__update_task(task_id="TASK-001", status="in_progress")
 2. Updates task status to `in_progress`
 3. Sets `updated_at` timestamp
 4. Returns updated task details
+5. **Verify** the returned task has `status: "in_progress"` — if not, retry once
+
+**IMPORTANT**: You MUST confirm the task status updated before proceeding. If `update_task` returns an error, stop and report the error to the user.
 
 ## Output
 

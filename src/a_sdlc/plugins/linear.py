@@ -428,7 +428,7 @@ task = Task(
 ```
 
 **Step 4: Link sprint to cycle**
-Save mapping in `.sdlc/sprints/mappings.json`
+Save mapping in the sync_mappings database table
 """
 
         raise NotImplementedError(instructions)
@@ -528,7 +528,7 @@ For each issue:
 - Flag conflicts (local changes vs Linear changes)
 
 **Step 4: Update sync timestamp**
-Record last_synced_at in mappings.json
+Record last_synced_at in the sync_mappings database table
 """
 
         raise NotImplementedError(instructions)

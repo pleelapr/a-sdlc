@@ -231,6 +231,11 @@ def switch_project(project_id: str) -> dict[str, Any]:
         }
 
     db.update_project_accessed(project_id)
+
+    # Set in-memory active project so subsequent tool calls resolve context
+    # even when cwd doesn't match the project path (e.g. Docker, cloud).
+    _server._active_project_id = project_id
+
     return {
         "status": "ok",
         "message": f"Switched to project: {project['name']}",

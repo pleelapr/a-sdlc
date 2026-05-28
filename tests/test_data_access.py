@@ -81,15 +81,39 @@ class TestAllowlist:
 class TestWriteMonitoring:
     def test_write_logged(self, proxy, mock_db, caplog):
         mock_db.create_task.return_value = {"id": "T003"}
-        with caplog.at_level(logging.DEBUG, logger="a-sdlc-server"):
-            proxy.create_task("title", prd_id="P001")
-        assert any("MCP write: create_task" in r.message for r in caplog.records)
+        logger = logging.getLogger("a-sdlc-server")
+        original_level = logger.level
+        original_disabled = logger.disabled
+        original_propagate = logger.propagate
+        try:
+            logger.disabled = False
+            logger.propagate = True
+            logger.setLevel(logging.DEBUG)
+            with caplog.at_level(logging.DEBUG, logger="a-sdlc-server"):
+                proxy.create_task("title", prd_id="P001")
+            assert any("MCP write: create_task" in r.message for r in caplog.records)
+        finally:
+            logger.setLevel(original_level)
+            logger.disabled = original_disabled
+            logger.propagate = original_propagate
 
     def test_read_not_logged(self, proxy, mock_db, caplog):
         mock_db.get_task.return_value = {"id": "T001"}
-        with caplog.at_level(logging.DEBUG, logger="a-sdlc-server"):
-            proxy.get_task("T001")
-        assert not any("MCP write:" in r.message for r in caplog.records)
+        logger = logging.getLogger("a-sdlc-server")
+        original_level = logger.level
+        original_disabled = logger.disabled
+        original_propagate = logger.propagate
+        try:
+            logger.disabled = False
+            logger.propagate = True
+            logger.setLevel(logging.DEBUG)
+            with caplog.at_level(logging.DEBUG, logger="a-sdlc-server"):
+                proxy.get_task("T001")
+            assert not any("MCP write:" in r.message for r in caplog.records)
+        finally:
+            logger.setLevel(original_level)
+            logger.disabled = original_disabled
+            logger.propagate = original_propagate
 
 
 # ── Method caching tests ────────────────────────────────────────────
@@ -116,27 +140,16 @@ class TestAllowlistCompleteness:
     # All methods used by server/__init__.py and server/sync.py
     KNOWN_SERVER_METHODS = {
         # Read ops
-        "check_agent_permission",
-        "compute_agent_performance",
         "get_ac_verifications",
-        "get_active_claim",
-        "get_agent",
-        "get_agent_budget",
-        "get_agent_messages",
-        "get_agent_performance",
-        "get_agent_permissions",
-        "get_available_work",
         "get_challenge_rounds",
         "get_challenge_status",
         "get_coverage_stats",
         "get_external_config",
         "get_latest_approved_review",
-        "get_next_agent_id",
         "get_next_prd_id",
         "get_next_sprint_id",
         "get_next_task_id",
         "get_next_worktree_id",
-        "get_org_overview",
         "get_orphaned_requirements",
         "get_prd",
         "get_project",
@@ -152,14 +165,11 @@ class TestAllowlistCompleteness:
         "get_sync_mapping_by_external",
         "get_task",
         "get_task_requirements",
-        "get_team_composition",
         "get_unverified_acs",
         "get_worktree_by_prd",
         "is_shortname_available",
         "generate_unique_shortname",
         "validate_shortname",
-        "list_agents",
-        "list_claims_by_agent",
         "list_external_configs",
         "list_prds",
         "list_projects",
@@ -171,9 +181,6 @@ class TestAllowlistCompleteness:
         # Write ops
         "append_audit_log",
         "assign_prd_to_sprint",
-        "claim_task",
-        "create_agent",
-        "create_agent_budget",
         "create_prd",
         "create_project",
         "create_review",
@@ -186,14 +193,9 @@ class TestAllowlistCompleteness:
         "delete_sprint",
         "delete_sync_mapping",
         "delete_task",
-        "increment_agent_budget",
         "link_task_requirement",
         "record_ac_verification",
-        "release_task",
-        "retire_agent",
-        "send_agent_message",
         "set_external_config",
-        "suspend_agent",
         "update_prd",
         "update_project_accessed",
         "update_project_path",

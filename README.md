@@ -8,13 +8,43 @@ a-sdlc gives Claude Code a structured development workflow: ideation, PRD genera
 
 ## Install
 
+a-sdlc requires **PostgreSQL** and **S3-compatible storage** (MinIO or AWS S3). Docker Compose is the fastest way to get everything running.
+
+### Docker Compose (recommended)
+
 ```bash
-uv tool install git+https://github.com/pleelapr/a-sdlc.git
-a-sdlc setup       # guided wizard: skills, MCP config, optional integrations
-a-sdlc doctor      # verify everything works
+git clone https://github.com/pleelapr/a-sdlc.git && cd a-sdlc
+cp .env.example .env       # edit passwords if needed
+docker compose up -d        # starts PostgreSQL + MinIO + a-sdlc server
 ```
 
-To upgrade:
+Then install the CLI and connect it to the running server:
+
+```bash
+uv tool install git+https://github.com/pleelapr/a-sdlc.git
+a-sdlc setup               # guided wizard: skills, MCP config, optional integrations
+a-sdlc doctor              # verify everything works
+```
+
+### Manual setup (bring your own PostgreSQL + S3)
+
+```bash
+uv tool install git+https://github.com/pleelapr/a-sdlc.git
+
+# Configure storage (required before a-sdlc can operate)
+export A_SDLC_DATABASE_URL="postgresql://user:pass@localhost/asdlc"
+export A_SDLC_S3_BUCKET="asdlc-content"
+export A_SDLC_S3_ENDPOINT="http://localhost:9000"   # MinIO or S3-compatible
+export A_SDLC_S3_ACCESS_KEY="minioadmin"
+export A_SDLC_S3_SECRET_KEY="minioadmin"
+
+a-sdlc db migrate          # create schema
+a-sdlc serve &             # start MCP + UI server
+a-sdlc setup               # install skills + MCP config
+a-sdlc doctor              # verify everything works
+```
+
+### Upgrade
 
 ```bash
 uv tool install --force git+https://github.com/pleelapr/a-sdlc.git
@@ -25,7 +55,7 @@ a-sdlc setup --upgrade
 
 ## Quick Start
 
-In Claude Code, inside your project directory:
+With the server running (via Docker Compose or `a-sdlc serve`), open Claude Code inside your project directory:
 
 ```
 /sdlc:init      # initialize .sdlc/ structure and register project
@@ -244,8 +274,380 @@ Status mapping: `pending` ↔ Backlog/To Do, `in_progress` ↔ In Progress, `blo
 | `/sdlc:pr-feedback` | Process PR review comments |
 | `/sdlc:sonar-scan` | SonarQube scan + auto-fix |
 | `/sdlc:test` | Runtime testing (Playwright + API) |
+| `/sdlc:retrospective` | Run retrospective on corrections log |
 | `/sdlc:publish` | Publish artifacts to Confluence |
 | `/sdlc:help` | List available commands |
+
+## Server Architecture
+
+a-sdlc runs as an MCP server that Claude Code connects to over HTTP. The `a-sdlc serve` command starts a combined server that runs both the MCP endpoint (streamable-http on port 8765) and the web UI dashboard (uvicorn/FastAPI on port 3847) in a single process. Both share the same asyncio event loop and storage instance.
+
+Docker Compose is the canonical deployment method. See [Docker Deployment](#docker-deployment) for details.
+
+### Port Configuration
+
+| Port | Service | Default | Override |
+|------|---------|---------|----------|
+| 8765 | MCP server (streamable-http) | `8765` | `--mcp-port` flag |
+| 3847 | Web UI dashboard | `3847` | `--ui-port` flag |
+
+Port conflicts are detected before binding. When a port is in use, the error message identifies the blocking PID and suggests using `--mcp-port` or `--ui-port` to choose different ports.
+
+### MCP Configuration
+
+The `a-sdlc install` command writes MCP configuration to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "asdlc": {
+      "type": "http",
+      "url": "http://localhost:8765/mcp"
+    }
+  }
+}
+```
+
+**Custom URL (Docker/cloud):**
+```json
+{
+  "mcpServers": {
+    "asdlc": {
+      "type": "http",
+      "url": "http://my-server:19765/mcp"
+    }
+  }
+}
+```
+
+The server must be running before Claude Code can connect. Start it with `a-sdlc serve` (foreground) or via Docker Compose (recommended).
+
+### Connecting to Docker or Cloud Instances
+
+Use `--url` to point Claude Code at a remote a-sdlc server:
+
+```bash
+# Local server (default)
+a-sdlc install
+
+# Docker instance with custom ports
+a-sdlc install --url http://localhost:19765/mcp
+
+# Remote cloud instance
+a-sdlc install --url https://my-cloud-server.example.com/mcp
+
+# Reconfigure to a different server
+a-sdlc install --force --url http://192.168.1.50:8765/mcp
+```
+
+The `--url` flag writes the exact URL you provide into `~/.claude.json`. The transport is automatically set to HTTP.
+
+## Storage Architecture
+
+### Hybrid Storage Model
+
+a-sdlc uses a hybrid storage model: a database for metadata and relationships, and files (local or S3) for markdown content.
+
+```
+.sdlc/                              # Project-level (per repository)
+├── artifacts/                      # Generated docs (5 standard artifacts)
+├── .cache/checksums.json           # Scan metadata
+├── corrections.log                 # Quality feedback log
+├── lesson-learn.md                 # Project-specific lessons
+└── config.yaml                     # Project-specific configuration
+```
+
+### Database Backends
+
+| Backend | URL Scheme | Notes |
+|---------|-----------|-------|
+| PostgreSQL | `postgresql://user:pass@host/db` | **Required.** Connection pooling, production standard |
+| SQLite | `sqlite:///path/to/data.db` | Tests only. Rejected in production by `StorageConfig` |
+
+### Content Backends
+
+| Backend | Config Value | Storage |
+|---------|-------------|---------|
+| S3-compatible | `content_backend: s3` | **Default.** S3 bucket (or MinIO) via boto3 |
+| Local | `content_backend: local` | Tests only. Filesystem content directory |
+
+### Storage Configuration
+
+Configuration is resolved with the following priority (highest first):
+
+1. **Environment variables** (`A_SDLC_DATABASE_URL`, `A_SDLC_S3_*`, etc.)
+2. **Project config** (`.sdlc/config.yaml` `storage` section)
+3. **Global config** (`~/.config/a-sdlc/config.yaml` `storage` section)
+
+#### Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `A_SDLC_DATABASE_URL` | Database connection URL | (required) |
+| `A_SDLC_CONTENT_BACKEND` | Content storage backend (`local` or `s3`) | `s3` |
+| `A_SDLC_S3_BUCKET` | S3 bucket name (required when backend is `s3`) | — |
+| `A_SDLC_S3_ENDPOINT` | S3-compatible endpoint URL (for MinIO, etc.) | — |
+| `A_SDLC_S3_ACCESS_KEY` | S3 access key ID | — |
+| `A_SDLC_S3_SECRET_KEY` | S3 secret access key | — |
+| `A_SDLC_DATA_DIR` | Override base data directory | `~/.a-sdlc` |
+
+#### Config File Example
+
+```yaml
+# ~/.config/a-sdlc/config.yaml
+storage:
+  database_url: "postgresql://user:pass@localhost/asdlc"
+  content_backend: "s3"
+  s3_bucket: "asdlc-content"
+  s3_endpoint: "http://localhost:9000"
+  s3_access_key: "minioadmin"
+  s3_secret_key: "minioadmin"
+```
+
+### Schema Management (Alembic)
+
+Database schema migrations are managed by Alembic:
+
+```bash
+a-sdlc db status                # Show current migration state
+a-sdlc db migrate               # Apply all pending migrations
+a-sdlc db migrate -r <revision> # Migrate to a specific revision
+a-sdlc db rollback              # Revert one migration step
+a-sdlc db rollback -r base      # Revert all migrations
+```
+
+### Data Migration
+
+`a-sdlc db import` migrates data between any combination of SQLite and PostgreSQL databases. Content files (markdown) are migrated alongside database records.
+
+#### Migration Scenarios
+
+**SQLite → PostgreSQL (initial deployment):**
+
+```bash
+# Source is auto-detected from ~/.a-sdlc/data.db
+a-sdlc db import
+
+# Or specify the source explicitly
+a-sdlc db import --source /path/to/data.db
+```
+
+**PostgreSQL → PostgreSQL (environment promotion):**
+
+```bash
+a-sdlc db import --source postgresql://staging-host/asdlc \
+  --source-s3-bucket staging-content \
+  --source-s3-endpoint http://staging-minio:9000 \
+  --source-s3-access-key KEY \
+  --source-s3-secret-key SECRET
+```
+
+**Merge data without overwriting:**
+
+```bash
+# Merge from another SQLite DB — conflicting IDs are auto-bumped
+a-sdlc db import --source /other/data.db --merge
+
+# Merge from another PostgreSQL instance
+a-sdlc db import --source postgresql://other-host/asdlc --merge \
+  --source-s3-bucket other-bucket \
+  --source-s3-endpoint http://other-minio:9000
+```
+
+**Skip content migration** (metadata only):
+
+```bash
+a-sdlc db import --source /path/to/data.db --skip-content
+```
+
+#### How It Works
+
+| Source Type | Database Access | Content Access |
+|-------------|----------------|----------------|
+| SQLite path | SQLAlchemy reads the `.db` file | Local filesystem `~/.a-sdlc/content/` |
+| PostgreSQL URL | SQLAlchemy connects to the PG server | `--source-s3-*` flags specify the source S3 bucket |
+
+- The **target** is always the currently configured database (`A_SDLC_DATABASE_URL`) and content backend
+- `--merge` resolves ID collisions by bumping conflicting IDs in the source data and cascading FK references
+- Tables are imported in FK dependency order to maintain referential integrity
+- Use `--force` to import into a non-empty target; add `-y` to skip the confirmation prompt
+
+### Entity Hierarchy
+
+```
+Sprint → PRD → Task
+```
+
+- **Tasks inherit sprint membership through PRD** — tasks do NOT have a direct `sprint_id` column
+- **PRDs can be optionally assigned to sprints** — `prd.sprint_id` is nullable
+- **Sprint tasks are queried via PRD join** — `WHERE prd_id IN (SELECT id FROM prds WHERE sprint_id = ?)`
+
+#### ID Formats
+
+| Entity | Format | Example |
+|--------|--------|---------|
+| Project | 4-char uppercase shortname | `PCRA` |
+| PRD | `{shortname}-P{number:04d}` | `PCRA-P0001` |
+| Task | `{shortname}-T{number:05d}` | `PCRA-T00001` |
+| Sprint | `{shortname}-S{number:04d}` | `PCRA-S0001` |
+
+## Docker Deployment
+
+Docker Compose is the canonical deployment method for a-sdlc.
+
+### Docker Compose (PostgreSQL + MinIO)
+
+```bash
+cp .env.example .env       # Edit with your values
+docker compose up -d        # Start all services
+docker compose logs -f      # Follow logs
+docker compose down          # Stop (data persists in named volumes)
+docker compose down -v       # Stop and remove volumes (destroys data)
+```
+
+**Services:**
+
+| Service | Description | Default Port |
+|---------|-------------|-------------|
+| **postgres** | PostgreSQL 16 Alpine, metadata store | 19432 |
+| **minio** | S3-compatible object storage for content files | 19000 (API), 19001 (console) |
+| **minio-init** | One-shot bucket initialization | — |
+| **a-sdlc** | Combined MCP + UI server | 19765 (MCP), 19847 (UI) |
+
+The `.env.example` uses `19xxx` ports to avoid conflicts with other services. Edit `.env` to customize:
+
+```bash
+# .env
+POSTGRES_PORT=19432
+MINIO_API_PORT=19000
+MINIO_CONSOLE_PORT=19001
+A_SDLC_MCP_PORT=19765
+A_SDLC_UI_PORT=19847
+```
+
+### Standalone Docker
+
+```bash
+# Build
+docker build -t a-sdlc .
+
+# Run (requires external PostgreSQL and S3/MinIO)
+docker run -p 8765:8765 -p 3847:3847 \
+  -e A_SDLC_DATABASE_URL="postgresql://user:pass@host/asdlc" \
+  -e A_SDLC_CONTENT_BACKEND="s3" \
+  -e A_SDLC_S3_BUCKET="asdlc-content" \
+  -e A_SDLC_S3_ENDPOINT="http://minio:9000" \
+  -e A_SDLC_S3_ACCESS_KEY="minioadmin" \
+  -e A_SDLC_S3_SECRET_KEY="minioadmin" \
+  a-sdlc
+```
+
+The image exposes two ports:
+- **8765** — MCP server (streamable-http transport, `/health` endpoint)
+- **3847** — Web UI dashboard
+
+### Connecting Claude Code to Docker
+
+After starting the Docker stack, configure Claude Code to connect:
+
+```bash
+a-sdlc install --url http://localhost:19765/mcp
+```
+
+This writes the Docker server URL into `~/.claude.json`. Open Claude Code and run `/sdlc:help` to verify the connection.
+
+## Observability
+
+a-sdlc includes built-in observability for monitoring, diagnosing, and troubleshooting the MCP server.
+
+### Structured Logging
+
+The MCP server writes structured JSON logs to `~/.a-sdlc/server.log` (1 MB rotation, 3 backups):
+
+```json
+{
+  "ts": "2026-05-20T10:30:00.123+00:00",
+  "level": "INFO",
+  "event": "tool_call_end",
+  "tool": "get_task",
+  "duration_ms": 12.45,
+  "status": "ok"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | string | ISO-8601 timestamp with milliseconds |
+| `level` | string | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `event` | string | Log event / message |
+| `tool` | string? | MCP tool name (on tool call events) |
+| `duration_ms` | number? | Tool execution time in milliseconds |
+| `status` | string? | `started`, `ok`, or `error` |
+| `error_type` | string? | Exception class name (on errors) |
+| `error_message` | string? | Exception message string (on errors) |
+
+### Health Endpoint
+
+`GET /health` on the MCP server port (default 8765). Returns an in-memory health snapshot with no I/O:
+
+```json
+{
+  "status": "healthy",
+  "version": "0.7.1",
+  "uptime_seconds": 3600.25,
+  "pid": 12345,
+  "memory_mb": 48.5,
+  "active_connections": 2,
+  "last_error": null
+}
+```
+
+Add `?events=true` to include the connection event ring buffer (max 100 entries).
+
+### Health Dashboard
+
+The web UI includes a health dashboard at `http://localhost:3847/health` with:
+
+- Real-time status indicator (Healthy / Degraded / Unhealthy)
+- Uptime, memory usage, active connections, and error count metrics
+- Connection event timeline
+- Error history with timestamps
+- Live log tail via WebSocket (updates every 5 seconds)
+
+### CLI Observability Commands
+
+```bash
+# View server logs (last 50 entries by default)
+a-sdlc logs
+
+# Show more entries
+a-sdlc logs -n 100
+
+# Filter by minimum log level
+a-sdlc logs --level error
+
+# Stream new log entries in real-time
+a-sdlc logs --follow
+a-sdlc logs -f -l warning    # Stream warnings and errors only
+
+# Run diagnostics
+a-sdlc doctor
+
+# Continuous health monitoring (polls /health every 2s)
+a-sdlc doctor --live
+```
+
+### Troubleshooting
+
+| Symptom | Check | Likely Cause |
+|---------|-------|-------------|
+| MCP tools not responding | `a-sdlc doctor` | Server not running or MCP not configured |
+| Tools slow | `a-sdlc logs` (check `duration_ms`) | Database lock contention or large queries |
+| Intermittent failures | `a-sdlc logs --level error` | Transient errors in tool handlers |
+| Server unreachable | `a-sdlc doctor --live` | Port conflict or process crash |
+| Port already in use | `a-sdlc serve` error | Use `--mcp-port`/`--ui-port` or `lsof -ti :8765` |
+| Claude Code can't connect | Verify `~/.claude.json` | Run `a-sdlc install` to reconfigure MCP settings |
+| Container won't start | `docker compose logs a-sdlc` | Check `A_SDLC_DATABASE_URL` and S3 configuration |
 
 ---
 
@@ -273,11 +675,12 @@ uv tool update-shell   # Add to PATH (first time only)
 # Restart terminal or: source ~/.zshenv
 ```
 
-With optional extras (Linear, Jira/Confluence, or all integrations):
+With optional extras (Linear, Jira/Confluence, PostgreSQL, or all integrations):
 
 ```bash
 uv tool install "a-sdlc[linear] @ git+https://github.com/pleelapr/a-sdlc.git"
 uv tool install "a-sdlc[atlassian] @ git+https://github.com/pleelapr/a-sdlc.git"
+uv tool install "a-sdlc[postgresql] @ git+https://github.com/pleelapr/a-sdlc.git"
 uv tool install "a-sdlc[all] @ git+https://github.com/pleelapr/a-sdlc.git"
 ```
 
@@ -328,6 +731,8 @@ uv tool install --force --editable ".[all]"
 |-------|-------------|--------------|
 | `[linear]` | Linear integration (httpx) | `a-sdlc[linear]` |
 | `[atlassian]` | Jira and Confluence integration (httpx) | `a-sdlc[atlassian]` |
+| `[postgresql]` | PostgreSQL database backend (psycopg2-binary) | `a-sdlc[postgresql]` |
+| `[s3]` | S3/MinIO content storage (boto3) | `a-sdlc[s3]` |
 | `[sonarqube]` | SonarQube integration (pysonar) | `a-sdlc[sonarqube]` |
 | `[all]` | All of the above plus dev tools | `a-sdlc[all]` |
 
@@ -341,16 +746,38 @@ uv tool install --force --editable ".[all]"
 a-sdlc setup                 # Guided setup wizard
 a-sdlc setup --upgrade       # Upgrade: refresh templates, migrate DB, update MCP config
 a-sdlc doctor                # Run diagnostics
+a-sdlc doctor --live         # Continuous health monitoring
 
-# Install skills
-a-sdlc install               # Deploy skills to Claude Code
+# Install skills + MCP config
+a-sdlc install               # Deploy skills to Claude Code (HTTP transport, localhost)
 a-sdlc install --list        # List installed skills
 a-sdlc install --force       # Reinstall all skills
-a-sdlc install --with-serena # Install skills + configure Serena MCP
+a-sdlc install --url http://host:port/mcp  # Point to Docker/cloud instance
+a-sdlc install --target claude             # Install for Claude Code only
+a-sdlc install --target gemini             # Install for Gemini CLI only
 
-# MCP setup
-a-sdlc setup-mcp             # Configure Serena MCP server
-a-sdlc setup-mcp --force     # Reconfigure Serena MCP
+# Server management
+a-sdlc serve                                    # Start combined MCP + UI server
+a-sdlc serve --mcp-port 9000 --ui-port 9001    # Custom ports
+a-sdlc serve --host 0.0.0.0                    # Listen on all interfaces
+
+# Database management
+a-sdlc db status                               # Show current migration state
+a-sdlc db migrate                              # Apply all pending migrations
+a-sdlc db migrate -r <revision>                # Migrate to a specific revision
+a-sdlc db rollback                             # Revert one migration step
+a-sdlc db rollback -r base                     # Revert all migrations
+a-sdlc db import                               # Import from auto-detected SQLite source
+a-sdlc db import --source path/to/data.db      # Import from explicit SQLite path
+a-sdlc db import --source postgresql://host/db  # Import from PostgreSQL
+a-sdlc db import --merge                       # Merge without overwriting (bumps conflicting IDs)
+a-sdlc db import --skip-content                # Metadata only, skip .md files
+
+# Server logs
+a-sdlc logs                  # View server logs (last 50 entries)
+a-sdlc logs -n 100           # Show more entries
+a-sdlc logs --level error    # Filter by severity
+a-sdlc logs --follow         # Stream logs in real-time
 
 # External integrations
 a-sdlc connect linear        # Connect to Linear (interactive prompts)
@@ -416,7 +843,7 @@ tasks:
 
 Serena is **not permanently installed**. When you run `a-sdlc install --with-serena`:
 
-1. a-sdlc adds this config to `~/.claude/settings.json`:
+1. a-sdlc adds this config to `~/.claude.json`:
    ```json
    {
      "mcpServers": {

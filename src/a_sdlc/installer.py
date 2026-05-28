@@ -11,6 +11,7 @@ Handles:
 
 import json
 import shutil
+import subprocess
 import sys
 from importlib import resources
 from pathlib import Path
@@ -19,6 +20,9 @@ from typing import Any
 from a_sdlc import __version__
 from a_sdlc.cli_targets import CLAUDE_TARGET, CLITarget
 from a_sdlc.transpiler import transpile_all
+
+# Default port for HTTP transport (matches server default)
+DEFAULT_MCP_PORT = 8765
 
 
 def check_python_version() -> tuple[bool, str]:
@@ -58,61 +62,122 @@ def check_claude_code_installed() -> tuple[bool, str]:
 
 
 def get_claude_settings_path() -> Path:
-    """Get path to Claude Code settings file.
+    """Get path to Claude Code MCP config file.
 
     Returns:
-        Path to ~/.claude.json (where Claude CLI stores MCP servers)
+        Path to ~/.claude.json (Claude Code's user-level MCP config).
     """
     return Path.home() / ".claude.json"
 
 
-def configure_mcp_server(force: bool = False, target: CLITarget | None = None) -> dict[str, Any]:
-    """Configure a-sdlc MCP server in CLI settings.
+def _build_mcp_config(
+    port: int = DEFAULT_MCP_PORT,
+    url: str | None = None,
+) -> dict[str, Any]:
+    """Build MCP server configuration payload (HTTP only).
+
+    Args:
+        port: Port for HTTP transport (default 8765).
+        url: Explicit MCP server URL. Overrides port when provided.
+             Use for Docker or cloud instances (e.g., "http://my-host:19765/mcp").
+
+    Returns:
+        Dict with MCP server configuration.
+    """
+    return {
+        "type": "http",
+        "url": url or f"http://localhost:{port}/mcp",
+    }
+
+
+def _configure_via_cli(
+    config: dict[str, Any],
+    scope: str = "user",
+) -> bool:
+    """Try to configure MCP server via ``claude mcp add-json``.
+
+    Returns True on success, False if the CLI is not available.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        return False
+    try:
+        subprocess.run(
+            [claude_bin, "mcp", "add-json", "asdlc", json.dumps(config), "-s", scope],
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def configure_mcp_server(
+    force: bool = False,
+    target: CLITarget | None = None,
+    port: int = DEFAULT_MCP_PORT,
+    url: str | None = None,
+) -> dict[str, Any]:
+    """Configure a-sdlc MCP server in CLI settings (HTTP transport only).
+
+    Uses ``claude mcp add-json`` when the Claude CLI is available (preferred),
+    falling back to direct file editing for non-Claude targets or when the
+    CLI is not installed.
 
     Args:
         force: If True, overwrite existing configuration.
         target: CLI target to configure for. Defaults to Claude Code.
+        port: Port for HTTP transport (default 8765).
+        url: Explicit MCP server URL (overrides port). For Docker/cloud instances.
 
     Returns:
         Dict with status and message.
     """
-    settings_path = get_claude_settings_path() if target is None else target.mcp_config_path
+    effective_target = target or CLAUDE_TARGET
+    settings_path = effective_target.mcp_config_path
+    mcp_config = _build_mcp_config(port=port, url=url)
 
-    # Read existing settings or create empty
+    # --- Check if already configured (skip when force=True) ----------
+    if not force:
+        try:
+            if settings_path.exists():
+                with open(settings_path) as f:
+                    settings = json.load(f)
+                if "asdlc" in settings.get("mcpServers", {}):
+                    return {
+                        "status": "exists",
+                        "message": "asdlc MCP server already configured",
+                        "config": settings["mcpServers"]["asdlc"],
+                    }
+        except (json.JSONDecodeError, OSError):
+            pass  # Proceed to configure
+
+    # --- Preferred path: use ``claude mcp add-json`` for Claude targets ---
+    if effective_target.name == "claude" and _configure_via_cli(mcp_config):
+        return {
+            "status": "configured",
+            "message": "asdlc MCP server configured via claude CLI",
+            "transport": "http",
+        }
+
+    # --- Fallback: direct file editing ---------------------------------
     if settings_path.exists():
         with open(settings_path) as f:
             settings = json.load(f)
     else:
         settings = {}
 
-    # Initialize mcpServers if needed
     if "mcpServers" not in settings:
         settings["mcpServers"] = {}
-
-    # Check if already configured (check both old and new names)
-    if "asdlc" in settings["mcpServers"] and not force:
-        return {
-            "status": "exists",
-            "message": "asdlc MCP server already configured",
-            "config": settings["mcpServers"]["asdlc"],
-        }
 
     # Remove old a-sdlc config if present (migration)
     if "a-sdlc" in settings["mcpServers"]:
         del settings["mcpServers"]["a-sdlc"]
 
-    # Configure asdlc MCP server (same payload for all CLIs)
-    settings["mcpServers"]["asdlc"] = {
-        "type": "stdio",
-        "command": "uvx",
-        "args": ["a-sdlc", "serve"],
-        "env": {},
-    }
+    settings["mcpServers"]["asdlc"] = mcp_config
 
-    # Ensure parent directory exists
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write settings
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)
 
@@ -120,6 +185,7 @@ def configure_mcp_server(force: bool = False, target: CLITarget | None = None) -
         "status": "configured",
         "message": f"asdlc MCP server configured in {settings_path}",
         "settings_path": str(settings_path),
+        "transport": "http",
     }
 
 
@@ -139,12 +205,20 @@ class Installer:
         self.target = target or CLAUDE_TARGET
         self.target_dir = target_dir or self.target.commands_dir
 
-    def install(self, force: bool = False, configure_mcp: bool = True) -> list[str]:
+    def install(
+        self,
+        force: bool = False,
+        configure_mcp: bool = True,
+        port: int = DEFAULT_MCP_PORT,
+        url: str | None = None,
+    ) -> list[str]:
         """Install all skill templates to target directory.
 
         Args:
             force: If True, overwrite existing templates.
             configure_mcp: If True, also configure MCP server in Claude Code settings.
+            port: Port for HTTP transport (default 8765).
+            url: Explicit MCP server URL (overrides port). For Docker/cloud instances.
 
         Returns:
             List of installed template names.
@@ -188,7 +262,9 @@ class Installer:
 
         # Configure MCP server
         if configure_mcp:
-            configure_mcp_server(force=force, target=self.target)
+            configure_mcp_server(
+                force=force, target=self.target, port=port, url=url
+            )
 
         return installed
 
@@ -277,29 +353,6 @@ class Installer:
                 continue
             shutil.copy2(persona_file, target_file)
             installed.append(persona_file.stem)
-
-        # Register installed personas as agents in the project database
-        try:
-            from a_sdlc.storage import HybridStorage
-
-            storage = HybridStorage()
-            project = storage.get_most_recent_project()
-            if project:
-                existing_agents = storage.list_agents(project["id"])
-                existing_types = {a["persona_type"] for a in existing_agents}
-                for persona_name in installed:
-                    if persona_name not in existing_types:
-                        agent_id = storage.get_next_agent_id(project["id"])
-                        display_name = persona_name.replace("sdlc-", "").replace("-", " ").title()
-                        storage.create_agent(
-                            agent_id=agent_id,
-                            project_id=project["id"],
-                            persona_type=persona_name,
-                            display_name=display_name,
-                            status="active",
-                        )
-        except Exception:
-            pass  # Silent fail — DB may not exist yet on first install
 
         return installed
 
