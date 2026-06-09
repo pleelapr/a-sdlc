@@ -169,17 +169,63 @@ def _init_storage_backend() -> None:
 
     config = get_storage_config()
 
+    # Log the resolved backend URL up front -- before any connection -- so the
+    # configured target is visible in logs even when the database is unreachable.
+    _logger.info("Using postgresql backend (url=%s)", _mask_url(config.database_url))
+
+    # Wait for the database to accept connections before doing any DB work.
+    # On cloud platforms the private network can take a few seconds to become
+    # routable after the container starts; without this the eager startup
+    # connection fails and the server crash-loops.
+    _wait_for_database(config)
+
     # Initialize the global storage singleton with the loaded config
     from a_sdlc.storage import init_storage
 
     storage = init_storage(config=config)
 
-    # Log backend selection
-    _logger.info("Using postgresql backend (url=%s)", _mask_url(config.database_url))
     _run_auto_migration(config)
 
     _logger.info("Using s3 content backend (bucket=%s)", config.s3_bucket)
     _migrate_local_content_to_s3(storage)
+
+
+def _wait_for_database(config, *, max_wait: float = 90.0) -> None:
+    """Block until the configured database accepts connections.
+
+    Retries with exponential backoff for up to ``max_wait`` seconds, riding
+    through the short window after container start where a cloud provider's
+    private network (e.g. Railway's ``*.railway.internal``) is not yet
+    routable. Each attempt fails fast thanks to the engine's ``connect_timeout``.
+    Re-raises the last error if the database never becomes reachable in time.
+    """
+    import time
+
+    from sqlalchemy import text
+
+    from a_sdlc.core.engine import get_engine
+
+    engine = get_engine(config)
+    deadline = time.monotonic() + max_wait
+    delay = 1.0
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            if attempt > 1:
+                _logger.info("Database reachable after %d attempt(s)", attempt)
+            return
+        except Exception:
+            if time.monotonic() >= deadline:
+                _logger.error("Database not reachable after %.0fs; giving up", max_wait)
+                raise
+            _logger.warning(
+                "Database not ready (attempt %d); retrying in %.0fs", attempt, delay
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 10.0)
 
 
 def _mask_url(url: str) -> str:
@@ -651,6 +697,16 @@ def _cleanup_stale_mcp_pid() -> bool:
         # Corrupt PID file — remove it
         with contextlib.suppress(OSError):
             _MCP_PID_FILE.unlink()
+        return True
+
+    # In a container the app runs as PID 1; a stale PID file left by a previous
+    # (crashed) run records PID 1, and PID 1 is always "alive", so os.kill(pid, 0)
+    # would wrongly treat it as a live instance and block restart. If the recorded
+    # PID is our own, the file is a leftover from a prior run — treat it as stale.
+    if pid == os.getpid():
+        with contextlib.suppress(OSError):
+            _MCP_PID_FILE.unlink()
+        _logger.info("Cleaned up stale PID file (own PID: %d)", pid)
         return True
 
     try:
