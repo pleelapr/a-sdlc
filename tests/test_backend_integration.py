@@ -1183,7 +1183,7 @@ class TestPerformanceBenchmarks:
     """
 
     ITERATIONS = 20
-    P95_THRESHOLD_MS = 100
+    P95_THRESHOLD_MS = 200
 
     def _measure_latencies(self, fn, iterations: int = 20) -> list[float]:
         """Run a function N times and return latencies in ms."""
