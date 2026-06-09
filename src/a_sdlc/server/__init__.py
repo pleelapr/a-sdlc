@@ -88,16 +88,15 @@ class BearerAuthMiddleware:
 
     def __init__(self, app, token: str):
         self.app = app
-        self.token = token
+        self._expected = f"Bearer {token}".encode()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            path = scope.get("path", "")
+            path = scope.get("path", "").rstrip("/")
             if path != "/health":
                 headers = dict(scope.get("headers", []))
-                auth = headers.get(b"authorization", b"").decode()
-                expected = f"Bearer {self.token}"
-                if not hmac.compare_digest(auth, expected):
+                auth = headers.get(b"authorization", b"")
+                if not hmac.compare_digest(auth, self._expected):
                     from starlette.responses import JSONResponse
 
                     response = JSONResponse(

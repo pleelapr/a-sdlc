@@ -162,7 +162,14 @@ def configure_mcp_server(
             pass  # Proceed to configure
 
     # --- Preferred path: use ``claude mcp add-json`` for Claude targets ---
-    if effective_target.name == "claude" and _configure_via_cli(mcp_config):
+    # Skip CLI path when auth_token is set to avoid leaking the secret in
+    # process arguments (visible via ``ps aux``).  Fall through to the
+    # direct file-write path instead.
+    if (
+        effective_target.name == "claude"
+        and not auth_token
+        and _configure_via_cli(mcp_config)
+    ):
         return {
             "status": "configured",
             "message": "asdlc MCP server configured via claude CLI",
