@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from datetime import datetime, timezone
@@ -27,11 +28,15 @@ from sqlmodel import Session, select
 
 from a_sdlc.core.engine import create_all_tables, get_engine, get_session
 from a_sdlc.core.models import (
+    AcVerification,
     AuditLog,
+    ChallengeRecord,
     Design,
     ExternalConfig,
     Prd,
     Project,
+    Requirement,
+    RequirementLink,
     Review,
     SchemaVersion,
     Sprint,
@@ -1241,6 +1246,364 @@ class SessionDatabase:
                 return False
             session.delete(obj)
             return True
+
+    # ==================================================================
+    # Requirements CRUD
+    # ==================================================================
+
+    def upsert_requirement(
+        self,
+        id: str,
+        prd_id: str,
+        req_type: str,
+        req_number: str,
+        summary: str,
+        depth: str = "structural",
+    ) -> dict[str, Any]:
+        """Insert or replace a requirement record."""
+        with self._session() as session:
+            existing = session.get(Requirement, id)
+            if existing:
+                existing.prd_id = prd_id
+                existing.req_type = req_type
+                existing.req_number = req_number
+                existing.summary = summary
+                existing.depth = depth
+                session.flush()
+                session.refresh(existing)
+                return _model_to_dict(existing)
+            record = Requirement(
+                id=id,
+                prd_id=prd_id,
+                req_type=req_type,
+                req_number=req_number,
+                summary=summary,
+                depth=depth,
+            )
+            session.add(record)
+            session.flush()
+            session.refresh(record)
+            return _model_to_dict(record)
+
+    def get_requirement(self, requirement_id: str) -> dict[str, Any] | None:
+        """Get a single requirement by ID."""
+        with self._session() as session:
+            obj = session.get(Requirement, requirement_id)
+            return _model_to_dict(obj) if obj else None
+
+    def get_requirements(
+        self, prd_id: str, req_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get all requirements for a PRD, optionally filtered by type."""
+        with self._session() as session:
+            stmt = select(Requirement).where(Requirement.prd_id == prd_id)
+            if req_type is not None:
+                stmt = stmt.where(Requirement.req_type == req_type)
+            stmt = stmt.order_by(Requirement.req_number)  # type: ignore[arg-type]
+            rows = session.exec(stmt).all()
+            return [_model_to_dict(r) for r in rows]
+
+    def delete_requirements(self, prd_id: str) -> int:
+        """Delete all requirements for a PRD."""
+        with self._session() as session:
+            stmt = select(Requirement).where(Requirement.prd_id == prd_id)
+            rows = session.exec(stmt).all()
+            count = len(rows)
+            for r in rows:
+                session.delete(r)
+            return count
+
+    # ==================================================================
+    # Requirement Links CRUD
+    # ==================================================================
+
+    def link_task_requirement(self, requirement_id: str, task_id: str) -> dict[str, Any]:
+        """Link a task to a requirement (idempotent)."""
+        with self._session() as session:
+            existing = session.get(RequirementLink, (requirement_id, task_id))
+            if existing:
+                return _model_to_dict(existing)
+            link = RequirementLink(requirement_id=requirement_id, task_id=task_id)
+            session.add(link)
+            session.flush()
+            session.refresh(link)
+            return _model_to_dict(link)
+
+    def get_task_requirements(self, task_id: str) -> list[dict[str, Any]]:
+        """Get all requirements linked to a task, with verification status."""
+        with self._session() as session:
+            rows = session.execute(
+                text("""
+                    SELECT r.*, rl.created_at as linked_at,
+                           CASE WHEN av.id IS NOT NULL THEN 1 ELSE 0 END as verified,
+                           av.verified_by, av.evidence_type, av.evidence, av.verified_at
+                    FROM requirement_links rl
+                    INNER JOIN requirements r ON rl.requirement_id = r.id
+                    LEFT JOIN ac_verifications av
+                        ON av.requirement_id = r.id AND av.task_id = rl.task_id
+                    WHERE rl.task_id = :task_id
+                    ORDER BY r.req_number
+                """),
+                {"task_id": task_id},
+            ).mappings().all()
+            return [dict(r) for r in rows]
+
+    def get_requirement_tasks(self, requirement_id: str) -> list[dict[str, Any]]:
+        """Get all tasks linked to a requirement."""
+        with self._session() as session:
+            rows = session.execute(
+                text("""
+                    SELECT t.* FROM requirement_links rl
+                    INNER JOIN tasks t ON rl.task_id = t.id
+                    WHERE rl.requirement_id = :req_id
+                    ORDER BY t.id
+                """),
+                {"req_id": requirement_id},
+            ).mappings().all()
+            return [dict(r) for r in rows]
+
+    def get_orphaned_requirements(self, prd_id: str) -> list[dict[str, Any]]:
+        """Get requirements with zero linked tasks."""
+        with self._session() as session:
+            rows = session.execute(
+                text("""
+                    SELECT r.* FROM requirements r
+                    LEFT JOIN requirement_links rl ON r.id = rl.requirement_id
+                    WHERE r.prd_id = :prd_id AND rl.requirement_id IS NULL
+                    ORDER BY r.req_number
+                """),
+                {"prd_id": prd_id},
+            ).mappings().all()
+            return [dict(r) for r in rows]
+
+    def get_coverage_stats(self, prd_id: str) -> dict[str, Any]:
+        """Compute requirement coverage statistics for a PRD."""
+        with self._session() as session:
+            total_row = session.execute(
+                text("SELECT COUNT(*) as cnt FROM requirements WHERE prd_id = :prd_id"),
+                {"prd_id": prd_id},
+            ).mappings().first()
+            total = total_row["cnt"] if total_row else 0
+
+            linked_row = session.execute(
+                text("""
+                    SELECT COUNT(DISTINCT r.id) as cnt
+                    FROM requirements r
+                    INNER JOIN requirement_links rl ON r.id = rl.requirement_id
+                    WHERE r.prd_id = :prd_id
+                """),
+                {"prd_id": prd_id},
+            ).mappings().first()
+            linked = linked_row["cnt"] if linked_row else 0
+
+            orphaned = total - linked
+
+            type_rows = session.execute(
+                text("""
+                    SELECT r.req_type,
+                           COUNT(*) as total,
+                           COUNT(rl.requirement_id) as linked
+                    FROM requirements r
+                    LEFT JOIN (
+                        SELECT DISTINCT requirement_id FROM requirement_links
+                    ) rl ON r.id = rl.requirement_id
+                    WHERE r.prd_id = :prd_id
+                    GROUP BY r.req_type
+                """),
+                {"prd_id": prd_id},
+            ).mappings().all()
+
+            by_type = {
+                row["req_type"]: {"total": row["total"], "linked": row["linked"]}
+                for row in type_rows
+            }
+
+            return {
+                "total": total,
+                "linked": linked,
+                "orphaned": orphaned,
+                "by_type": by_type,
+            }
+
+    # ==================================================================
+    # AC Verifications CRUD
+    # ==================================================================
+
+    def record_ac_verification(
+        self,
+        requirement_id: str,
+        task_id: str,
+        verified_by: str,
+        evidence_type: str,
+        evidence: str,
+    ) -> dict[str, Any]:
+        """Record acceptance-criteria verification evidence (upsert)."""
+        with self._session() as session:
+            # Check for existing record
+            existing = session.exec(
+                select(AcVerification).where(
+                    AcVerification.requirement_id == requirement_id,
+                    AcVerification.task_id == task_id,
+                )
+            ).first()
+            if existing:
+                existing.verified_by = verified_by
+                existing.evidence_type = evidence_type
+                existing.evidence = evidence
+                existing.verified_at = _utcnow()
+                session.flush()
+                session.refresh(existing)
+                return _model_to_dict(existing)
+            record = AcVerification(
+                requirement_id=requirement_id,
+                task_id=task_id,
+                verified_by=verified_by,
+                evidence_type=evidence_type,
+                evidence=evidence,
+            )
+            session.add(record)
+            session.flush()
+            session.refresh(record)
+            return _model_to_dict(record)
+
+    def get_ac_verifications(self, task_id: str) -> list[dict[str, Any]]:
+        """Get all AC verifications for a task."""
+        with self._session() as session:
+            stmt = (
+                select(AcVerification)
+                .where(AcVerification.task_id == task_id)
+                .order_by(AcVerification.verified_at)  # type: ignore[arg-type]
+            )
+            rows = session.exec(stmt).all()
+            return [_model_to_dict(r) for r in rows]
+
+    def get_unverified_acs(self, task_id: str) -> list[dict[str, Any]]:
+        """Get AC requirements linked to a task but not yet verified."""
+        with self._session() as session:
+            rows = session.execute(
+                text("""
+                    SELECT r.* FROM requirement_links rl
+                    INNER JOIN requirements r ON rl.requirement_id = r.id
+                    LEFT JOIN ac_verifications av
+                        ON av.requirement_id = r.id AND av.task_id = rl.task_id
+                    WHERE rl.task_id = :task_id AND av.id IS NULL
+                    ORDER BY r.req_number
+                """),
+                {"task_id": task_id},
+            ).mappings().all()
+            return [dict(r) for r in rows]
+
+    # ==================================================================
+    # Challenge Records
+    # ==================================================================
+
+    def create_challenge_round(
+        self,
+        artifact_type: str,
+        artifact_id: str,
+        round_number: int,
+        objections: str,
+        challenger_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new challenge round for an artifact."""
+        with self._session() as session:
+            record = ChallengeRecord(
+                artifact_type=artifact_type,
+                artifact_id=artifact_id,
+                round_number=round_number,
+                objections=objections,
+                challenger_context=challenger_context,
+            )
+            session.add(record)
+            session.flush()
+            session.refresh(record)
+            return _model_to_dict(record)
+
+    def update_challenge_round(
+        self,
+        artifact_type: str,
+        artifact_id: str,
+        round_number: int,
+        responses: str | None = None,
+        verdict: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Update specific fields of a challenge round."""
+        with self._session() as session:
+            stmt = select(ChallengeRecord).where(
+                ChallengeRecord.artifact_type == artifact_type,
+                ChallengeRecord.artifact_id == artifact_id,
+                ChallengeRecord.round_number == round_number,
+            )
+            record = session.exec(stmt).first()
+            if not record:
+                return None
+            if responses is not None:
+                record.responses = responses
+            if verdict is not None:
+                record.verdict = verdict
+            if status is not None:
+                record.status = status
+            session.flush()
+            session.refresh(record)
+            return _model_to_dict(record)
+
+    def get_challenge_rounds(
+        self, artifact_type: str, artifact_id: str
+    ) -> list[dict[str, Any]]:
+        """Get all challenge rounds for an artifact, ordered by round number."""
+        with self._session() as session:
+            stmt = (
+                select(ChallengeRecord)
+                .where(
+                    ChallengeRecord.artifact_type == artifact_type,
+                    ChallengeRecord.artifact_id == artifact_id,
+                )
+                .order_by(ChallengeRecord.round_number)  # type: ignore[arg-type]
+            )
+            rows = session.exec(stmt).all()
+            results = []
+            for row in rows:
+                d = _model_to_dict(row)
+                for field in ("objections", "responses"):
+                    if d.get(field):
+                        with contextlib.suppress(json.JSONDecodeError, TypeError):
+                            d[field] = json.loads(d[field])
+                results.append(d)
+            return results
+
+    def get_challenge_status(
+        self, artifact_type: str, artifact_id: str
+    ) -> dict[str, Any]:
+        """Get summary status of challenge rounds for an artifact."""
+        with self._session() as session:
+            stmt = select(
+                ChallengeRecord.status, func.count().label("cnt")
+            ).where(
+                ChallengeRecord.artifact_type == artifact_type,
+                ChallengeRecord.artifact_id == artifact_id,
+            ).group_by(ChallengeRecord.status)
+            rows = session.exec(stmt).all()
+
+            total = sum(r[1] for r in rows)
+            counts = {r[0]: r[1] for r in rows}
+
+            latest_row = session.exec(
+                select(ChallengeRecord)
+                .where(
+                    ChallengeRecord.artifact_type == artifact_type,
+                    ChallengeRecord.artifact_id == artifact_id,
+                )
+                .order_by(ChallengeRecord.round_number.desc())  # type: ignore[attr-defined]
+                .limit(1)
+            ).first()
+
+            return {
+                "total_rounds": total,
+                "latest_status": latest_row.status if latest_row else None,
+                "open_count": counts.get("open", 0),
+                "closed_count": counts.get("closed", 0),
+            }
 
 
 # ======================================================================
