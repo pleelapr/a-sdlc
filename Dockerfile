@@ -3,8 +3,12 @@
 # Build:
 #   docker build -t a-sdlc .
 #
-# Run standalone:
+# Run standalone (Docker):
 #   docker run -p 8765:8765 -p 3847:3847 -v asdlc-data:/data a-sdlc
+#
+# Run on Railway:
+#   Railway injects a PORT env var.  The CLI reads it automatically so the
+#   MCP server binds to $PORT.  Configure a Railway Volume mounted at /data.
 #
 # The image exposes two ports:
 #   8765 — MCP server (streamable-http, /health endpoint)
@@ -58,16 +62,14 @@ RUN mkdir -p /data && chown asdlc:asdlc /data
 # Set environment variables
 ENV A_SDLC_DATA_DIR=/data
 ENV PYTHONUNBUFFERED=1
+ENV A_SDLC_NO_BROWSER=1
 
 # Expose MCP and UI ports
 EXPOSE 8765 3847
 
-# Volume mount point for persistent data
-VOLUME ["/data"]
-
-# Health check against the MCP /health endpoint
+# Health check against the MCP /health endpoint (PORT env var for Railway)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8765/health || exit 1
+    CMD sh -c 'curl -sf http://localhost:${PORT:-8765}/health || exit 1'
 
 # Run as non-root
 USER asdlc

@@ -10,6 +10,7 @@ Provides commands for:
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,15 +75,15 @@ def main() -> None:
 @main.command()
 @click.option(
     "--mcp-port",
-    default=8765,
+    default=int(os.environ.get("PORT", os.environ.get("A_SDLC_MCP_PORT", "8765"))),
     type=int,
-    help="MCP server port (default: 8765)",
+    help="MCP server port (default: $PORT or $A_SDLC_MCP_PORT or 8765)",
 )
 @click.option(
     "--ui-port",
-    default=3847,
+    default=int(os.environ.get("A_SDLC_UI_PORT", "3847")),
     type=int,
-    help="UI dashboard port (default: 3847)",
+    help="UI dashboard port (default: $A_SDLC_UI_PORT or 3847)",
 )
 @click.option(
     "--host",
