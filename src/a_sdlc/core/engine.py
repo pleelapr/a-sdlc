@@ -78,6 +78,11 @@ def get_engine(
             kwargs["pool_size"] = 5
             kwargs["max_overflow"] = 10
             kwargs["pool_pre_ping"] = True
+            if config.is_postgresql:
+                # Fail fast (seconds) instead of hanging on the OS TCP timeout
+                # (~minutes) when the host is unreachable -- e.g. during the
+                # brief window before a cloud private network is ready at boot.
+                kwargs["connect_args"] = {"connect_timeout": 10}
 
         engine = create_engine(url, **kwargs)
 
