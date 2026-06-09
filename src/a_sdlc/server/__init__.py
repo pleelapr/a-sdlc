@@ -23,6 +23,7 @@ import asyncio
 import atexit
 import contextlib
 import functools
+import hmac
 import json
 import logging
 import os
@@ -74,6 +75,36 @@ from a_sdlc.storage import (  # noqa: F401 — re-exported for submodules
 )
 
 _logger = logging.getLogger("a-sdlc-server")
+
+
+class BearerAuthMiddleware:
+    """ASGI middleware that enforces Bearer token auth on all paths except /health.
+
+    When ``A_SDLC_AUTH_TOKEN`` is set, the server wraps the MCP ASGI app with
+    this middleware.  Requests to ``/health`` are always allowed (needed for
+    Docker/Railway health checks).  All other requests must include a valid
+    ``Authorization: Bearer <token>`` header or receive a 401 JSON response.
+    """
+
+    def __init__(self, app, token: str):
+        self.app = app
+        self._expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "").rstrip("/")
+            if path != "/health":
+                headers = dict(scope.get("headers", []))
+                auth = headers.get(b"authorization", b"")
+                if not hmac.compare_digest(auth, self._expected):
+                    from starlette.responses import JSONResponse
+
+                    response = JSONResponse(
+                        {"error": "Unauthorized"}, status_code=401
+                    )
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 def _migrate_local_content_to_s3(storage) -> None:
@@ -783,10 +814,16 @@ def run_server(
     # Get the MCP ASGI app directly instead of calling mcp.run() which
     # starts its own event loop via anyio.run(). This lets us run both
     # servers as coroutines in a single asyncio event loop.
-    mcp_app = mcp.streamable_http_app()
+    mcp_asgi_app: Any = mcp.streamable_http_app()
+
+    # Conditionally wrap with bearer token auth when A_SDLC_AUTH_TOKEN is set
+    auth_token = os.environ.get("A_SDLC_AUTH_TOKEN")
+    if auth_token:
+        mcp_asgi_app = BearerAuthMiddleware(mcp_asgi_app, auth_token)
+        _logger.info("Bearer token authentication enabled for MCP server")
 
     mcp_config = uvicorn.Config(
-        mcp_app,
+        mcp_asgi_app,
         host=host,
         port=mcp_port,
         log_level="info",
