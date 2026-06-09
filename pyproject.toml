@@ -39,24 +39,35 @@ dependencies = [
     "click>=8.1.0",
     "pyyaml>=6.0",
     "rich>=13.0.0",
-    "pydantic>=2.0.0",
+    "pydantic>=2.12.6",
     "sqlmodel>=0.0.14",
     "alembic>=1.13.0",
-    "mcp>=1.0.0",
+    "mcp>=1.27.0",
     # UI dependencies (for web dashboard)
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.20.0",
-    "jinja2>=3.0.0",
+    "jinja2>=3.1.6",
+    # Security floor pins — transitive deps with known CVEs
+    "cryptography>=46.0.7",      # CVE-2026-39892 buffer overflow, CVE-2026-34073 DNS bypass
+    "sqlalchemy>=2.0.50",        # CVE-2026-31453 SQL injection in HasCTE
+    "starlette>=0.52.0",         # CVE-2026-43114 path traversal, PYSEC-2026-88 host injection
+    "urllib3>=2.7.0",            # CVE-2026-44432 decompression bomb, CVE-2026-44431 header leak
+    "idna>=3.15",                # CVE-2026-45409
+    "pygments>=2.20.0",          # CVE-2026-4539
+    "pyjwt>=2.13.0",             # PYSEC-2026-120, PYSEC-2026-175..179 multiple JWT vulns
+    "python-dotenv>=1.2.2",      # CVE-2026-28684
+    "python-multipart>=0.0.27",  # CVE-2026-40347, CVE-2026-42561
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
+    "pytest>=9.0.3",              # CVE-2025-71176
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "types-PyYAML>=6.0",
     "moto[s3]>=5.0.0",
+    "requests>=2.32.6",       # CVE-2025-47516 header leakage on redirects
 ]
 linear = [
     "httpx>=0.25.0",
