@@ -109,7 +109,7 @@ def build_uninstall_plan(
     for target in targets:
         if target.mcp_config_path.exists():
             try:
-                with open(target.mcp_config_path) as f:
+                with open(target.mcp_config_path, encoding="utf-8") as f:
                     config = json.load(f)
                 if "asdlc" in config.get("mcpServers", {}):
                     plan.has_asdlc_mcp = True
@@ -223,12 +223,12 @@ def _remove_asdlc_mcp(plan: UninstallPlan, result: UninstallResult) -> None:
             settings_path = target.mcp_config_path
             if not settings_path.exists():
                 continue
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8") as f:
                 settings = json.load(f)
 
             if "asdlc" in settings.get("mcpServers", {}):
                 del settings["mcpServers"]["asdlc"]
-                with open(settings_path, "w") as f:
+                with open(settings_path, "w", encoding="utf-8") as f:
                     json.dump(settings, f, indent=2)
                 result.actions.append(
                     f"Removed asdlc MCP server from {settings_path}"

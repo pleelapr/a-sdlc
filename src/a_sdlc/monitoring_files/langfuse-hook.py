@@ -47,7 +47,7 @@ def debug_log(message: str) -> None:
     try:
         DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        with open(DEBUG_LOG, "a") as f:
+        with open(DEBUG_LOG, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] {message}\n")
     except Exception:
         pass  # debug logging must never block the hook

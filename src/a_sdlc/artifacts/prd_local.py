@@ -53,7 +53,7 @@ class LocalPRDPlugin(PRDPlugin):
         metadata_path = self._get_metadata_path()
         if metadata_path.exists():
             try:
-                with open(metadata_path) as f:
+                with open(metadata_path, encoding="utf-8") as f:
                     self._metadata = json.load(f)
             except (json.JSONDecodeError, OSError):
                 self._metadata = {}
@@ -64,7 +64,7 @@ class LocalPRDPlugin(PRDPlugin):
         """Save metadata to file."""
         self.prds_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = self._get_metadata_path()
-        with open(metadata_path, "w") as f:
+        with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(self._metadata, f, indent=2)
 
     def _get_prd_path(self, prd_id: str) -> Path:

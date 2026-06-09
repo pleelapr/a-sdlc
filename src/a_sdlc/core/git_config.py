@@ -145,7 +145,7 @@ def _load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except Exception:
         return {}
@@ -159,7 +159,7 @@ def _save_yaml(path: Path, data: dict) -> None:
         data: Dictionary to serialize.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, default_flow_style=False)
 
 
