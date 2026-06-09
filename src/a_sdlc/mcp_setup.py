@@ -149,7 +149,7 @@ def load_settings(path: Path) -> dict:
         return {}
 
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
@@ -164,7 +164,7 @@ def save_settings(settings: dict, path: Path) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
 
