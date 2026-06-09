@@ -78,10 +78,13 @@ If edit selected:
 
 ### 4. Save Updates
 
-For **content changes**, edit the PRD file directly:
+For **content changes**, use the read-modify-write pattern:
 ```
+# 1. Read current content
 prd = mcp__asdlc__get_prd(prd_id="<prd_id>")
-Edit(file_path=prd["prd"]["file_path"], old_string="...", new_string="...")
+# 2. Modify content in-memory (apply user's changes)
+# 3. Write updated content through configured backend
+mcp__asdlc__update_prd(prd_id="<prd_id>", content="<full updated markdown>")
 ```
 
 For **metadata changes** (status, version, sprint):

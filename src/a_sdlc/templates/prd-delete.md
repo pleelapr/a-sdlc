@@ -23,7 +23,7 @@ mcp__asdlc__delete_prd(prd_id="<prd-id>")
 ## Behavior
 
 - Deletes PRD from database
-- Removes content file from ~/.a-sdlc/content/{project}/prds/
+- Removes content file from the configured storage backend
 - WARNING: Does NOT delete associated tasks
 
 ## Output

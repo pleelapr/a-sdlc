@@ -236,4 +236,4 @@ Try:
 - Task priorities are mapped to closest equivalent
 - External URLs are preserved for easy navigation
 - Duplicate detection prevents re-importing the same sprint
-- Sync mappings are created automatically in the SQLite database
+- Sync mappings are created automatically in the database

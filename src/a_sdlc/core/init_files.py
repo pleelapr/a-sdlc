@@ -6,8 +6,11 @@ initialization. Used by both the CLI `a-sdlc init` command and the MCP
 `init_project()` tool to ensure identical output regardless of init path.
 """
 
+import re
 from importlib import resources
 from pathlib import Path
+
+import yaml
 
 from a_sdlc.cli_targets import CLAUDE_TARGET, CLITarget, detect_targets
 from a_sdlc.core.content import get_data_dir
@@ -31,6 +34,59 @@ def _load_template(template_name: str) -> str:
         if fallback.exists():
             return fallback.read_text(encoding="utf-8")
         raise FileNotFoundError(f"Template not found: {template_name}") from None
+
+
+_TOP_LEVEL_KEY_RE = re.compile(r"^[a-z][a-z_]*:")
+
+
+def _extract_template_sections(template_text: str) -> dict[str, str]:
+    """Parse template YAML text into sections keyed by top-level key name.
+
+    Each section includes any preceding comment lines, the key line itself,
+    and all nested content until the next top-level key or EOF.
+
+    Args:
+        template_text: Raw YAML template text with comments.
+
+    Returns:
+        Ordered dict mapping top-level key names to their full text blocks.
+    """
+    lines = template_text.split("\n")
+    sections: dict[str, str] = {}
+    current_key: str | None = None
+    current_start: int = 0
+    # Track where leading comments for the *next* section begin
+    comment_start: int | None = None
+
+    for i, line in enumerate(lines):
+        if _TOP_LEVEL_KEY_RE.match(line):
+            key_name = line.split(":")[0]
+            # Finalize previous section
+            if current_key is not None:
+                # End previous section just before the comment block of this key
+                end = comment_start if comment_start is not None else i
+                sections[current_key] = "\n".join(lines[current_start:end]).rstrip("\n")
+            current_key = key_name
+            # Include preceding comments in this section
+            current_start = comment_start if comment_start is not None else i
+            comment_start = None
+        elif line.startswith("#") or line.strip() == "":
+            # Potential leading comment/blank for the next section
+            if comment_start is None:
+                comment_start = i
+        else:
+            # Indented content — belongs to the current section
+            comment_start = None
+
+    # Finalize last section
+    if current_key is not None:
+        sections[current_key] = "\n".join(lines[current_start:]).rstrip("\n")
+
+    # Strip leading blank lines from each section (keep comments)
+    for key in sections:
+        sections[key] = sections[key].lstrip("\n")
+
+    return sections
 
 
 def generate_claude_md(
@@ -183,14 +239,19 @@ def generate_config_yaml(
     project_path: Path,
     overwrite: bool = False,
 ) -> dict[str, str]:
-    """Generate .sdlc/config.yaml for the project.
+    """Generate or upgrade .sdlc/config.yaml for the project.
+
+    When the config file already exists and ``overwrite`` is False, the
+    function checks for top-level sections present in the template but
+    missing from the existing file.  Missing sections are appended
+    (text-based, preserving comments) and status ``"updated"`` is returned.
 
     Args:
         project_path: Path to the project root directory.
-        overwrite: If False, skip if config.yaml already exists.
+        overwrite: If True, replace entire file with the template.
 
     Returns:
-        Dict with 'status' ('created', 'exists') and 'path'.
+        Dict with 'status' ('created', 'updated', 'exists') and 'path'.
     """
     sdlc_dir = project_path / ".sdlc"
     sdlc_dir.mkdir(parents=True, exist_ok=True)
@@ -198,10 +259,40 @@ def generate_config_yaml(
     config_path = sdlc_dir / "config.yaml"
 
     if config_path.exists() and not overwrite:
+        # --- upgrade path: append missing sections ---
+        existing_text = config_path.read_text(encoding="utf-8")
+        existing_keys = set((yaml.safe_load(existing_text) or {}).keys())
+
+        template_text = _load_template("config.template.yaml")
+        template_sections = _extract_template_sections(template_text)
+
+        missing = [k for k in template_sections if k not in existing_keys]
+
+        if not missing:
+            return {
+                "status": "exists",
+                "path": str(config_path),
+                "message": "config.yaml already exists. Skipped.",
+            }
+
+        # Append missing sections with a separator
+        parts = [existing_text.rstrip("\n")]
+        parts.append("")
+        parts.append(
+            f"# ── Added by a-sdlc upgrade ({', '.join(missing)}) ──"
+        )
+        for key in missing:
+            parts.append("")
+            parts.append(template_sections[key])
+
+        parts.append("")  # trailing newline
+        config_path.write_text("\n".join(parts), encoding="utf-8")
+
         return {
-            "status": "exists",
+            "status": "updated",
             "path": str(config_path),
-            "message": "config.yaml already exists. Skipped.",
+            "message": f"config.yaml upgraded — added sections: {', '.join(missing)}",
+            "added_sections": missing,
         }
 
     template = _load_template("config.template.yaml")

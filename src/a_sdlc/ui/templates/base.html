@@ -69,7 +69,19 @@
             text-decoration: none;
         }
 
-        nav .nav-links { display: flex; gap: 1rem; }
+        nav .nav-links { display: flex; gap: 0.25rem; align-items: center; }
+
+        .nav-group {
+            display: flex;
+            gap: 0.25rem;
+            align-items: center;
+        }
+
+        .nav-group + .nav-group {
+            margin-left: 0.5rem;
+            padding-left: 0.75rem;
+            border-left: 1px solid var(--border);
+        }
 
         nav a {
             color: var(--text-muted);
@@ -784,33 +796,11 @@
         .entry-system { border-left: 3px solid var(--border) !important; }
         .entry-user { border-left: 3px solid #a371f7 !important; }
 
-        .thread-comment-form {
-            margin-top: 0.75rem;
-            padding-top: 0.75rem;
-            border-top: 1px solid var(--border);
-        }
-        .thread-form {
-            display: flex;
-            gap: 0.375rem;
-        }
-        .thread-comment-input {
-            flex: 1;
-            padding: 0.5rem 0.75rem;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            background: var(--bg);
-            color: var(--text);
-            font-size: 0.875rem;
-        }
-        .thread-comment-input:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-
         /* Responsive */
         @media (max-width: 768px) {
             nav .nav-content { flex-wrap: wrap; gap: 0.75rem; }
-            nav .nav-links { gap: 0.25rem; }
+            nav .nav-links { gap: 0.25rem; flex-wrap: wrap; }
+            .nav-group + .nav-group { border-left: none; margin-left: 0; padding-left: 0; }
             nav a { padding: 0.4rem 0.5rem; font-size: 0.8rem; }
             .project-switcher { margin-left: 0; width: 100%; }
             .project-switcher select { flex: 1; }
@@ -832,22 +822,24 @@
         <div class="nav-content">
             <a href="/" class="logo">a-sdlc</a>
             <div class="nav-links">
-                <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Home</a>
                 {% if project %}
-                <a href="/projects/{{ project.id }}" {% if request.url.path == "/projects/" + project.id %}class="active"{% endif %}>Dashboard</a>
-                <a href="/sprints?project={{ project.id }}" {% if "/sprints" in request.url.path %}class="active"{% endif %}>Sprints</a>
-                <a href="/prds?project={{ project.id }}" {% if "/prds" in request.url.path %}class="active"{% endif %}>PRDs</a>
-                <a href="/tasks?project={{ project.id }}" {% if "/tasks" in request.url.path %}class="active"{% endif %}>Tasks</a>
-                <a href="/runs?project={{ project.id }}" {% if "/runs" in request.url.path %}class="active"{% endif %}>
-                    Pipeline
-                    {% if active_run_count is defined and active_run_count > 0 %}
-                    <span class="nav-badge">{{ active_run_count }}</span>
-                    {% elif request.state.active_pipeline_count is defined and request.state.active_pipeline_count > 0 %}
-                    <span class="nav-badge">{{ request.state.active_pipeline_count }}</span>
-                    {% endif %}
-                </a>
-                <a href="/analytics?project={{ project.id }}" {% if "/analytics" in request.url.path %}class="active"{% endif %}>Analytics</a>
-                <a href="/settings?project={{ project.id }}" {% if "/settings" in request.url.path %}class="active"{% endif %}>Settings</a>
+                <div class="nav-group">
+                    <a href="/sprints?project={{ project.id }}" {% if "/sprints" in request.url.path %}class="active"{% endif %} title="Sprint planning &amp; tracking">Sprints</a>
+                    <a href="/prds?project={{ project.id }}" {% if "/prds" in request.url.path %}class="active"{% endif %} title="Product requirements documents">PRDs</a>
+                </div>
+                <div class="nav-group">
+                    <a href="/tasks?project={{ project.id }}" {% if "/tasks" in request.url.path %}class="active"{% endif %} title="Task board &amp; status">Tasks</a>
+                    <a href="/analytics?project={{ project.id }}" {% if "/analytics" in request.url.path %}class="active"{% endif %} title="Velocity &amp; coverage metrics">Analytics</a>
+                </div>
+                <div class="nav-group">
+                    <a href="/settings?project={{ project.id }}" {% if "/settings" in request.url.path %}class="active"{% endif %} title="Integrations &amp; project config">Settings</a>
+                    <a href="/health" {% if "/health" in request.url.path %}class="active"{% endif %} title="Server health &amp; diagnostics">Health</a>
+                </div>
+                {% endif %}
+                {% if not project %}
+                <div class="nav-group">
+                    <a href="/health" {% if "/health" in request.url.path %}class="active"{% endif %} title="Server health &amp; diagnostics">Health</a>
+                </div>
                 {% endif %}
             </div>
             {% if projects and projects|length > 1 and project %}
@@ -861,7 +853,7 @@
             </div>
             {% elif project %}
             <div class="project-switcher">
-                <span style="color: var(--text-muted); font-size: 0.875rem;">{{ project.name }}</span>
+                <a href="/projects/{{ project.id }}" style="color: var(--text-muted); font-size: 0.875rem; text-decoration: none;" title="Project dashboard">{{ project.name }}</a>
             </div>
             {% endif %}
         </div>
@@ -988,66 +980,6 @@
             document.body.removeChild(ta);
         }
 
-        async function postThreadComment() {
-            const container = document.getElementById('thread-viewer-container');
-            if (!container) return;
-
-            const artifactType = container.dataset.artifactType;
-            const artifactId = container.dataset.artifactId;
-            const input = document.getElementById('thread-comment-input');
-            const statusEl = document.getElementById('thread-post-status');
-            const content = input.value.trim();
-
-            if (!content) {
-                statusEl.textContent = 'Comment cannot be empty.';
-                statusEl.style.color = 'var(--danger)';
-                return;
-            }
-
-            statusEl.textContent = 'Posting...';
-            statusEl.style.color = 'var(--text-muted)';
-
-            try {
-                // Use the run_id from the URL if we are on a run detail page
-                let url = `/threads/${artifactType}/${artifactId}/comment`;
-                const params = new URLSearchParams(window.location.search);
-                const runId = params.get('run_id') || window.location.pathname.split('/runs/')[1];
-                if (runId) {
-                    url += `?run_id=${runId}`;
-                }
-
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: content })
-                });
-
-                if (response.ok) {
-                    const html = await response.text();
-                    // If we have a target div (like in tabs), update it.
-                    // Otherwise update the container itself.
-                    const target = document.getElementById('thread-viewer-target') || container;
-                    target.innerHTML = html;
-
-                    // Re-focus the input if it still exists (it might have been swapped)
-                    const newInput = document.getElementById('thread-comment-input');
-                    if (newInput) {
-                        newInput.value = '';
-                        newInput.focus();
-                    }
-
-                    showToast('Comment posted');
-                } else {
-                    const errorText = await response.text();
-                    statusEl.textContent = 'Failed: ' + errorText;
-                    statusEl.style.color = 'var(--danger)';
-                }
-            } catch (error) {
-                console.error('Post comment error:', error);
-                statusEl.textContent = 'Error posting comment.';
-                statusEl.style.color = 'var(--danger)';
-            }
-        }
         </script>
 
     <main class="container">

@@ -611,14 +611,12 @@ Proceed to Step 5.
 ### 5. Save PRD
 
 ```
-result = mcp__asdlc__create_prd(title="<title>")
+result = mcp__asdlc__create_prd(title="<title>", content="<markdown_content>")
 ```
 
-This creates a DB record and skeleton file. Then write the full content:
+**CRITICAL: If `create_prd` returns an error, STOP IMMEDIATELY.** Report the error to the user and suggest they check the database or re-run the command. Never write PRD content to `.sdlc/prds/` or any other path.
 
-```
-Write(file_path=result["file_path"], content="<markdown_content>")
-```
+This creates a DB record and writes content through the configured backend (local filesystem or S3). The `content` parameter ensures content reaches the correct storage even in Docker/cloud deployments.
 
 Returns:
 ```json
@@ -632,7 +630,7 @@ Returns:
     "sprint_id": null,
     "created_at": "2025-01-26T12:00:00Z"
   },
-  "file_path": "~/.a-sdlc/content/proj/prds/PROJ-P0001.md"
+  "file_path": "content/proj/prds/PROJ-P0001.md"
 }
 ```
 
@@ -811,11 +809,8 @@ After the challenge completes:
 - 3 acceptance criteria
 - 2 affected components
 
-🔗 Next steps for user:
-- View PRD: /sdlc:prd-list
-- Mark ready: /sdlc:prd-update "feature-auth" --status ready
-- Design architecture: /sdlc:prd-architect "feature-auth"  ← recommended before splitting
-- Split into tasks: /sdlc:prd-split "feature-auth"
+🔗 Next step:
+- Design architecture: /sdlc:prd-architect "feature-auth"  ← required before splitting into tasks
 ```
 
 ## ⛔ STOP HERE
@@ -823,10 +818,11 @@ After the challenge completes:
 **Do NOT proceed further.** The PRD generation workflow is complete.
 
 The user must explicitly run one of these commands to continue:
-- `/sdlc:prd-update` - To edit the PRD
-- `/sdlc:prd-architect` - To design architecture before splitting (recommended next step)
-- `/sdlc:prd-split` - To create tasks from the PRD (run architect first)
-- `/sdlc:investigate` - To analyze codebase before splitting
+- `/sdlc:prd-update` — To edit the PRD
+- `/sdlc:prd-architect` — To design architecture (**required** before splitting into tasks)
+- `/sdlc:investigate` — To analyze codebase before architecture design
+
+**Do NOT suggest `/sdlc:prd-split` directly.** The architecture step (`/sdlc:prd-architect`) is a required prerequisite before splitting a PRD into tasks.
 
 **Wait for user's next instruction.**
 
@@ -943,10 +939,8 @@ User selects: **Cost metrics + Latency benchmarks + Integration tests**, **Promp
 - 3 acceptance criteria
 - 3 affected components
 
-🔗 Next steps for user:
-- View: /sdlc:prd-list
-- Design architecture: /sdlc:prd-architect "model-downgrade-gpt4"  ← recommended before splitting
-- Split: /sdlc:prd-split "model-downgrade-gpt4"
+🔗 Next step:
+- Design architecture: /sdlc:prd-architect "model-downgrade-gpt4"  ← required before splitting into tasks
 ```
 
 ## MCP Tools Used
@@ -976,4 +970,4 @@ New PRDs are created with status `draft`. Use `/sdlc:prd-update` to change statu
 - PRDs can optionally be assigned to a sprint after creation
 - **PRD Creation Only:** This skill creates PRD documents ONLY.
   It does NOT split into tasks or implement features.
-  Use `/sdlc:prd-architect` to design architecture, then `/sdlc:prd-split` to create tasks.
+  The required next step is `/sdlc:prd-architect` to design architecture, then `/sdlc:prd-split` to create tasks.

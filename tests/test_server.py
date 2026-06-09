@@ -1,16 +1,14 @@
 """Tests for MCP server tools."""
 
-import json
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from a_sdlc.core.quality_config import ChallengeConfig, QualityConfig
 
 
 @pytest.fixture
@@ -2709,55 +2707,54 @@ class TestUpdateTaskReviewGate:
 
 
 # ---------------------------------------------------------------------------
-# MCP server singleton (PID file lock)
+# Server lifecycle: signal handling, UI PID management
 # ---------------------------------------------------------------------------
 
 
-class TestMCPServerSingleton:
-    """Tests for the MCP server singleton PID file mechanism."""
+class TestServerLifecycle:
+    """Tests for signal handling."""
 
-    def test_run_server_stdio_skips_singleton(self, tmp_path):
-        """Stdio transport skips singleton check — each session needs its own process."""
-        from a_sdlc.server import run_server
-
-        with (
-            patch("a_sdlc.server._mcp_acquire_pid") as mock_acquire,
-            patch("a_sdlc.server._start_ui_server"),
-            patch("a_sdlc.server.mcp") as mock_mcp,
-            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
-            patch("a_sdlc.server.signal.signal"),
-            patch("a_sdlc.server.atexit.register"),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-            patch.dict("os.environ", {}, clear=False),
-        ):
-            os.environ.pop("A_SDLC_CHILD", None)
-            run_server(transport="stdio")
-
-        mock_acquire.assert_not_called()
-        mock_mcp.run.assert_called_once_with(transport="stdio")
-
-    def test_run_server_http_acquires_pid_for_primary(self, tmp_path):
-        """HTTP transport acquires PID file for singleton enforcement."""
-        from a_sdlc.server import run_server
+    def test_signal_handler_cleans_pid(self):
+        """Signal handler calls _mcp_remove_pid."""
+        from a_sdlc.server import _signal_handler
 
         with (
-            patch("a_sdlc.server._mcp_acquire_pid", return_value=True) as mock_acquire,
-            patch("a_sdlc.server._start_ui_server"),
-            patch("a_sdlc.server.mcp") as mock_mcp,
-            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
-            patch("a_sdlc.server.signal.signal"),
-            patch("a_sdlc.server.atexit.register"),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-            patch.dict("os.environ", {}, clear=False),
+            patch("a_sdlc.server._mcp_remove_pid") as mock_remove,
+            pytest.raises(SystemExit) as exc_info,
         ):
-            os.environ.pop("A_SDLC_CHILD", None)
-            run_server(transport="streamable-http")
-            mock_acquire.assert_called_once()
-            mock_mcp.run.assert_called_once_with(transport="streamable-http")
+            _signal_handler(15, None)
 
-    def test_run_server_http_exits_if_primary_running(self, tmp_path):
-        """Second HTTP instance exits silently when another holds the lock."""
-        from a_sdlc.server import run_server
+        assert exc_info.value.code == 0
+        mock_remove.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Combined server (run_combined_server)
+# ---------------------------------------------------------------------------
+
+
+class TestRunCombinedServer:
+    """Tests for the combined MCP + UI server entry point."""
+
+    def test_run_combined_server_exists_with_correct_signature(self):
+        """run_combined_server is importable and accepts expected parameters."""
+        import inspect
+
+        from a_sdlc.server import run_combined_server
+
+        sig = inspect.signature(run_combined_server)
+        params = list(sig.parameters.keys())
+        assert "mcp_port" in params
+        assert "ui_port" in params
+        assert "host" in params
+        # Check defaults
+        assert sig.parameters["mcp_port"].default == 8765
+        assert sig.parameters["ui_port"].default == 3847
+        assert sig.parameters["host"].default == "0.0.0.0"
+
+    def test_run_combined_server_pid_lock_prevents_duplicates(self, tmp_path):
+        """run_combined_server exits if PID lock is already held."""
+        from a_sdlc.server import run_combined_server
 
         with (
             patch("a_sdlc.server._mcp_acquire_pid", return_value=False),
@@ -2765,459 +2762,69 @@ class TestMCPServerSingleton:
             patch("a_sdlc.server.signal.signal"),
             patch("a_sdlc.server.atexit.register"),
             patch("a_sdlc.server.Path.home", return_value=tmp_path),
-            patch.dict("os.environ", {}, clear=False),
             pytest.raises(SystemExit) as exc_info,
         ):
-            os.environ.pop("A_SDLC_CHILD", None)
-            run_server(transport="streamable-http")
+            run_combined_server()
 
         assert exc_info.value.code == 0
 
-    def test_run_server_skips_pid_for_child(self, tmp_path):
-        """Child instance (A_SDLC_CHILD=1) skips PID file and UI server."""
-        from a_sdlc.server import run_server
+    def test_run_combined_server_exits_on_missing_ui_deps(self, tmp_path):
+        """run_combined_server exits with code 1 if UI deps are missing."""
+        from a_sdlc.server import run_combined_server
 
         with (
-            patch("a_sdlc.server._mcp_acquire_pid") as mock_acquire,
-            patch("a_sdlc.server._start_ui_server") as mock_ui,
-            patch("a_sdlc.server.mcp") as mock_mcp,
+            patch("a_sdlc.server._init_storage_backend"),
+            patch("a_sdlc.server._mcp_acquire_pid", return_value=True),
             patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
             patch("a_sdlc.server.signal.signal"),
             patch("a_sdlc.server.atexit.register"),
             patch("a_sdlc.server.Path.home", return_value=tmp_path),
-            patch.dict("os.environ", {"A_SDLC_CHILD": "1"}, clear=False),
-        ):
-            run_server()
-
-        mock_acquire.assert_not_called()
-        mock_ui.assert_not_called()
-        mock_mcp.run.assert_called_once_with(transport="stdio")
-
-
-# ---------------------------------------------------------------------------
-# Server lifecycle: crash logging, signal handling, UI PID management
-# ---------------------------------------------------------------------------
-
-
-class TestServerLifecycle:
-    """Tests for crash logging, signal handling, and UI PID management."""
-
-    def test_run_server_logs_exception_on_crash(self, tmp_path):
-        """mcp.run() crash calls _stop_ui_server and sys.exit(1)."""
-        from a_sdlc.server import run_server
-
-        with (
-            patch("a_sdlc.server._start_ui_server"),
-            patch("a_sdlc.server._stop_ui_server") as mock_stop,
-            patch("a_sdlc.server.mcp") as mock_mcp,
-            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
-            patch("a_sdlc.server.signal.signal"),
-            patch("a_sdlc.server.atexit.register"),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-            patch.dict("os.environ", {}, clear=False),
+            patch.dict("sys.modules", {"uvicorn": None}),
             pytest.raises(SystemExit) as exc_info,
         ):
-            os.environ.pop("A_SDLC_CHILD", None)
-            mock_mcp.run.side_effect = RuntimeError("transport broken")
-            run_server(transport="stdio")
+            run_combined_server()
 
         assert exc_info.value.code == 1
-        mock_stop.assert_called()
 
-    def test_signal_handler_cleans_pid(self):
-        """Signal handler calls both _stop_ui_server and _mcp_remove_pid."""
+    def test_run_combined_server_acquires_pid_and_registers_cleanup(self, tmp_path):
+        """run_combined_server acquires PID lock and registers atexit cleanup."""
+        from a_sdlc.server import run_combined_server
+
+        mock_uvicorn = MagicMock()
+        mock_uvicorn_server = MagicMock()
+        mock_uvicorn.Config.return_value = MagicMock()
+        mock_uvicorn.Server.return_value = mock_uvicorn_server
+
+        with (
+            patch("a_sdlc.server._init_storage_backend"),
+            patch("a_sdlc.server._mcp_acquire_pid", return_value=True) as mock_acquire,
+            patch("a_sdlc.server.RotatingFileHandler", return_value=logging.NullHandler()),
+            patch("a_sdlc.server.signal.signal"),
+            patch("a_sdlc.server.atexit.register") as mock_atexit,
+            patch("a_sdlc.server.Path.home", return_value=tmp_path),
+            patch("a_sdlc.server.asyncio.run", side_effect=KeyboardInterrupt),
+            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
+            patch("a_sdlc.server.uvicorn", mock_uvicorn, create=True),
+            patch("a_sdlc.ui.create_app", return_value=MagicMock()),
+        ):
+            run_combined_server()
+
+        mock_acquire.assert_called_once()
+        # _mcp_remove_pid should be registered with atexit
+        from a_sdlc.server import _mcp_remove_pid
+        mock_atexit.assert_any_call(_mcp_remove_pid)
+
+    def test_signal_handler_cleans_up_pid_in_combined_mode(self):
+        """Signal handler calls _mcp_remove_pid (no subprocess to stop)."""
         from a_sdlc.server import _signal_handler
 
         with (
-            patch("a_sdlc.server._stop_ui_server") as mock_stop,
             patch("a_sdlc.server._mcp_remove_pid") as mock_remove,
-            pytest.raises(SystemExit) as exc_info,
+            pytest.raises(SystemExit),
         ):
             _signal_handler(15, None)
 
-        assert exc_info.value.code == 0
-        mock_stop.assert_called_once()
         mock_remove.assert_called_once()
-
-    def test_start_ui_server_writes_pid_file(self, tmp_path):
-        """_start_ui_server writes the UI PID to _UI_PID_FILE."""
-        from a_sdlc.server import _start_ui_server
-
-        pid_file = tmp_path / "ui.pid"
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", pid_file),
-            patch("a_sdlc.server._cleanup_stale_ui"),
-            patch("a_sdlc.server._is_port_in_use", return_value=False),
-            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
-            patch("a_sdlc.server.subprocess.Popen", return_value=mock_proc),
-            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-        ):
-            # Mock the fastapi/uvicorn imports
-            import sys as _sys
-
-            _sys.modules.setdefault("fastapi", MagicMock())
-            _sys.modules.setdefault("uvicorn", MagicMock())
-            try:
-                result = _start_ui_server()
-            finally:
-                _sys.modules.pop("fastapi", None)
-                _sys.modules.pop("uvicorn", None)
-
-        assert result is mock_proc
-        assert pid_file.exists()
-        assert pid_file.read_text() == "12345"
-
-    def test_cleanup_stale_ui_removes_dead_pid(self, tmp_path):
-        """_cleanup_stale_ui removes PID file when process is dead."""
-        from a_sdlc.server import _cleanup_stale_ui
-
-        pid_file = tmp_path / "ui.pid"
-        pid_file.write_text("999999")  # Very unlikely to be a real PID
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", pid_file),
-            patch("os.kill", side_effect=ProcessLookupError),
-        ):
-            _cleanup_stale_ui()
-
-        assert not pid_file.exists()
-
-    def test_stop_ui_server_removes_pid_file(self, tmp_path):
-        """_stop_ui_server removes the UI PID file."""
-        import a_sdlc.server as srv
-
-        pid_file = tmp_path / "ui.pid"
-        pid_file.write_text("12345")
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        original = srv._ui_process
-
-        try:
-            srv._ui_process = mock_proc
-            with patch("a_sdlc.server._UI_PID_FILE", pid_file):
-                srv._stop_ui_server()
-            mock_proc.terminate.assert_called_once()
-            assert not pid_file.exists()
-        finally:
-            srv._ui_process = original
-
-    def test_ui_stderr_captured_to_file(self, tmp_path):
-        """UI subprocess stderr goes to a file, not DEVNULL."""
-        from a_sdlc.server import _start_ui_server
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
-            patch("a_sdlc.server._cleanup_stale_ui"),
-            patch("a_sdlc.server._is_port_in_use", return_value=False),
-            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
-            patch("a_sdlc.server.subprocess.Popen", return_value=mock_proc) as mock_popen,
-            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-        ):
-            import sys as _sys
-
-            _sys.modules.setdefault("fastapi", MagicMock())
-            _sys.modules.setdefault("uvicorn", MagicMock())
-            try:
-                _start_ui_server()
-            finally:
-                _sys.modules.pop("fastapi", None)
-                _sys.modules.pop("uvicorn", None)
-
-        call_kwargs = mock_popen.call_args
-        # stderr should NOT be DEVNULL — it should be a file object
-        assert call_kwargs.kwargs.get("stderr") is not subprocess.DEVNULL or (
-            len(call_kwargs.args) > 0
-            and call_kwargs[1].get("stderr") is not subprocess.DEVNULL
-        )
-
-
-# ---------------------------------------------------------------------------
-# UI subprocess stdin DEVNULL (FR-010)
-# ---------------------------------------------------------------------------
-
-
-class TestUISubprocessStdinDevnull:
-    """Tests verifying UI subprocess stdin is redirected to DEVNULL.
-
-    The MCP server communicates via stdin/stdout. If the UI subprocess
-    inherits stdin, it can steal MCP protocol messages and break the
-    server. The fix redirects UI subprocess stdin to DEVNULL.
-    """
-
-    def test_start_ui_server_passes_stdin_devnull_via_asdlc(self, tmp_path):
-        """_start_ui_server passes stdin=subprocess.DEVNULL when using a-sdlc executable."""
-        from a_sdlc.server import _start_ui_server
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
-            patch("a_sdlc.server._cleanup_stale_ui"),
-            patch("a_sdlc.server._is_port_in_use", return_value=False),
-            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
-            patch(
-                "a_sdlc.server.subprocess.Popen", return_value=mock_proc
-            ) as mock_popen,
-            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-        ):
-            import sys as _sys
-
-            _sys.modules.setdefault("fastapi", MagicMock())
-            _sys.modules.setdefault("uvicorn", MagicMock())
-            try:
-                _start_ui_server()
-            finally:
-                _sys.modules.pop("fastapi", None)
-                _sys.modules.pop("uvicorn", None)
-
-        mock_popen.assert_called_once()
-        call_kwargs = mock_popen.call_args
-        assert call_kwargs.kwargs.get("stdin") is subprocess.DEVNULL
-
-    def test_start_ui_server_passes_stdin_devnull_via_uvx(self, tmp_path):
-        """_start_ui_server passes stdin=subprocess.DEVNULL when falling back to uvx."""
-        from a_sdlc.server import _start_ui_server
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-
-        def find_exec_side_effect(name):
-            if name == "a-sdlc":
-                return None  # a-sdlc not found
-            if name == "uvx":
-                return "/usr/bin/uvx"
-            return None
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
-            patch("a_sdlc.server._cleanup_stale_ui"),
-            patch("a_sdlc.server._is_port_in_use", return_value=False),
-            patch(
-                "a_sdlc.server._find_executable", side_effect=find_exec_side_effect
-            ),
-            patch(
-                "a_sdlc.server.subprocess.Popen", return_value=mock_proc
-            ) as mock_popen,
-            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-        ):
-            import sys as _sys
-
-            _sys.modules.setdefault("fastapi", MagicMock())
-            _sys.modules.setdefault("uvicorn", MagicMock())
-            try:
-                _start_ui_server()
-            finally:
-                _sys.modules.pop("fastapi", None)
-                _sys.modules.pop("uvicorn", None)
-
-        mock_popen.assert_called_once()
-        call_kwargs = mock_popen.call_args
-        assert call_kwargs.kwargs.get("stdin") is subprocess.DEVNULL
-
-    def test_start_ui_server_stdin_is_not_none(self, tmp_path):
-        """stdin kwarg must be explicitly set (not None or absent)."""
-        from a_sdlc.server import _start_ui_server
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
-            patch("a_sdlc.server._cleanup_stale_ui"),
-            patch("a_sdlc.server._is_port_in_use", return_value=False),
-            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
-            patch(
-                "a_sdlc.server.subprocess.Popen", return_value=mock_proc
-            ) as mock_popen,
-            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-        ):
-            import sys as _sys
-
-            _sys.modules.setdefault("fastapi", MagicMock())
-            _sys.modules.setdefault("uvicorn", MagicMock())
-            try:
-                _start_ui_server()
-            finally:
-                _sys.modules.pop("fastapi", None)
-                _sys.modules.pop("uvicorn", None)
-
-        call_kwargs = mock_popen.call_args
-        assert call_kwargs.kwargs.get("stdin") is not None, (
-            "stdin must be explicitly set to DEVNULL, not left as None"
-        )
-
-    def test_start_ui_server_stdout_also_devnull(self, tmp_path):
-        """stdout is also DEVNULL (complementary check alongside stdin)."""
-        from a_sdlc.server import _start_ui_server
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-
-        with (
-            patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
-            patch("a_sdlc.server._cleanup_stale_ui"),
-            patch("a_sdlc.server._is_port_in_use", return_value=False),
-            patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
-            patch(
-                "a_sdlc.server.subprocess.Popen", return_value=mock_proc
-            ) as mock_popen,
-            patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-            patch("a_sdlc.server.Path.home", return_value=tmp_path),
-        ):
-            import sys as _sys
-
-            _sys.modules.setdefault("fastapi", MagicMock())
-            _sys.modules.setdefault("uvicorn", MagicMock())
-            try:
-                _start_ui_server()
-            finally:
-                _sys.modules.pop("fastapi", None)
-                _sys.modules.pop("uvicorn", None)
-
-        call_kwargs = mock_popen.call_args
-        assert call_kwargs.kwargs.get("stdin") is subprocess.DEVNULL
-        assert call_kwargs.kwargs.get("stdout") is subprocess.DEVNULL
-
-
-# ---------------------------------------------------------------------------
-# UI log file handle lifecycle (FR-006)
-# ---------------------------------------------------------------------------
-
-
-class TestUILogHandleLifecycle:
-    """Tests for UI log file handle being properly closed."""
-
-    def test_stop_ui_server_closes_log_handle(self):
-        """_stop_ui_server closes the UI log file handle."""
-        import a_sdlc.server as srv
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        mock_log = MagicMock()
-
-        original_proc = srv._ui_process
-        original_log = srv._ui_log_handle
-        try:
-            srv._ui_process = mock_proc
-            srv._ui_log_handle = mock_log
-            with patch("a_sdlc.server._UI_PID_FILE", MagicMock()):
-                srv._stop_ui_server()
-            mock_log.close.assert_called_once()
-            assert srv._ui_log_handle is None
-        finally:
-            srv._ui_process = original_proc
-            srv._ui_log_handle = original_log
-
-    def test_stop_ui_server_closes_log_handle_even_without_process(self):
-        """_stop_ui_server closes log handle even if process is already None."""
-        import a_sdlc.server as srv
-
-        mock_log = MagicMock()
-
-        original_proc = srv._ui_process
-        original_log = srv._ui_log_handle
-        try:
-            srv._ui_process = None
-            srv._ui_log_handle = mock_log
-            srv._stop_ui_server()
-            mock_log.close.assert_called_once()
-            assert srv._ui_log_handle is None
-        finally:
-            srv._ui_process = original_proc
-            srv._ui_log_handle = original_log
-
-    def test_stop_ui_server_handles_close_oserror(self):
-        """_stop_ui_server suppresses OSError from closing log handle."""
-        import a_sdlc.server as srv
-
-        mock_log = MagicMock()
-        mock_log.close.side_effect = OSError("already closed")
-
-        original_proc = srv._ui_process
-        original_log = srv._ui_log_handle
-        try:
-            srv._ui_process = None
-            srv._ui_log_handle = mock_log
-            # Should not raise
-            srv._stop_ui_server()
-            assert srv._ui_log_handle is None
-        finally:
-            srv._ui_process = original_proc
-            srv._ui_log_handle = original_log
-
-    def test_signal_handler_closes_log_handle(self):
-        """Signal handler closes UI log handle via _stop_ui_server."""
-        import a_sdlc.server as srv
-        from a_sdlc.server import _signal_handler
-
-        mock_log = MagicMock()
-
-        original_proc = srv._ui_process
-        original_log = srv._ui_log_handle
-        try:
-            srv._ui_process = None
-            srv._ui_log_handle = mock_log
-            with (
-                patch("a_sdlc.server._mcp_remove_pid"),
-                pytest.raises(SystemExit),
-            ):
-                _signal_handler(15, None)
-            mock_log.close.assert_called_once()
-        finally:
-            srv._ui_process = original_proc
-            srv._ui_log_handle = original_log
-
-    def test_start_ui_server_stores_log_handle(self, tmp_path):
-        """_start_ui_server stores the log file handle in _ui_log_handle."""
-        import a_sdlc.server as srv
-        from a_sdlc.server import _start_ui_server
-
-        mock_proc = MagicMock()
-        mock_proc.pid = 12345
-        mock_file = MagicMock()
-
-        original_proc = srv._ui_process
-        original_log = srv._ui_log_handle
-        try:
-            srv._ui_process = None
-            srv._ui_log_handle = None
-            with (
-                patch("a_sdlc.server._UI_PID_FILE", tmp_path / "ui.pid"),
-                patch("a_sdlc.server._cleanup_stale_ui"),
-                patch("a_sdlc.server._is_port_in_use", return_value=False),
-                patch("a_sdlc.server._find_executable", return_value="/usr/bin/a-sdlc"),
-                patch("a_sdlc.server.subprocess.Popen", return_value=mock_proc),
-                patch("builtins.open", return_value=mock_file),
-                patch.dict("os.environ", {"A_SDLC_NO_BROWSER": "1"}, clear=False),
-                patch("a_sdlc.server.Path.home", return_value=tmp_path),
-            ):
-                import sys as _sys
-
-                _sys.modules.setdefault("fastapi", MagicMock())
-                _sys.modules.setdefault("uvicorn", MagicMock())
-                try:
-                    _start_ui_server()
-                finally:
-                    _sys.modules.pop("fastapi", None)
-                    _sys.modules.pop("uvicorn", None)
-
-            assert srv._ui_log_handle is mock_file
-        finally:
-            srv._ui_process = original_proc
-            srv._ui_log_handle = original_log
 
 
 # ---------------------------------------------------------------------------
@@ -3271,6 +2878,7 @@ class TestMCPAcquirePid:
                 os.close(srv._mcp_pid_fd)
             srv._mcp_pid_fd = original_fd
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="fcntl not available on Windows")
     def test_acquire_pid_fails_when_locked(self, tmp_path):
         """Returns False when another process holds the flock."""
         import fcntl
@@ -3335,291 +2943,13 @@ class TestMCPAcquirePid:
             srv._mcp_pid_fd = original_fd
 
 
-# ---------------------------------------------------------------------------
-# Phase 1: build_execute_task_prompt quality section tests
-# ---------------------------------------------------------------------------
-
-
-class TestBuildExecuteTaskPromptQuality:
-    """Verify quality verification section is conditionally included."""
-
-    def test_includes_quality_section_when_enabled(self):
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(
-            enabled=True,
-            ac_gate=True,
-            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
-        )
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "## Quality Verification" in prompt
-        assert "verify_acceptance_criteria" in prompt
-        assert "get_task_requirements" in prompt
-        assert "may be challenged after completion" in prompt
-
-    def test_skips_quality_section_when_disabled(self):
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "## Quality Verification" not in prompt
-        assert "verify_acceptance_criteria" not in prompt
-
-
-# ---------------------------------------------------------------------------
-# build_execute_task_prompt shared_context suppression tests (SDLC-T00207)
-# ---------------------------------------------------------------------------
-
-
-class TestBuildExecuteTaskPromptSharedContext:
-    """Verify shared_context pre-loading suppresses redundant file reads."""
-
-    def test_without_shared_context_includes_architecture_read(self):
-        """Without shared_context, prompt tells agent to read architecture.md."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "Read .sdlc/artifacts/architecture.md" in prompt
-
-    def test_with_shared_context_suppresses_architecture_read(self):
-        """With shared_context, prompt does NOT tell agent to read architecture.md."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        shared = "### Architecture (compressed)\nCLI: src/cli.py"
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-                shared_context=shared,
-            )
-        assert "Read .sdlc/artifacts/architecture.md" not in prompt
-        assert "## Pre-Loaded Shared Context" in prompt
-        assert "### Architecture (compressed)" in prompt
-
-    def test_with_shared_context_suppresses_config_yaml_reads(self):
-        """With shared_context, prompt uses pre-loaded config flags, not reads."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        shared = "### Config Flags\ngit.auto_commit: false"
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-                shared_context=shared,
-            )
-        # Should reference pre-loaded config, not tell agent to read config.yaml
-        assert "Check pre-loaded Config Flags for git.auto_commit" in prompt
-        assert "Check pre-loaded Config Flags for testing.runtime" in prompt
-        assert "Read .sdlc/config.yaml -- check git.auto_commit" not in prompt
-        assert "Read .sdlc/config.yaml -- check testing.runtime" not in prompt
-
-    def test_without_shared_context_includes_config_yaml_reads(self):
-        """Without shared_context, prompt tells agent to read config.yaml."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "Read .sdlc/config.yaml -- check git.auto_commit" in prompt
-        assert "Read .sdlc/config.yaml -- check testing.runtime" in prompt
-
-    def test_with_shared_context_review_gates_use_preloaded(self):
-        """With shared_context, review gates reference pre-loaded config flags."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        shared = "### Config Flags\ntesting.relevance.enabled: true"
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-                shared_context=shared,
-            )
-        assert "Use pre-loaded config flags for testing.relevance" in prompt
-        assert "Read .sdlc/config.yaml -- check testing.relevance" not in prompt
-
-    def test_without_shared_context_review_gates_read_config(self):
-        """Without shared_context, review gates tell agent to read config.yaml."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "Read .sdlc/config.yaml -- check testing.relevance" in prompt
-
-    def test_shared_context_suppresses_prd_and_design_load(self):
-        """With shared_context, PRD and design self-loading is suppressed."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        shared = "### Architecture (compressed)\nSummary\n### PRD Summaries (batch)\n- PROJ-P0001: summary"
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-                shared_context=shared,
-            )
-        # get_task() should still be present
-        assert 'mcp__asdlc__get_task(task_id="PROJ-T00001")' in prompt
-        # Self-loading should NOT contain direct get_prd/get_design call instructions
-        assert 'mcp__asdlc__get_prd(prd_id="PROJ-P0001")' not in prompt
-        assert 'mcp__asdlc__get_design(prd_id="PROJ-P0001")' not in prompt
-        # Suppression note should mention get_prd() and get_design()
-        assert "get_prd()" in prompt  # mentioned in suppression note
-        assert "get_design()" in prompt  # mentioned in suppression note
-
-    def test_without_shared_context_includes_prd_and_design_load(self):
-        """Without shared_context, PRD and design self-loading is included."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert 'mcp__asdlc__get_prd(prd_id="PROJ-P0001")' in prompt
-        assert 'mcp__asdlc__get_design(prd_id="PROJ-P0001")' in prompt
-        assert 'mcp__asdlc__get_task(task_id="PROJ-T00001")' in prompt
-
-    def test_shared_context_empty_string_treated_as_absent(self):
-        """Empty string shared_context is treated as no shared_context."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-                shared_context="",
-            )
-        # Should use the non-shared-context path (reads config.yaml)
-        assert "Read .sdlc/config.yaml -- check git.auto_commit" in prompt
-        assert "Read .sdlc/artifacts/architecture.md" in prompt
-        assert "## Pre-Loaded Shared Context" not in prompt
-
-    def test_shared_context_explicit_suppression_message(self):
-        """With shared_context, self-loading section contains explicit suppression."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        shared = "### Architecture (compressed)\nSummary"
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-                shared_context=shared,
-            )
-        # Must contain the explicit suppression language
-        assert "Context pre-loaded by orchestrator" in prompt
-        assert "Only call get_task()" in prompt
-        # Suppression mentions both get_prd() and get_design()
-        assert "get_prd()" in prompt
-        assert "get_design()" in prompt
-        assert "read architecture.md" in prompt
-        # Should NOT have direct MCP call instructions for PRD/design
-        assert 'mcp__asdlc__get_prd(prd_id="PROJ-P0001")' not in prompt
-        assert 'mcp__asdlc__get_design(prd_id="PROJ-P0001")' not in prompt
-
-    def test_shared_context_pre_loaded_section_content(self):
-        """Pre-loaded shared context section contains injected content."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        shared = "### PRD Summaries (batch)\n- PROJ-P0001 (Auth): Implement auth..."
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-                shared_context=shared,
-            )
-        assert "## Pre-Loaded Shared Context" in prompt
-        assert "### PRD Summaries (batch)" in prompt
-        assert "Implement auth" in prompt
-
-    def test_without_shared_context_no_suppression_message(self):
-        """Without shared_context, no suppression message appears."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "Context pre-loaded by orchestrator" not in prompt
-        assert "Do NOT call get_prd()" not in prompt
-
-
 class TestGetPrdIncludeContent:
     """Test include_content parameter on get_prd()."""
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_include_content_true_by_default(self, mock_get_db, mock_get_cm):
+    def test_include_content_true_by_default(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Default behavior: content is read and returned."""
         from a_sdlc.server import get_prd
 
@@ -3637,6 +2967,9 @@ class TestGetPrdIncludeContent:
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
         mock_cm.read_content.return_value = "# PRD Content"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
 
         result = get_prd("TEST-P0001")
 
@@ -3644,9 +2977,10 @@ class TestGetPrdIncludeContent:
         assert result["prd"]["content"] == "# PRD Content"
         mock_cm.read_content.assert_called_once()
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_include_content_false_skips_read(self, mock_get_db, mock_get_cm):
+    def test_include_content_false_skips_read(self, mock_get_db, mock_get_cm, mock_get_storage):
         """When include_content=False, skip file read and return empty content."""
         from a_sdlc.server import get_prd
 
@@ -3663,6 +2997,9 @@ class TestGetPrdIncludeContent:
         }
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
+        mock_get_storage.return_value = mock_storage
 
         result = get_prd("TEST-P0001", include_content=False)
 
@@ -3676,9 +3013,10 @@ class TestGetPrdIncludeContent:
 class TestGetTaskIncludeContent:
     """Test include_content parameter on get_task()."""
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_include_content_true_by_default(self, mock_get_db, mock_get_cm):
+    def test_include_content_true_by_default(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Default behavior: content, description, and data are populated."""
         from a_sdlc.server import get_task
 
@@ -3695,7 +3033,7 @@ class TestGetTaskIncludeContent:
             "prd_id": None,
             "updated_at": "2025-01-01",
         }
-        mock_db.get_active_claim.return_value = None
+
 
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
@@ -3703,6 +3041,9 @@ class TestGetTaskIncludeContent:
         mock_cm.parse_task_content.return_value = {
             "description": "Some description",
         }
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
 
         result = get_task("TEST-T00001")
 
@@ -3711,9 +3052,10 @@ class TestGetTaskIncludeContent:
         assert result["task"]["description"] == "Some description"
         mock_cm.read_content.assert_called_once()
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_include_content_false_skips_read(self, mock_get_db, mock_get_cm):
+    def test_include_content_false_skips_read(self, mock_get_db, mock_get_cm, mock_get_storage):
         """When include_content=False, skip file read and return empty fields."""
         from a_sdlc.server import get_task
 
@@ -3730,10 +3072,13 @@ class TestGetTaskIncludeContent:
             "prd_id": None,
             "updated_at": "2025-01-01",
         }
-        mock_db.get_active_claim.return_value = None
+
 
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
+        mock_get_storage.return_value = mock_storage
 
         result = get_task("TEST-T00001", include_content=False)
 
@@ -3746,9 +3091,10 @@ class TestGetTaskIncludeContent:
         mock_cm.read_content.assert_not_called()
         mock_cm.parse_task_content.assert_not_called()
 
+    @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_include_content_false_still_derives_sprint(self, mock_get_db, mock_get_cm):
+    def test_include_content_false_still_derives_sprint(self, mock_get_db, mock_get_cm, mock_get_storage):
         """Even with include_content=False, sprint_id is still derived from PRD."""
         from a_sdlc.server import get_task
 
@@ -3769,10 +3115,13 @@ class TestGetTaskIncludeContent:
             "id": "TEST-P0001",
             "sprint_id": "TEST-S0001",
         }
-        mock_db.get_active_claim.return_value = None
+
 
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
+        mock_get_storage.return_value = mock_storage
 
         result = get_task("TEST-T00001", include_content=False)
 
@@ -3781,697 +3130,298 @@ class TestGetTaskIncludeContent:
         assert result["task"]["content"] == ""
 
 
-# ---------------------------------------------------------------------------
-# build_execute_task_prompt checkpoint instructions tests (SDLC-T00203)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Content parameter on create/update MCP tools
+# =============================================================================
 
 
-class TestBuildExecuteTaskPromptCheckpoint:
-    """Verify checkpoint instructions section is included in the prompt."""
 
-    def test_prompt_contains_checkpoint_instructions_section(self):
-        """AC: build_execute_task_prompt() output contains ## Checkpoint Instructions section."""
-        from a_sdlc.server import build_execute_task_prompt
+class TestContentParameter:
+    """Test content parameter on create/update MCP tools."""
 
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "## Checkpoint Instructions" in prompt
-
-    def test_checkpoint_format_includes_all_required_fields(self):
-        """AC: Checkpoint format includes version, task_id, files_changed, tests_written, review_status, last_milestone, timestamp."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        for field in [
-            '"version"',
-            '"task_id"',
-            '"files_changed"',
-            '"tests_written"',
-            '"review_status"',
-            '"last_milestone"',
-            '"timestamp"',
-        ]:
-            assert field in prompt, f"Checkpoint format missing field: {field}"
-
-    def test_prompt_instructs_three_milestones(self):
-        """AC: Prompt instructs agent to write checkpoint at 3 milestones."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "After implementation files are changed" in prompt
-        assert "After tests are written" in prompt
-        assert "After self-review is complete" in prompt
-
-    def test_prompt_instructs_cleanup_on_completion(self):
-        """AC: Prompt instructs agent to delete checkpoint on successful completion."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "delete the checkpoint file" in prompt
-
-    def test_checkpoint_path_uses_correct_convention(self):
-        """AC: Checkpoint file path uses ~/.a-sdlc/checkpoints/{task_id}.json."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "~/.a-sdlc/checkpoints/PROJ-T00001.json" in prompt
-
-    def test_checkpoint_always_included_regardless_of_quality_config(self):
-        """Checkpoint section is always present, not config-gated."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        # With quality enabled
-        qcfg_on = QualityConfig(enabled=True, ac_gate=True)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg_on,
-        ):
-            prompt_on = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-
-        # With quality disabled
-        qcfg_off = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg_off,
-        ):
-            prompt_off = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-
-        assert "## Checkpoint Instructions" in prompt_on
-        assert "## Checkpoint Instructions" in prompt_off
-
-    def test_checkpoint_section_placed_after_implementation(self):
-        """Checkpoint section appears after implementation section and before quality/review."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=True, ac_gate=True)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        impl_pos = prompt.index("## Implementation")
-        checkpoint_pos = prompt.index("## Checkpoint Instructions")
-        quality_pos = prompt.index("## Quality Verification")
-        review_pos = prompt.index("## Review Gates")
-
-        assert impl_pos < checkpoint_pos < quality_pos < review_pos
-
-    def test_checkpoint_includes_task_id_in_format(self):
-        """Checkpoint format example uses the actual task_id."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "MY-T99999",
-                {"title": "Custom task", "prd_id": None},
-            )
-        assert "MY-T99999" in prompt
-        assert "~/.a-sdlc/checkpoints/MY-T99999.json" in prompt
-
-
-# ---------------------------------------------------------------------------
-# Checkpoint resume logic tests (SDLC-T00204)
-# ---------------------------------------------------------------------------
-
-
-class TestCheckpointResumePrompt:
-    """Verify checkpoint resume context is injected into the prompt."""
-
-    def test_resume_section_injected_when_checkpoint_context_provided(self):
-        """AC: When checkpoint exists and is valid, resume context is injected into prompt."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-                checkpoint_context="Previous attempt completed milestone: implementation. Files changed: src/foo.py. Resume from: tests phase.",
-            )
-        assert "## Resume from Checkpoint" in prompt
-        assert "Previous attempt completed milestone: implementation" in prompt
-        assert "Resume from: tests phase" in prompt
-
-    def test_no_resume_section_when_checkpoint_context_empty(self):
-        """AC: When checkpoint is missing or corrupt, execution proceeds normally (no error)."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-                checkpoint_context="",
-            )
-        assert "## Resume from Checkpoint" not in prompt
-
-    def test_resume_section_contains_do_not_redo_instruction(self):
-        """Resume section tells the agent not to redo completed work."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-                checkpoint_context="Previous attempt completed milestone: tests.",
-            )
-        assert "Do NOT redo work" in prompt
-
-
-class TestFormatResumeContext:
-    """Test _format_resume_context helper function."""
-
-    def test_basic_format_with_implementation_milestone(self):
-        """Resume context includes milestone and next phase."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "implementation",
-            "files_changed": ["src/foo.py", "src/bar.py"],
-            "tests_written": [],
-            "review_status": "pending",
-        }
-        result = _format_resume_context(data)
-        assert "implementation" in result
-        assert "src/foo.py" in result
-        assert "src/bar.py" in result
-        assert "Resume from: tests phase" in result
-
-    def test_format_with_tests_milestone(self):
-        """When last milestone is tests, next phase is review."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "tests",
-            "files_changed": ["src/foo.py"],
-            "tests_written": ["tests/test_foo.py"],
-            "review_status": "pending",
-        }
-        result = _format_resume_context(data)
-        assert "Resume from: review phase" in result
-        assert "tests/test_foo.py" in result
-
-    def test_format_with_review_milestone(self):
-        """When last milestone is review, next phase is completion."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "review",
-            "files_changed": ["src/foo.py"],
-            "tests_written": ["tests/test_foo.py"],
-            "review_status": "pass",
-        }
-        result = _format_resume_context(data)
-        assert "Resume from: completion phase" in result
-        assert "Review status: pass" in result
-
-    def test_format_caps_files_list_at_10(self):
-        """File list is capped to avoid exceeding token budget."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "implementation",
-            "files_changed": [f"src/file{i}.py" for i in range(15)],
-            "tests_written": [],
-            "review_status": "pending",
-        }
-        result = _format_resume_context(data)
-        assert "src/file9.py" in result
-        assert "src/file10.py" not in result
-        assert "+5 more files" in result
-
-    def test_format_caps_tests_list_at_5(self):
-        """Tests list is capped to avoid exceeding token budget."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "tests",
-            "files_changed": ["src/foo.py"],
-            "tests_written": [f"tests/test_{i}.py" for i in range(8)],
-            "review_status": "pending",
-        }
-        result = _format_resume_context(data)
-        assert "tests/test_4.py" in result
-        assert "tests/test_5.py" not in result
-        assert "+3 more tests" in result
-
-    def test_format_under_500_tokens(self):
-        """NFR-002: Resume context must not exceed 500 tokens."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        # Worst case: max files and tests
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "implementation",
-            "files_changed": [f"src/very/long/path/to/file_{i}.py" for i in range(15)],
-            "tests_written": [f"tests/very/long/path/to/test_{i}.py" for i in range(8)],
-            "review_status": "fail",
-        }
-        result = _format_resume_context(data)
-        # Rough token estimate: ~4 chars per token for English text
-        # 500 tokens ≈ 2000 characters
-        assert len(result) < 2000
-
-    def test_format_with_unknown_milestone(self):
-        """Unknown milestone falls back to implementation as next phase."""
-        from a_sdlc.server.execution_tools import _format_resume_context
-
-        data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "unknown_phase",
-            "files_changed": [],
-            "tests_written": [],
-            "review_status": "pending",
-        }
-        result = _format_resume_context(data)
-        assert "Resume from: implementation phase" in result
-
-
-class TestExecuteTaskCheckpointDetection:
-    """Test checkpoint detection in execute_task()."""
-
-    @patch("a_sdlc.server.execution_tools.Path.home")
-    @patch("a_sdlc.server.execution_tools.create_adapter", create=True)
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_execute_task_reads_valid_checkpoint(self, mock_get_db, mock_adapter_unused, mock_home, tmp_path):
-        """AC: execute_task() checks for checkpoint file before building prompt."""
-        from a_sdlc.server.execution_tools import execute_task
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_prd_with_content(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+        """create_prd with content writes through ContentManager."""
+        from a_sdlc.server import create_prd
 
-        # Setup checkpoint file
-        checkpoints_dir = tmp_path / ".a-sdlc" / "checkpoints"
-        checkpoints_dir.mkdir(parents=True)
-        checkpoint_data = {
-            "version": 1,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "implementation",
-            "files_changed": ["src/main.py"],
-            "tests_written": [],
-            "review_status": "pending",
-            "timestamp": "2025-01-01T00:00:00Z",
-        }
-        (checkpoints_dir / "PROJ-T00001.json").write_text(
-            json.dumps(checkpoint_data)
-        )
-        mock_home.return_value = tmp_path
-
-        # Setup task DB mock
+        mock_get_pid.return_value = "test-project"
         mock_db = MagicMock()
-        mock_db.get_task.return_value = {"title": "Test", "prd_id": None}
         mock_get_db.return_value = mock_db
+        mock_db.get_next_prd_id.return_value = "TEST-P0001"
+        mock_db.create_prd.return_value = {
+            "id": "TEST-P0001", "title": "Auth PRD", "status": "draft",
+            "project_id": "test-project",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_cm.write_prd.return_value = Path("/tmp/prds/TEST-P0001.md")
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
 
-        # Patch create_adapter and build_execute_task_prompt to capture the call
-        with patch(
-            "a_sdlc.server.execution_tools.build_execute_task_prompt"
-        ) as mock_build:
-            mock_build.return_value = "prompt"
-            with patch("a_sdlc.adapters.create_adapter") as mock_create:
-                mock_adapter = MagicMock()
-                mock_adapter.launch.return_value = {"pid": 123, "log_path": "/tmp/log"}
-                mock_create.return_value = mock_adapter
+        result = create_prd(title="Auth PRD", content="# Auth PRD\n\nFull content here")
 
-                execute_task("PROJ-T00001", executor="mock")
+        assert result["status"] == "created"
+        assert result["content_written"] is True
+        # Skeleton write (first call) + content write (second call)
+        assert mock_cm.write_prd.call_count == 2
+        # Second call should have the actual content
+        second_call_args = mock_cm.write_prd.call_args_list[1]
+        assert second_call_args[0] == (
+            "test-project", "TEST-P0001", "Auth PRD", "# Auth PRD\n\nFull content here"
+        )
 
-        # Verify checkpoint_context was passed
-        call_kwargs = mock_build.call_args[1]
-        assert "checkpoint_context" in call_kwargs
-        assert "implementation" in call_kwargs["checkpoint_context"]
-        assert "src/main.py" in call_kwargs["checkpoint_context"]
-
-    @patch("a_sdlc.server.execution_tools.Path.home")
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_execute_task_proceeds_without_checkpoint(self, mock_get_db, mock_home, tmp_path):
-        """AC: When checkpoint is missing, execution proceeds normally."""
-        from a_sdlc.server.execution_tools import execute_task
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_prd_without_content_backward_compat(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+        """create_prd without content creates skeleton only (backward compat)."""
+        from a_sdlc.server import create_prd
 
-        # No checkpoint file exists
-        mock_home.return_value = tmp_path
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_next_prd_id.return_value = "TEST-P0001"
+        mock_db.create_prd.return_value = {
+            "id": "TEST-P0001", "title": "Auth PRD", "status": "draft",
+            "project_id": "test-project",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_cm.write_prd.return_value = Path("/tmp/prds/TEST-P0001.md")
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
+
+        result = create_prd(title="Auth PRD")
+
+        assert result["status"] == "created"
+        assert "content_written" not in result
+        # Only skeleton write
+        assert mock_cm.write_prd.call_count == 1
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_update_prd_with_content(self, mock_get_db, mock_get_cm, mock_get_storage):
+        """update_prd with content writes through ContentManager."""
+        from a_sdlc.server import update_prd
 
         mock_db = MagicMock()
-        mock_db.get_task.return_value = {"title": "Test", "prd_id": None}
         mock_get_db.return_value = mock_db
-
-        with patch(
-            "a_sdlc.server.execution_tools.build_execute_task_prompt"
-        ) as mock_build:
-            mock_build.return_value = "prompt"
-            with patch("a_sdlc.adapters.create_adapter") as mock_create:
-                mock_adapter = MagicMock()
-                mock_adapter.launch.return_value = {"pid": 123, "log_path": "/tmp/log"}
-                mock_create.return_value = mock_adapter
-
-                result = execute_task("PROJ-T00001", executor="mock")
-
-        assert result["status"] == "launched"
-        call_kwargs = mock_build.call_args[1]
-        assert call_kwargs["checkpoint_context"] == ""
-
-    @patch("a_sdlc.server.execution_tools.Path.home")
-    @patch("a_sdlc.server.get_db")
-    def test_execute_task_ignores_corrupt_checkpoint(self, mock_get_db, mock_home, tmp_path):
-        """AC: When checkpoint is corrupt, execution proceeds normally (no error)."""
-        from a_sdlc.server.execution_tools import execute_task
-
-        # Create corrupt checkpoint
-        checkpoints_dir = tmp_path / ".a-sdlc" / "checkpoints"
-        checkpoints_dir.mkdir(parents=True)
-        (checkpoints_dir / "PROJ-T00001.json").write_text("not valid json {{{")
-        mock_home.return_value = tmp_path
-
-        mock_db = MagicMock()
-        mock_db.get_task.return_value = {"title": "Test", "prd_id": None}
-        mock_get_db.return_value = mock_db
-
-        with patch(
-            "a_sdlc.server.execution_tools.build_execute_task_prompt"
-        ) as mock_build:
-            mock_build.return_value = "prompt"
-            with patch("a_sdlc.adapters.create_adapter") as mock_create:
-                mock_adapter = MagicMock()
-                mock_adapter.launch.return_value = {"pid": 123, "log_path": "/tmp/log"}
-                mock_create.return_value = mock_adapter
-
-                result = execute_task("PROJ-T00001", executor="mock")
-
-        assert result["status"] == "launched"
-        call_kwargs = mock_build.call_args[1]
-        assert call_kwargs["checkpoint_context"] == ""
-
-    @patch("a_sdlc.server.execution_tools.Path.home")
-    @patch("a_sdlc.server.get_db")
-    def test_execute_task_ignores_version_mismatch(self, mock_get_db, mock_home, tmp_path):
-        """AC: Checkpoint version mismatch causes graceful fallback (start fresh)."""
-        from a_sdlc.server.execution_tools import execute_task
-
-        # Create checkpoint with wrong version
-        checkpoints_dir = tmp_path / ".a-sdlc" / "checkpoints"
-        checkpoints_dir.mkdir(parents=True)
-        checkpoint_data = {
-            "version": 999,
-            "task_id": "PROJ-T00001",
-            "last_milestone": "implementation",
-            "files_changed": ["src/main.py"],
-            "tests_written": [],
-            "review_status": "pending",
+        mock_db.get_prd.return_value = {
+            "id": "TEST-P0001", "title": "Auth PRD", "project_id": "test-project",
         }
-        (checkpoints_dir / "PROJ-T00001.json").write_text(
-            json.dumps(checkpoint_data)
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
+
+        result = update_prd(prd_id="TEST-P0001", content="# Updated content")
+
+        assert result["status"] == "updated"
+        assert result["content_written"] is True
+        mock_cm.write_prd.assert_called_once_with(
+            "test-project", "TEST-P0001", "Auth PRD", "# Updated content"
         )
-        mock_home.return_value = tmp_path
+
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_update_prd_content_only(self, mock_get_db, mock_get_cm, mock_get_storage):
+        """update_prd with content only (no metadata) still succeeds."""
+        from a_sdlc.server import update_prd
 
         mock_db = MagicMock()
-        mock_db.get_task.return_value = {"title": "Test", "prd_id": None}
         mock_get_db.return_value = mock_db
+        mock_db.get_prd.return_value = {
+            "id": "TEST-P0001", "title": "Auth PRD", "project_id": "test-project",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_storage = MagicMock()
+        mock_storage.content_mgr = mock_cm
+        mock_get_storage.return_value = mock_storage
 
-        with patch(
-            "a_sdlc.server.execution_tools.build_execute_task_prompt"
-        ) as mock_build:
-            mock_build.return_value = "prompt"
-            with patch("a_sdlc.adapters.create_adapter") as mock_create:
-                mock_adapter = MagicMock()
-                mock_adapter.launch.return_value = {"pid": 123, "log_path": "/tmp/log"}
-                mock_create.return_value = mock_adapter
+        result = update_prd(prd_id="TEST-P0001", content="# Only content update")
 
-                result = execute_task("PROJ-T00001", executor="mock")
+        assert result["status"] == "updated"
+        assert result["content_written"] is True
+        # DB update should NOT have been called (no metadata fields)
+        mock_db.update_prd.assert_not_called()
 
-        assert result["status"] == "launched"
-        call_kwargs = mock_build.call_args[1]
-        assert call_kwargs["checkpoint_context"] == ""
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_task_with_content(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+        """create_task with content writes through ContentManager."""
+        from a_sdlc.server import create_task
 
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_next_task_id.return_value = "TEST-T00001"
+        mock_db.create_task.return_value = {
+            "id": "TEST-T00001", "title": "Implement auth", "status": "pending",
+            "priority": "high", "component": None, "project_id": "test-project",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_cm.write_task.return_value = Path("/tmp/tasks/TEST-T00001.md")
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
 
-# ---------------------------------------------------------------------------
-# Design compliance prompt tests (SDLC-T00208 / FR-005 / DD-5)
-# ---------------------------------------------------------------------------
-
-
-class TestBuildExecuteTaskPromptDesignCompliance:
-    """Verify design compliance section is included when quality is enabled."""
-
-    def test_design_compliance_section_present_when_quality_enabled(self):
-        """AC: When quality is enabled and prd_id is set, design compliance section appears."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(
-            enabled=True,
-            ac_gate=True,
-            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
+        result = create_task(
+            title="Implement auth", priority="high",
+            content="# TEST-T00001: Implement auth\n\n## Description\n\nFull task content",
         )
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "### Design Compliance" in prompt
 
-    def test_design_compliance_references_get_design(self):
-        """Design compliance section instructs agent to call get_design()."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(
-            enabled=True,
-            ac_gate=True,
-            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
+        assert result["status"] == "created"
+        assert result["content_written"] is True
+        mock_cm.write_task_content.assert_called_once_with(
+            "test-project", "TEST-T00001",
+            "# TEST-T00001: Implement auth\n\n## Description\n\nFull task content",
         )
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "mcp__asdlc__get_design" in prompt
-        assert "PROJ-P0001" in prompt
 
-    def test_design_compliance_mentions_dd_references(self):
-        """Design compliance section instructs citing DD-N design decisions."""
-        from a_sdlc.server import build_execute_task_prompt
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    def test_update_task_with_content(self, mock_get_db, mock_get_cm, mock_get_storage):
+        """update_task with content writes through ContentManager."""
+        from a_sdlc.server import update_task
 
-        qcfg = QualityConfig(
-            enabled=True,
-            ac_gate=True,
-            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_task.return_value = {
+            "id": "TEST-T00001", "title": "Implement auth", "status": "pending",
+            "project_id": "test-project",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
+
+        result = update_task(task_id="TEST-T00001", content="# Updated task content")
+
+        assert result["status"] == "updated"
+        assert result["content_written"] is True
+        mock_cm.write_task_content.assert_called_once_with(
+            "test-project", "TEST-T00001", "# Updated task content",
         )
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "DD-N" in prompt or "design decisions" in prompt.lower()
-        assert "design_refs" in prompt
 
-    def test_design_compliance_absent_when_no_prd_id(self):
-        """Design compliance section is omitted when prd_id is None."""
-        from a_sdlc.server import build_execute_task_prompt
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_create_design_with_content(self, mock_get_pid, mock_get_storage, mock_get_cm):
+        """create_design with content writes through ContentManager."""
+        from a_sdlc.server import create_design
 
-        qcfg = QualityConfig(
-            enabled=True,
-            ac_gate=True,
-            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
+        mock_get_pid.return_value = "test-project"
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_prd.return_value = {"id": "TEST-P0001", "title": "Test PRD"}
+        mock_storage.get_design_by_prd.return_value = None
+        mock_storage.create_design.return_value = {
+            "id": "TEST-P0001", "prd_id": "TEST-P0001",
+            "project_id": "test-project", "file_path": "/tmp/design.md",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_storage.content_mgr = mock_cm
+
+        result = create_design(prd_id="TEST-P0001", content="# Design\n\nArchitecture decisions")
+
+        assert result["status"] == "created"
+        assert result["content_written"] is True
+        mock_cm.write_design.assert_called_once_with(
+            "test-project", "TEST-P0001", "# Design\n\nArchitecture decisions",
         )
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "### Design Compliance" not in prompt
 
-    def test_design_compliance_absent_when_quality_disabled(self):
-        """Design compliance section is omitted when quality is disabled."""
-        from a_sdlc.server import build_execute_task_prompt
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_storage")
+    def test_update_design(self, mock_get_storage, mock_get_cm):
+        """update_design writes content through ContentManager."""
+        from a_sdlc.server import update_design
 
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "### Design Compliance" not in prompt
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_design_by_prd.return_value = {
+            "id": "TEST-P0001", "prd_id": "TEST-P0001",
+            "project_id": "test-project", "file_path": "/tmp/design.md",
+        }
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_storage.content_mgr = mock_cm
 
-    def test_design_compliance_is_audit_not_blocking(self):
-        """Design compliance is described as audit trail, not a hard gate."""
-        from a_sdlc.server import build_execute_task_prompt
+        result = update_design(prd_id="TEST-P0001", content="# Updated design")
 
-        qcfg = QualityConfig(
-            enabled=True,
-            ac_gate=True,
-            challenge=ChallengeConfig(enabled=True, gates={"implementation": True}),
+        assert result["status"] == "updated"
+        assert result["content_written"] is True
+        mock_cm.write_design.assert_called_once_with(
+            "test-project", "TEST-P0001", "# Updated design",
         )
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "does not block completion" in prompt
 
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_storage")
+    def test_update_design_not_found(self, mock_get_storage, mock_get_cm):
+        """update_design returns not_found when design doesn't exist."""
+        from a_sdlc.server import update_design
 
-# ---------------------------------------------------------------------------
-# Checkpoint size constraint test (NFR-001)
-# ---------------------------------------------------------------------------
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.get_design_by_prd.return_value = None
 
+        result = update_design(prd_id="NONEXISTENT", content="# Content")
 
-class TestCheckpointSizeConstraint:
-    """Verify checkpoint format instruction enforces 2KB limit (NFR-001)."""
+        assert result["status"] == "not_found"
 
-    def test_prompt_mentions_2kb_limit(self):
-        """AC: Checkpoint instructions mention the 2KB size limit."""
-        from a_sdlc.server import build_execute_task_prompt
+    @patch("a_sdlc.server.get_storage")
+    @patch("a_sdlc.server.get_content_manager")
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server._get_current_project_id")
+    def test_split_prd_with_task_content(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+        """split_prd with content in task_specs writes through ContentManager."""
+        from a_sdlc.server import split_prd
 
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "2KB" in prompt
+        mock_get_pid.return_value = "test-project"
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        mock_db.get_prd.return_value = {
+            "id": "TEST-P0001", "title": "Test PRD", "project_id": "test-project",
+        }
+        mock_db.get_project.return_value = {"shortname": "TEST"}
+        mock_db.get_next_task_id.side_effect = ["TEST-T00001", "TEST-T00002"]
+        mock_db.create_task.side_effect = [
+            {"id": "TEST-T00001", "title": "Task 1", "priority": "high", "component": None},
+            {"id": "TEST-T00002", "title": "Task 2", "priority": "medium", "component": None},
+        ]
+        mock_cm = MagicMock()
+        mock_get_cm.return_value = mock_cm
+        mock_cm.get_task_path.return_value = MagicMock(exists=lambda: False)
+        mock_cm.write_task.return_value = Path("/tmp/tasks/TEST-T00001.md")
+        mock_storage = MagicMock()
+        mock_get_storage.return_value = mock_storage
+        mock_storage.content_mgr = mock_cm
 
-    def test_checkpoint_example_format_under_2kb(self):
-        """AC: The checkpoint JSON example in the prompt is itself under 2KB."""
-        from a_sdlc.server import build_execute_task_prompt
+        result = split_prd(
+            prd_id="TEST-P0001",
+            task_specs=[
+                {"title": "Task 1", "priority": "high", "content": "# Task 1 content"},
+                {"title": "Task 2", "priority": "medium"},  # No content - backward compat
+            ],
+        )
 
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        # Extract the JSON block from checkpoint section
-        start = prompt.index("```json", prompt.index("## Checkpoint Instructions"))
-        end = prompt.index("```", start + 7)
-        json_block = prompt[start + 7:end].strip()
-        assert len(json_block.encode("utf-8")) < 2048
-
-
-# ---------------------------------------------------------------------------
-# Backward compatibility: quality.enabled: false still disables quality prompt
-# ---------------------------------------------------------------------------
-
-
-class TestQualityEnabledFalseBackwardCompat:
-    """Verify explicit quality.enabled: false still suppresses quality section."""
-
-    def test_explicit_false_disables_quality_section(self):
-        """AC: When quality.enabled is explicitly False, quality section is absent."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": "PROJ-P0001"},
-            )
-        assert "## Quality Verification" not in prompt
-        assert "### Design Compliance" not in prompt
-        assert "verify_acceptance_criteria" not in prompt
-
-    def test_explicit_false_still_includes_checkpoint(self):
-        """AC: When quality is disabled, checkpoint section is still present."""
-        from a_sdlc.server import build_execute_task_prompt
-
-        qcfg = QualityConfig(enabled=False)
-        with patch(
-            "a_sdlc.core.quality_config.load_quality_config",
-            return_value=qcfg,
-        ):
-            prompt = build_execute_task_prompt(
-                "PROJ-T00001",
-                {"title": "Test task", "prd_id": None},
-            )
-        assert "## Checkpoint Instructions" in prompt
+        assert result["status"] == "success"
+        assert result["tasks_created"] == 2
+        # Only task 1 should have content written
+        mock_cm.write_task_content.assert_called_once_with(
+            "test-project", "TEST-T00001", "# Task 1 content",
+        )

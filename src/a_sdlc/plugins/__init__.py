@@ -81,9 +81,7 @@ class PluginManager:
         """Register built-in plugins."""
         from a_sdlc.plugins.jira import JiraPlugin
         from a_sdlc.plugins.linear import LinearPlugin
-        from a_sdlc.plugins.local import LocalPlugin
 
-        self._plugins["local"] = LocalPlugin
         self._plugins["linear"] = LinearPlugin
         self._plugins["jira"] = JiraPlugin
 

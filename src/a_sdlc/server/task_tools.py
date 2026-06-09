@@ -81,7 +81,7 @@ def get_task(task_id: str, include_content: bool = True) -> dict[str, Any]:
         Task metadata and optionally content from markdown file.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
 
     task = db.get_task(task_id)
     if not task:
@@ -118,15 +118,6 @@ def get_task(task_id: str, include_content: bool = True) -> dict[str, Any]:
             sprint_id = prd.get("sprint_id")
     task_with_content["sprint_id"] = sprint_id
 
-    # REM-002: Surface agent permissions when task has an active claim
-    claim = db.get_active_claim(task_id)
-    if claim:
-        agent_id = claim.get("agent_id")
-        if agent_id:
-            permissions = db.get_agent_permissions(agent_id)
-            task_with_content["agent_permissions"] = permissions
-            task_with_content["claimed_by"] = agent_id
-
     return {
         "status": "ok",
         "task": task_with_content,
@@ -141,11 +132,13 @@ def create_task(
     priority: str = "medium",
     component: str | None = None,
     data: dict[str, Any] | None = None,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new task (metadata + skeleton file).
+    """Create a new task (metadata + content file).
 
-    Creates a DB record and a skeleton task file. Returns the file_path
-    so the caller can write content directly using the Write tool.
+    Creates a DB record and a content file. When `content` is provided,
+    writes it through the configured backend (local filesystem or S3).
+    Otherwise creates a skeleton file. Returns file_path for reference.
 
     Args:
         title: Task title.
@@ -154,16 +147,19 @@ def create_task(
         priority: Task priority (low, medium, high, critical).
         component: Optional component/module name.
         data: Optional additional structured data (including dependencies).
+        content: Optional task markdown content. When provided, written
+            through the configured content backend (works with S3/Docker).
+            When omitted, creates a skeleton file.
 
     Returns:
-        Created task details with file_path for content writing.
+        Created task details with file_path for reference.
 
     Note:
         Tasks no longer have direct sprint_id. To assign a task to a sprint,
         set its prd_id to a PRD that belongs to that sprint.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
@@ -195,12 +191,19 @@ def create_task(
         component=component,
     )
 
-    return {
+    result = {
         "status": "created",
         "message": f"Task created: {task_id}",
         "task": dict(task),
         "file_path": str(file_path),
     }
+
+    # Write content through backend if provided
+    if content is not None:
+        content_mgr.write_task_content(pid, task_id, content)
+        result["content_written"] = True
+
+    return result
 
 
 @_server.mcp.tool()
@@ -211,11 +214,12 @@ def update_task(
     priority: str | None = None,
     component: str | None = None,
     prd_id: str | None = None,
+    content: str | None = None,
 ) -> dict[str, Any]:
-    """Update task metadata (DB only, no file operations).
+    """Update task metadata and/or content.
 
-    For content/description changes, edit the file directly using the Edit tool.
-    Use get_task() to obtain the file_path.
+    Updates metadata fields in the database and optionally writes new content
+    through the configured content backend (local filesystem or S3).
 
     Args:
         task_id: Task identifier.
@@ -224,6 +228,9 @@ def update_task(
         priority: New priority (optional).
         component: New component (optional).
         prd_id: New parent PRD (optional). Use empty string to unassign.
+        content: New task markdown content (optional). When provided, written
+            through the configured content backend. Supports read-modify-write:
+            get_task() -> modify content -> update_task(content=new_content).
 
     Returns:
         Updated task details.
@@ -271,6 +278,13 @@ def update_task(
             # Config loading failure should not block task completion (fail-open)
             pass
 
+    # Write content through backend if provided
+    content_written = False
+    if content is not None:
+        content_mgr = _server.get_storage().content_mgr
+        content_mgr.write_task_content(task["project_id"], task_id, content)
+        content_written = True
+
     # Build update kwargs for database
     db_kwargs: dict[str, str | None] = {}
     if title is not None:
@@ -285,31 +299,31 @@ def update_task(
         # Empty string means unassign from PRD
         db_kwargs["prd_id"] = prd_id if prd_id else None
 
-    if not db_kwargs:
+    if not db_kwargs and not content_written:
         return {"status": "error", "message": "No fields to update"}
 
-    updated_task = db.update_task(task_id, **db_kwargs)
+    updated_task = db.update_task(task_id, **db_kwargs) if db_kwargs else task
 
     # REM-003: Audit log when task is marked completed
     if status == "completed":
         project_id = _server._get_current_project_id()
         if project_id:
-            # Determine agent_id from active claim (if any)
-            claim = db.get_active_claim(task_id)
-            agent_id = claim.get("agent_id") if claim else None
             db.append_audit_log(
                 project_id,
                 "task_completed",
                 "success",
-                agent_id=agent_id,
                 target_entity=task_id,
             )
 
-    return {
+    result = {
         "status": "updated",
         "message": f"Task updated: {task_id}",
         "task": updated_task,
     }
+    if content_written:
+        result["content_written"] = True
+
+    return result
 
 
 
@@ -324,7 +338,7 @@ def delete_task(task_id: str) -> dict[str, Any]:
         Deletion status.
     """
     db = _server.get_db()
-    content_mgr = _server.get_content_manager()
+    content_mgr = _server.get_storage().content_mgr
 
     task = db.get_task(task_id)
     if not task:

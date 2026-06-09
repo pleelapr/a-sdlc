@@ -2,7 +2,7 @@
 a-sdlc Web UI.
 
 Provides a FastAPI + HTMX dashboard for viewing and managing
-PRDs, tasks, sprints, and pipeline runs.
+PRDs, tasks, sprints, and analytics.
 
 Usage:
     a-sdlc ui              # Start web server on http://localhost:3847
@@ -15,9 +15,15 @@ import atexit
 import contextlib
 import logging
 import os
+
+try:
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
 import signal
 import sys
-from collections import defaultdict
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,6 +43,136 @@ except ImportError as err:
     ) from err
 
 from a_sdlc.storage import get_storage  # noqa: E402
+
+# =============================================================================
+# Health Data Provider
+# =============================================================================
+
+_server_start_time = time.monotonic()
+
+
+class HealthDataProvider:
+    """Provides server health metrics, connection events, errors, and logs.
+
+    Acts as a lightweight in-memory provider that the /health route and
+    /ws/health WebSocket use to build dashboard state.
+    """
+
+    def __init__(self, max_events: int = 100, max_errors: int = 50, max_logs: int = 100) -> None:
+        self._events: deque[dict[str, str]] = deque(maxlen=max_events)
+        self._errors: deque[dict[str, str]] = deque(maxlen=max_errors)
+        self._log_lines: deque[str] = deque(maxlen=max_logs)
+        self._ws_connections: list[WebSocket] = []
+
+    # -- Events ----------------------------------------------------------
+
+    def record_event(self, event_type: str, detail: str) -> None:
+        """Record a connection event (connect, disconnect, tool_call, error)."""
+        self._events.appendleft({
+            "event_type": event_type,
+            "detail": detail,
+            "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        })
+
+    def record_error(self, message: str, traceback: str = "") -> None:
+        """Record an error with optional traceback."""
+        self._errors.appendleft({
+            "message": message,
+            "traceback": traceback,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    def add_log_line(self, line: str) -> None:
+        """Append a log line to the ring buffer."""
+        self._log_lines.append(line)
+
+    # -- Connections tracking -------------------------------------------
+
+    def add_ws(self, ws: "WebSocket") -> None:
+        """Register a health WebSocket connection."""
+        self._ws_connections.append(ws)
+
+    def remove_ws(self, ws: "WebSocket") -> None:
+        """Unregister a health WebSocket connection."""
+        if ws in self._ws_connections:
+            self._ws_connections.remove(ws)
+
+    @property
+    def ws_connections(self) -> list["WebSocket"]:
+        return list(self._ws_connections)
+
+    # -- Snapshot -------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return the full health state as a JSON-serialisable dict."""
+        uptime_secs = time.monotonic() - _server_start_time
+        uptime_str = _format_uptime(uptime_secs)
+
+        try:
+            if resource is not None:
+                mem_usage = resource.getrusage(resource.RUSAGE_SELF)
+                # macOS reports bytes; Linux reports KB
+                if sys.platform == "darwin":
+                    memory_mb = round(mem_usage.ru_maxrss / (1024 * 1024), 1)
+                else:
+                    memory_mb = round(mem_usage.ru_maxrss / 1024, 1)
+            else:
+                memory_mb = 0.0
+        except Exception:
+            memory_mb = 0.0
+
+        active_connections = len(self._ws_connections)
+        error_count = len(self._errors)
+
+        # Determine status
+        if error_count >= 10:
+            status = "unhealthy"
+            status_label = "Unhealthy"
+            status_detail = f"{error_count} errors detected"
+        elif error_count > 0:
+            status = "degraded"
+            status_label = "Degraded"
+            status_detail = f"{error_count} recent error(s)"
+        else:
+            status = "healthy"
+            status_label = "Healthy"
+            status_detail = f"Running for {uptime_str}"
+
+        return {
+            "type": "health_update",
+            "status": status,
+            "status_label": status_label,
+            "status_detail": status_detail,
+            "metrics": {
+                "uptime": uptime_str,
+                "memory_mb": memory_mb,
+                "active_connections": active_connections,
+                "error_count": error_count,
+            },
+            "events": list(self._events),
+            "errors": list(self._errors),
+            "log_lines": list(self._log_lines),
+        }
+
+
+def _format_uptime(seconds: float) -> str:
+    """Format seconds into a human-readable uptime string."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m {seconds % 60}s"
+    hours = minutes // 60
+    remaining_min = minutes % 60
+    if hours < 24:
+        return f"{hours}h {remaining_min}m"
+    days = hours // 24
+    remaining_hours = hours % 24
+    return f"{days}d {remaining_hours}h"
+
+
+health_provider = HealthDataProvider()
 
 # PID file location
 PID_FILE = Path.home() / ".a-sdlc" / "ui.pid"
@@ -138,141 +274,28 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 # =============================================================================
-# WebSocket Infrastructure
+# Application Setup
 # =============================================================================
-
-
-class ConnectionManager:
-    """Manages WebSocket connections grouped by execution run ID.
-
-    Each run_id maps to a list of active WebSocket connections.
-    When a client connects to /ws/runs/{run_id}, it is added to
-    the appropriate list.  On disconnect (or send failure), it is
-    removed.  The broadcast method sends a JSON message to every
-    connection watching a given run.
-    """
-
-    def __init__(self) -> None:
-        self.active_connections: dict[str, list[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, run_id: str) -> None:
-        """Accept a WebSocket connection and register it for a run."""
-        await websocket.accept()
-        self.active_connections.setdefault(run_id, []).append(websocket)
-        logger.debug("WS connected for run %s (total: %d)", run_id, len(self.active_connections[run_id]))
-
-    def disconnect(self, websocket: WebSocket, run_id: str) -> None:
-        """Remove a WebSocket connection from a run's connection list."""
-        conns = self.active_connections.get(run_id, [])
-        if websocket in conns:
-            conns.remove(websocket)
-        # Clean up empty lists to avoid memory leaks
-        if run_id in self.active_connections and not self.active_connections[run_id]:
-            del self.active_connections[run_id]
-        logger.debug("WS disconnected for run %s", run_id)
-
-    async def broadcast(self, run_id: str, message: dict) -> None:
-        """Send a JSON message to all connections watching a run.
-
-        Connections that fail to receive are silently disconnected.
-        This prevents one broken connection from blocking others.
-        """
-        conns = self.active_connections.get(run_id, [])
-        dead: list[WebSocket] = []
-        for ws in conns:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        # Remove dead connections
-        for ws in dead:
-            self.disconnect(ws, run_id)
-
-    @property
-    def watched_run_ids(self) -> list[str]:
-        """Return run IDs that have at least one active watcher."""
-        return [rid for rid, conns in self.active_connections.items() if conns]
-
-    def connection_count(self, run_id: str) -> int:
-        """Return the number of active connections for a run."""
-        return len(self.active_connections.get(run_id, []))
-
-    @property
-    def total_connections(self) -> int:
-        """Total number of active WebSocket connections across all runs."""
-        return sum(len(conns) for conns in self.active_connections.values())
-
-
-manager = ConnectionManager()
-
-
-async def _change_detector() -> None:
-    """Background task: poll SQLite for run state changes, push via WebSocket.
-
-    For each run_id with active WebSocket watchers, calls
-    storage.get_run_state_hash(run_id) every 1 second.  When the
-    hash differs from the previously seen value, broadcasts a
-    state-changed message so the client can fetch updated partials.
-
-    Runs until cancelled (via lifespan teardown).
-    """
-    last_state: dict[str, str] = {}
-    while True:
-        await asyncio.sleep(1)
-        try:
-            storage = get_storage()
-            for run_id in list(manager.watched_run_ids):
-                try:
-                    current_hash = storage.get_run_state_hash(run_id)
-                except Exception:
-                    logger.debug("get_run_state_hash failed for %s", run_id, exc_info=True)
-                    continue
-
-                previous_hash = last_state.get(run_id)
-                if current_hash != previous_hash:
-                    last_state[run_id] = current_hash
-                    # Only broadcast if there was a previous state
-                    # (skip the initial population to avoid a spurious update)
-                    if previous_hash is not None:
-                        await manager.broadcast(run_id, {
-                            "type": "state_changed",
-                            "run_id": run_id,
-                            "hash": current_hash,
-                        })
-                        logger.debug(
-                            "State change detected for run %s (hash: %s -> %s)",
-                            run_id, previous_hash[:8] if previous_hash else "none",
-                            current_hash[:8] if current_hash else "none",
-                        )
-
-            # Prune last_state entries for runs no longer being watched
-            watched = set(manager.watched_run_ids)
-            stale_keys = [k for k in last_state if k not in watched]
-            for k in stale_keys:
-                del last_state[k]
-
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Log but do not crash the background task
-            logger.exception("Error in _change_detector loop")
-            await asyncio.sleep(5)  # Back off on unexpected errors
 
 
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
-    """Application lifespan: start/stop background tasks."""
-    task = asyncio.create_task(_change_detector())
-    logger.info("Started WebSocket change detector background task")
+    """Application lifespan (no-op)."""
     yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-    logger.info("Stopped WebSocket change detector background task")
 
 
 app = FastAPI(title="a-sdlc Dashboard", version="0.1.0", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def create_app() -> FastAPI:
+    """Return the FastAPI application instance.
+
+    This is the public factory function used by ``run_combined_server()``
+    to embed the UI inside the same process as the MCP server.  The app
+    is a module-level singleton so repeated calls return the same object.
+    """
+    return app
 
 
 def _get_current_project(project_id: str | None = None) -> dict[str, Any] | None:
@@ -287,37 +310,6 @@ def _get_all_projects() -> list[dict[str, Any]]:
     """Get all projects for the project switcher."""
     storage = get_storage()
     return storage.list_projects()
-
-
-def _get_active_pipeline_count(project_id: str | None) -> int:
-    """Count active (running/pending) execution runs for a project.
-
-    Returns 0 if project_id is None or on any storage error.
-    """
-    if not project_id:
-        return 0
-    try:
-        storage = get_storage()
-        runs = storage.list_execution_runs(project_id, status="active")
-        return len(runs)
-    except Exception:
-        return 0
-
-
-@app.middleware("http")
-async def inject_pipeline_count(request: Request, call_next):
-    """Inject active pipeline count into request state for nav badge."""
-    # Only compute for HTML page requests (skip API/WebSocket)
-    if request.url.path.startswith("/ws/") or request.method not in ("GET", "HEAD"):
-        return await call_next(request)
-    # Extract project ID from query params or URL path
-    project_id = request.query_params.get("project")
-    if not project_id and "/projects/" in request.url.path:
-        parts = request.url.path.split("/projects/")
-        if len(parts) > 1:
-            project_id = parts[1].split("/")[0]
-    request.state.active_pipeline_count = _get_active_pipeline_count(project_id)
-    return await call_next(request)
 
 
 # =============================================================================
@@ -337,14 +329,14 @@ async def home(request: Request, project: str | None = None):
 
     if not projects_with_stats:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     return templates.TemplateResponse(
+        request,
         "home.html",
-        {
-            "request": request,
+        context={
             "projects": projects_with_stats,
         }
     )
@@ -359,8 +351,8 @@ async def project_dashboard(request: Request, project_id: str):
 
     if not current_project:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     # Get stats
@@ -378,14 +370,10 @@ async def project_dashboard(request: Request, project_id: str):
     # Active sprint
     active_sprint = next((s for s in sprints if s["status"] == "active"), None)
 
-    # Active run count
-    active_runs = storage.list_execution_runs(current_project["id"], status="active")
-    active_count = len(active_runs)
-
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
-        {
-            "request": request,
+        context={
             "project": current_project,
             "projects": all_projects,
             "tasks": tasks,
@@ -393,7 +381,6 @@ async def project_dashboard(request: Request, project_id: str):
             "prds": prds,
             "task_stats": task_stats,
             "active_sprint": active_sprint,
-            "active_run_count": active_count,
         }
     )
 
@@ -412,8 +399,8 @@ async def tasks_page(request: Request, project: str | None = None, status: str |
 
     if not current_project:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     # Get tasks - use sprint-specific method if filtering by sprint
@@ -423,21 +410,16 @@ async def tasks_page(request: Request, project: str | None = None, status: str |
         tasks = storage.list_tasks(current_project["id"], status=status)
     sprints = storage.list_sprints(current_project["id"])
 
-    # Active run count
-    active_runs = storage.list_execution_runs(current_project["id"], status="active")
-    active_count = len(active_runs)
-
     return templates.TemplateResponse(
+        request,
         "tasks.html",
-        {
-            "request": request,
+        context={
             "project": current_project,
             "projects": all_projects,
             "tasks": tasks,
             "sprints": sprints,
             "filter_status": status,
             "filter_sprint": sprint_id,
-            "active_run_count": active_count,
         }
     )
 
@@ -451,13 +433,10 @@ async def task_detail(request: Request, task_id: str):
     if not task:
         return HTMLResponse(content="<h1>Task not found</h1>", status_code=404)
 
-    # Get thread entry count for badge
-    thread_entries = storage.list_artifact_threads_by_artifact("task", task_id)
-    thread_count = len(thread_entries)
-
     return templates.TemplateResponse(
+        request,
         "task_detail.html",
-        {"request": request, "task": task, "thread_count": thread_count}
+        context={"task": task}
     )
 
 
@@ -503,8 +482,8 @@ async def sprints_page(request: Request, project: str | None = None, status: str
 
     if not current_project:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     sprints = storage.list_sprints(current_project["id"])
@@ -519,19 +498,14 @@ async def sprints_page(request: Request, project: str | None = None, status: str
         sprint["task_count"] = len(tasks)
         sprint["completed_count"] = sum(1 for t in tasks if t["status"] == "completed")
 
-    # Active run count
-    active_runs = storage.list_execution_runs(current_project["id"], status="active")
-    active_count = len(active_runs)
-
     return templates.TemplateResponse(
+        request,
         "sprints.html",
-        {
-            "request": request,
+        context={
             "project": current_project,
             "projects": all_projects,
             "sprints": sprints,
             "filter_status": status,
-            "active_run_count": active_count,
         }
     )
 
@@ -566,20 +540,15 @@ async def sprint_detail(request: Request, sprint_id: str):
         if s in task_stats:
             task_stats[s] += 1
 
-    # Get thread entry count for badge
-    thread_entries = storage.list_artifact_threads_by_artifact("sprint", sprint_id)
-    thread_count = len(thread_entries)
-
     return templates.TemplateResponse(
+        request,
         "sprint_detail.html",
-        {
-            "request": request,
+        context={
             "sprint": sprint,
             "prds": prds,
             "tasks": tasks,
             "task_stats": task_stats,
             "available_prds": available_prds,
-            "thread_count": thread_count,
         }
     )
 
@@ -631,8 +600,8 @@ async def prds_page(request: Request, project: str | None = None, status: str | 
 
     if not current_project:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     prds = storage.list_prds(current_project["id"], status=status, sprint_id=sprint_id)
@@ -645,21 +614,16 @@ async def prds_page(request: Request, project: str | None = None, status: str | 
 
     sprints = storage.list_sprints(current_project["id"])
 
-    # Active run count
-    active_runs = storage.list_execution_runs(current_project["id"], status="active")
-    active_count = len(active_runs)
-
     return templates.TemplateResponse(
+        request,
         "prds.html",
-        {
-            "request": request,
+        context={
             "project": current_project,
             "projects": all_projects,
             "prds": prds,
             "sprints": sprints,
             "filter_status": status,
             "filter_sprint": sprint_id,
-            "active_run_count": active_count,
         }
     )
 
@@ -741,20 +705,15 @@ async def prd_detail(request: Request, prd_id: str):
     # Get design document if exists
     design = storage.get_design_by_prd(prd_id)
 
-    # Get thread entry count for badge
-    thread_entries = storage.list_artifact_threads_by_artifact("prd", prd_id)
-    thread_count = len(thread_entries)
-
     return templates.TemplateResponse(
+        request,
         "prd_detail.html",
-        {
-            "request": request,
+        context={
             "prd": prd,
             "sprints": sprints,
             "tasks": tasks,
             "graph_data": graph_data,
             "design": design,
-            "thread_count": thread_count,
         }
     )
 
@@ -848,14 +807,18 @@ async def update_prd_status(prd_id: str, request: Request):
 
 
 def _parse_timestamp(ts_str: str | None) -> datetime | None:
-    """Safely parse an ISO timestamp string to datetime."""
+    """Safely parse an ISO timestamp string to a timezone-aware (UTC) datetime."""
     if not ts_str:
         return None
     try:
         # Handle both with and without timezone
         if ts_str.endswith("Z"):
             ts_str = ts_str[:-1] + "+00:00"
-        return datetime.fromisoformat(ts_str)
+        dt = datetime.fromisoformat(ts_str)
+        # Normalize naive datetimes to UTC to avoid mixed-tz subtraction errors
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except (ValueError, TypeError):
         return None
 
@@ -1050,8 +1013,8 @@ async def analytics_page(request: Request, project: str | None = None, days: int
 
     if not current_project:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     # Validate days parameter
@@ -1061,9 +1024,9 @@ async def analytics_page(request: Request, project: str | None = None, days: int
     metrics = _compute_analytics(current_project["id"], days)
 
     return templates.TemplateResponse(
+        request,
         "analytics.html",
-        {
-            "request": request,
+        context={
             "project": current_project,
             "projects": all_projects,
             "metrics": metrics,
@@ -1073,366 +1036,26 @@ async def analytics_page(request: Request, project: str | None = None, days: int
 
 
 # =============================================================================
-# Pipeline Runs
+# Thread Viewer
 # =============================================================================
 
 
-def _list_pipeline_runs(status_filter: str | None = None) -> list[dict[str, Any]]:
-    """Helper for backward compatibility with tests (uses DB instead of files)."""
-    storage = get_storage()
-    project = storage.get_most_recent_project()
-    if not project:
-        return []
-    runs = storage.list_execution_runs(project["id"], status=status_filter)
-    for run in runs:
-        # Compatibility fields expected by tests
-        pid = run.get("pid")
-        run["pid_alive"] = (
-            _is_process_running(pid) if isinstance(pid, int) else False
-        )
-        run["display_status"] = run.get("status", "unknown")
-    return runs
 
 
-def _count_active_runs() -> int:
-    """Helper for backward compatibility with tests."""
-    storage = get_storage()
-    project = storage.get_most_recent_project()
-    if not project:
-        return 0
-    active = storage.list_execution_runs(project["id"], status="active")
-    return len(active)
-
-
-@app.get("/runs", response_class=HTMLResponse)
-async def pipeline_runs_page(request: Request, project: str | None = None, status: str | None = None):
-    """Pipeline runs list page (FR-001, FR-002, FR-003)."""
-    storage = get_storage()
-    all_projects = _get_all_projects()
-    current_project = _get_current_project(project)
-
-    if not current_project:
-        return templates.TemplateResponse(
-            "onboarding.html",
-            {"request": request}
-        )
-
-    runs = storage.list_execution_runs(current_project["id"], status=status)
-    active_runs = storage.list_execution_runs(current_project["id"], status="active")
-    active_count = len(active_runs)
-
-    # Get sprints for start run modal
-    sprints = storage.list_sprints(current_project["id"])
-
-    return templates.TemplateResponse(
-        "pipeline_runs.html",
-        {
-            "request": request,
-            "project": current_project,
-            "projects": all_projects,
-            "runs": runs,
-            "active_run_count": active_count,
-            "filter_status": status,
-            "sprints": sprints,
-        }
-    )
-
-
-@app.get("/runs/{run_id}", response_class=HTMLResponse)
-async def run_detail_page(request: Request, run_id: str):
-    """Run detail page with kanban board, phase progress, and agent panel."""
-    storage = get_storage()
-    run = storage.get_execution_run_detail(run_id)
-
-    if not run:
-        return HTMLResponse(content="<h1>Run not found</h1>", status_code=404)
-
-    # Determine project context
-    current_project = storage.get_project(run["project_id"])
-    all_projects = _get_all_projects()
-
-    # Get work queue items and group into kanban columns
-    work_items = storage.list_work_queue_items(run_id)
-    queue: dict[str, list[dict[str, Any]]] = {
-        "pending": [],
-        "in_progress": [],
-        "completed": [],
-        "failed": [],
-        "escalated": [],
-    }
-    for item in work_items:
-        status = item.get("status", "pending")
-        if status in queue:
-            # Calculate elapsed time for active items
-            if status == "in_progress" and item.get("started_at"):
-                try:
-                    start_dt = datetime.fromisoformat(item["started_at"].replace("Z", "+00:00"))
-                    delta = datetime.now(timezone.utc) - start_dt
-                    item["elapsed_min"] = int(delta.total_seconds() / 60)
-                except (ValueError, TypeError):
-                    item["elapsed_min"] = 0
-            queue[status].append(item)
-
-    # Get thread entries for the activity stream
-    thread_entries = storage.get_recent_thread_entries(run_id, limit=30)
-
-    # Active run count for nav
-    if not current_project:
-        return HTMLResponse(content="<h1>Project not found</h1>", status_code=404)
-    active_runs = storage.list_execution_runs(current_project["id"], status="active")
-    active_count = len(active_runs)
-
-    # Convergence rate: % of challenge artifacts resolved
-    challenge_items = [i for i in work_items if i.get("work_type") == "challenge"]
-    convergence_rate = 0
-    if challenge_items:
-        resolved = sum(1 for i in challenge_items if i.get("status") == "completed")
-        convergence_rate = int((resolved / len(challenge_items)) * 100)
-
-    # Phase percentage
-    phase_order = ["planning", "design", "implementation", "testing", "review"]
-    phase_pct = 20
-    if run.get("current_phase") in phase_order:
-        phase_pct = (phase_order.index(run["current_phase"]) + 1) * 20
-
-    return templates.TemplateResponse(
-        "run_detail.html",
-        {
-            "request": request,
-            "project": current_project,
-            "projects": all_projects,
-            "run": run,
-            "queue": queue,
-            "entries": thread_entries,
-            "artifact_type": "run",  # For thread viewer
-            "artifact_id": run_id,
-            "active_run_count": active_count,
-            "convergence_rate": convergence_rate,
-            "phase_pct": phase_pct,
-            "allow_comment": True,
-        }
-    )
-
-
-@app.post("/runs/launch")
-async def start_run(request: Request):
-    """Launch a new pipeline run from the UI (FR-023, FR-024, FR-025)."""
-    import subprocess
-    import sys
-
-    storage = get_storage()
-    form = await request.form()
-    sprint_id_val = form.get("sprint_id")
-    sprint_id = str(sprint_id_val) if sprint_id_val and isinstance(sprint_id_val, str) else None
-    goal_val = form.get("goal", "")
-    goal = str(goal_val).strip() if isinstance(goal_val, str) else ""
-
-    # We need project context - find most recent
-    project = storage.get_most_recent_project()
-    if not project:
-        return HTMLResponse(content="No project found to run in", status_code=400)
-
-    run_id = storage.get_next_run_id(project["id"])
-
-    # Create DB record
-    storage.create_execution_run(
-        run_id=run_id,
-        project_id=project["id"],
-        sprint_id=sprint_id if sprint_id else None,
-        status="active",
-    )
-
-    # Spawn background executor process
-    cmd = [
-        sys.executable,
-        "-m",
-        "a_sdlc.executor",
-        "--run-id",
-        run_id,
-    ]
-    if sprint_id:
-        cmd.extend(["--mode", "sprint", "--sprint-id", sprint_id])
-    else:
-        cmd.extend(["--mode", "objective", "--description", goal])
-
-    # Detached process
-    subprocess.Popen(
-        cmd,
-        cwd=project["path"],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
-
-
-# =============================================================================
-# WebSocket Endpoints
-# =============================================================================
-
-
-@app.websocket("/ws/runs/{run_id}")
-async def run_websocket(websocket: WebSocket, run_id: str):
-    """WebSocket endpoint for real-time pipeline run updates.
-
-    Clients connect to /ws/runs/{run_id} to receive state change
-    notifications for a specific execution run.  The server pushes
-    JSON messages of the form {"type": "state_changed", "run_id": ..., "hash": ...}
-    whenever the run's state hash changes in the database.
-
-    The client is expected to react by fetching updated HTML partials
-    via standard HTMX GET requests.
-    """
-    await manager.connect(websocket, run_id)
-    try:
-        while True:
-            # Keep the connection alive by reading incoming messages.
-            # Clients may send ping/pong or HTMX ws-send messages.
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, run_id)
-    except Exception:
-        manager.disconnect(websocket, run_id)
-        logger.debug("WebSocket error for run %s", run_id, exc_info=True)
-
-
-@app.post("/runs/{run_id}/action")
-async def run_action(run_id: str, request: Request, action: str | None = None):
-    """Global control actions for a run."""
-    storage = get_storage()
-    if not action:
-        form = await request.form()
-        action_val = form.get("action")
-        action = str(action_val) if isinstance(action_val, str) else None
-
-    if action == "pause":
-        storage.update_execution_run(run_id, status="paused")
-    elif action == "resume":
-        storage.update_execution_run(run_id, status="active")
-    elif action == "cancel":
-        storage.update_execution_run(run_id, status="cancelled")
-    elif action == "answer":
-        form = await request.form()
-        answer_val = form.get("answer", "")
-        answer = str(answer_val).strip() if isinstance(answer_val, str) else ""
-        if answer:
-            storage.update_execution_run(
-                run_id,
-                clarification_answer=answer,
-                status="running"  # Resume the run
-            )
-            # Log as a user intervention in the thread
-            run_data = storage.get_execution_run(run_id)
-            if run_data:
-                storage.create_artifact_thread_entry(
-                    run_id=run_id,
-                    project_id=run_data["project_id"],
-                    artifact_type="run",
-                    artifact_id=run_id,
-                    entry_type="user_intervention",
-                    content=f"Clarification answer: {answer}",
-                    agent_persona="User"
-                )
-
-    return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
-
-
-@app.post("/runs/items/{item_id}/action")
-async def work_item_action(item_id: str, request: Request, action: str | None = None):
-    """Control actions for individual work queue items."""
-    storage = get_storage()
-
-    # Support action from query param (HTMX) or form data (legacy tests)
-    if not action:
-        form = await request.form()
-        action_val = form.get("action")
-        action = str(action_val) if isinstance(action_val, str) else None
-
-    item = storage.get_work_queue_item(item_id)
-    if not item:
-        return HTMLResponse(content="Work item not found", status_code=404)
-
-    if action == "start":
-        storage.update_work_queue_item(item_id, status="in_progress", started_at=datetime.now(timezone.utc).isoformat())
-    elif action == "pause":
-        storage.update_work_queue_item(item_id, status="pending")
-    elif action == "retry":
-        storage.update_work_queue_item(item_id, status="pending", retry_count=(item.get("retry_count") or 0) + 1)
-    elif action == "skip":
-        storage.update_work_queue_item(item_id, status="skipped")
-    elif action == "cancel":
-        storage.update_work_queue_item(item_id, status="cancelled")
-    elif action in ["approve", "force_approve"]:
-        storage.update_work_queue_item(item_id, status="completed", result="manually_approved")
-    else:
-        return HTMLResponse(content=f"Unknown action: {action}", status_code=400)
-
-    # Re-render card partial
-    updated = storage.get_work_queue_item(item_id)
-    return templates.TemplateResponse(
-        "work_item_card.html",
-        {"request": request, "item": updated}
-    )
-
-
-@app.post("/threads/{artifact_type}/{artifact_id}/comment")
-async def post_thread_comment(
-    request: Request, artifact_type: str, artifact_id: str
-):
-    """Unified endpoint for posting thread comments (both artifact and run context)."""
-    storage = get_storage()
-
-    # Try reading as JSON first, then fall back to Form
-    try:
-        data = await request.json()
-        content = (data.get("content") or "").strip()
-    except Exception:
-        form = await request.form()
-        content_val = form.get("content") or ""
-        content = str(content_val).strip() if isinstance(content_val, str) else ""
-
-    if not content:
-        return HTMLResponse(content="Comment cannot be empty", status_code=400)
-
-    # Resolve project and find/create run context
-    project_id = _resolve_project_id(storage, artifact_type, artifact_id)
-    if not project_id:
-        return HTMLResponse(content="Artifact context not found", status_code=404)
-
-    # Use run_id from query if available (e.g. from run detail page)
-    run_id = request.query_params.get("run_id")
-    if not run_id:
-        # Fallback to most recent thread's run_id
-        existing = storage.list_artifact_threads_by_artifact(artifact_type, artifact_id)
-        if existing:
-            run_id = existing[-1]["run_id"]
-        else:
-            run_id = f"user-{artifact_id}"
-            if not storage.get_execution_run(run_id):
-                storage.create_execution_run(run_id=run_id, project_id=project_id, status="completed")
-
-    storage.create_artifact_thread_entry(
-        run_id=run_id,
-        project_id=project_id,
-        artifact_type=artifact_type,
-        artifact_id=artifact_id,
-        entry_type="user_intervention",
-        content=content,
-        agent_persona="User",
-    )
-
-    # Re-render viewer partial
-    entries = storage.list_artifact_threads_by_artifact(artifact_type, artifact_id)
-    return templates.TemplateResponse(
-        "partials/thread_viewer.html",
-        {
-            "request": request,
-            "entries": entries,
-            "artifact_type": artifact_type,
-            "artifact_id": artifact_id,
-        }
-    )
+def _resolve_project_id(
+    storage: Any, artifact_type: str, artifact_id: str
+) -> str | None:
+    """Resolve the project_id for a given artifact type and ID."""
+    if artifact_type == "prd":
+        prd = storage.get_prd(artifact_id)
+        return prd["project_id"] if prd else None
+    elif artifact_type == "task":
+        task = storage.get_task(artifact_id)
+        return task["project_id"] if task else None
+    elif artifact_type == "sprint":
+        sprint = storage.get_sprint(artifact_id)
+        return sprint["project_id"] if sprint else None
+    return None
 
 
 # =============================================================================
@@ -1456,16 +1079,16 @@ async def settings_page(request: Request, project: str | None = None, message: s
 
     if not current_project:
         return templates.TemplateResponse(
+            request,
             "onboarding.html",
-            {"request": request}
         )
 
     integrations = _get_integrations_dict(current_project["id"])
 
     return templates.TemplateResponse(
+        request,
         "settings.html",
-        {
-            "request": request,
+        context={
             "project": current_project,
             "projects": all_projects,
             "integrations": integrations,
@@ -1489,9 +1112,9 @@ async def integration_edit_form(request: Request, system: str, project: str | No
     config = existing["config"] if existing else None
 
     return templates.TemplateResponse(
+        request,
         "partials/integration_form.html",
-        {
-            "request": request,
+        context={
             "system": system,
             "project_id": current_project["id"],
             "config": config,
@@ -1532,9 +1155,9 @@ async def save_linear_integration(
     # Return updated integration card
     integrations = _get_integrations_dict(current_project["id"])
     return templates.TemplateResponse(
+        request,
         "partials/integration_card.html",
-        {
-            "request": request,
+        context={
             "system": "linear",
             "project": current_project,
             "integration": integrations.get("linear"),
@@ -1572,9 +1195,9 @@ async def save_jira_integration(
     # Return updated integration card
     integrations = _get_integrations_dict(current_project["id"])
     return templates.TemplateResponse(
+        request,
         "partials/integration_card.html",
-        {
-            "request": request,
+        context={
             "system": "jira",
             "project": current_project,
             "integration": integrations.get("jira"),
@@ -1616,9 +1239,9 @@ async def save_confluence_integration(
     # Return updated integration card
     integrations = _get_integrations_dict(current_project["id"])
     return templates.TemplateResponse(
+        request,
         "partials/integration_card.html",
-        {
-            "request": request,
+        context={
             "system": "confluence",
             "project": current_project,
             "integration": integrations.get("confluence"),
@@ -1651,9 +1274,9 @@ async def save_github_integration(
 
     integrations = _get_integrations_dict(current_project["id"])
     return templates.TemplateResponse(
+        request,
         "partials/integration_card.html",
-        {
-            "request": request,
+        context={
             "system": "github",
             "project": current_project,
             "integration": integrations.get("github"),
@@ -1674,9 +1297,9 @@ async def delete_integration(request: Request, system: str, project: str):
 
     # Return empty integration card (not configured state)
     return templates.TemplateResponse(
+        request,
         "partials/integration_card.html",
-        {
-            "request": request,
+        context={
             "system": system,
             "project": current_project,
             "integration": None,
@@ -1685,44 +1308,72 @@ async def delete_integration(request: Request, system: str, project: str):
 
 
 # =============================================================================
-# Thread Viewer (FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-019)
+# Health Dashboard
 # =============================================================================
 
 
-@app.get("/threads/{artifact_type}/{artifact_id}", response_class=HTMLResponse)
-async def thread_viewer(request: Request, artifact_type: str, artifact_id: str):
-    """Thread viewer partial for an artifact (HTMX endpoint).
+@app.get("/health", response_class=HTMLResponse)
+async def health_page(request: Request):
+    """Health dashboard page with real-time WebSocket updates."""
+    all_projects = _get_all_projects()
+    current_project = None
+    with contextlib.suppress(Exception):
+        current_project = _get_current_project()
 
-    Returns the thread_viewer.html partial showing all thread entries
-    for the given artifact across all pipeline runs.
-    """
-    storage = get_storage()
-    entries = storage.list_artifact_threads_by_artifact(artifact_type, artifact_id)
+    snap = health_provider.snapshot()
+
     return templates.TemplateResponse(
-        "partials/thread_viewer.html",
-        {
-            "request": request,
-            "entries": entries,
-            "artifact_type": artifact_type,
-            "artifact_id": artifact_id,
-        }
+        request,
+        "health.html",
+        context={
+            "project": current_project,
+            "projects": all_projects,
+            "status": snap["status"],
+            "status_label": snap["status_label"],
+            "status_detail": snap["status_detail"],
+            "metrics": snap["metrics"],
+            "events": snap["events"],
+            "errors": snap["errors"],
+            "log_lines": snap["log_lines"],
+        },
     )
 
 
-def _resolve_project_id(
-    storage: Any, artifact_type: str, artifact_id: str
-) -> str | None:
-    """Resolve the project_id for a given artifact type and ID."""
-    if artifact_type == "prd":
-        prd = storage.get_prd(artifact_id)
-        return prd["project_id"] if prd else None
-    elif artifact_type == "task":
-        task = storage.get_task(artifact_id)
-        return task["project_id"] if task else None
-    elif artifact_type == "sprint":
-        sprint = storage.get_sprint(artifact_id)
-        return sprint["project_id"] if sprint else None
-    return None
+@app.websocket("/ws/health")
+async def health_websocket(websocket: WebSocket):
+    """WebSocket endpoint pushing health state every 5 seconds.
+
+    Sends a full health snapshot on connection, then pushes updates
+    at a ~5-second interval.
+    """
+    await websocket.accept()
+    health_provider.add_ws(websocket)
+    health_provider.record_event("connect", "Health dashboard client connected")
+    logger.debug("Health WS connected (total: %d)", len(health_provider.ws_connections))
+
+    try:
+        # Send initial snapshot immediately
+        await websocket.send_json(health_provider.snapshot())
+
+        while True:
+            # Wait for 5 seconds or until a client message arrives
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            # Push updated snapshot
+            await websocket.send_json(health_provider.snapshot())
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.debug("Health WS error", exc_info=True)
+    finally:
+        health_provider.remove_ws(websocket)
+        health_provider.record_event("disconnect", "Health dashboard client disconnected")
+        logger.debug("Health WS disconnected")
+
+
+# =============================================================================
+# Server Entry Point
+# =============================================================================
 
 
 def run_server(host: str = "127.0.0.1", port: int = 3847) -> None:

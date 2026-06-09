@@ -101,22 +101,23 @@ All commands use the a-sdlc MCP server tools:
 ### PRD Operations
 - `mcp__asdlc__list_prds()` - List PRDs
 - `mcp__asdlc__get_prd(prd_id)` - Get full PRD with file_path
-- `mcp__asdlc__create_prd(title)` - Create PRD (returns file_path → Write content)
-- `mcp__asdlc__update_prd(prd_id, status?, version?, sprint_id?)` - Update PRD metadata
+- `mcp__asdlc__create_prd(title, content?)` - Create PRD (optional content written through backend)
+- `mcp__asdlc__update_prd(prd_id, status?, version?, sprint_id?, content?)` - Update PRD metadata and/or content
 - `mcp__asdlc__delete_prd(prd_id)` - Delete PRD
 - `mcp__asdlc__split_prd(prd_id, task_specs)` - Decompose PRD into tasks
 
 ### Design Operations
-- `mcp__asdlc__create_design(prd_id)` - Create design doc (returns file_path → Write content)
+- `mcp__asdlc__create_design(prd_id, content?)` - Create design doc (optional content written through backend)
 - `mcp__asdlc__get_design(prd_id)` - Get design doc with file_path and content
+- `mcp__asdlc__update_design(prd_id, content)` - Update design doc content
 - `mcp__asdlc__delete_design(prd_id)` - Delete design doc
 - `mcp__asdlc__list_designs()` - List design docs for current project
 
 ### Task Operations
 - `mcp__asdlc__list_tasks(status?, sprint_id?, prd_id?)` - List tasks
 - `mcp__asdlc__get_task(task_id)` - Get task details with file_path
-- `mcp__asdlc__create_task(title, prd_id?, priority?, component?)` - Create task (returns file_path → Write content)
-- `mcp__asdlc__update_task(task_id, status?, priority?, ...)` - Update task metadata (use status="in_progress"/"completed"/"blocked")
+- `mcp__asdlc__create_task(title, prd_id?, priority?, component?, content?)` - Create task (optional content written through backend)
+- `mcp__asdlc__update_task(task_id, status?, priority?, content?, ...)` - Update task metadata and/or content
 - `mcp__asdlc__delete_task(task_id)` - Delete task
 
 ### Sprint Operations
@@ -205,8 +206,8 @@ a-sdlc includes a built-in quality feedback loop:
 
 ## Data Storage
 
-- All data stored in user-level SQLite: `~/.a-sdlc/data.db`
-- Content files: `~/.a-sdlc/content/{project_id}/prds/` and `tasks/`
+- All data stored in configured database (PostgreSQL + S3 via Docker Compose)
+- Content files: stored via configured backend (S3 in Docker, local in tests)
 - Lesson-learn files: `.sdlc/lesson-learn.md` (project), `~/.a-sdlc/lesson-learn.md` (global)
 - Correction log: `.sdlc/corrections.log` (append-only)
 - Data persists across Claude Code sessions
@@ -230,7 +231,7 @@ When using a-sdlc, you will encounter two different "task" systems. Understandin
 ### a-sdlc Tasks (Use These for Project Management)
 
 - **What:** Persistent work items stored in database + markdown files
-- **Location:** `~/.a-sdlc/content/{project_id}/tasks/{task_id}.md`
+- **Location:** Configured content backend (S3 bucket or local filesystem)
 - **Tools:** `mcp__asdlc__create_task()`, `mcp__asdlc__update_task()`, `mcp__asdlc__split_prd()`
 - **Commands:** `/sdlc:task-create`, `/sdlc:task-start`, `/sdlc:task-complete`
 - **Features:** PRD linking, sprint assignment, external sync (Linear/Jira)

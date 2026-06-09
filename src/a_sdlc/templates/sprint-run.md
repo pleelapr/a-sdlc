@@ -47,7 +47,12 @@ This skill launches subagents to execute a-sdlc tasks. Key distinction:
 ### 1. Validate Sprint & Detect Mode
 
 1. Use `mcp__asdlc__get_sprint(sprint_id)` to get sprint details
-2. Verify status is ACTIVE
+2. If status is `planned`, auto-activate it:
+   ```
+   mcp__asdlc__update_sprint(sprint_id=sprint_id, status="active")
+   ```
+   Display: `Sprint {sprint_id} auto-activated (was planned).`
+3. If status is `completed`, STOP with error: "Sprint is already completed. Create a new sprint."
 3. Use `mcp__asdlc__get_sprint_tasks(sprint_id, group_by_prd=True)` to load tasks grouped by PRD
 4. **Check git safety configuration** before deciding on isolated mode:
    ```
@@ -195,56 +200,6 @@ Pre-Flight Quality Report for {sprint_id}:
         print(f"  Quality report failed: {report.get('message', 'unknown error')}. Proceeding without quality check.")
 ```
 
-### Step 1.8: Agent Governance Integration
-
-**Config-gated**: Only runs if `governance.enabled` is `true` in `.sdlc/config.yaml`. If absent or `false`, skip this entire section (backward compatibility).
-
-```python
-# Load governance config
-from pathlib import Path
-import yaml
-
-config_path = Path(".sdlc/config.yaml")
-governance_enabled = False
-if config_path.exists():
-    with open(config_path) as f:
-        config = yaml.safe_load(f) or {}
-    governance_enabled = config.get("governance", {}).get("enabled", False)
-
-if governance_enabled:
-    # 1. Team health pre-flight
-    teams = mcp__asdlc__list_agent_teams(project_id=project_id)
-    for team in teams.get("teams", []):
-        health = mcp__asdlc__enforce_team_health(team_id=team["id"])
-        if health["status"] == "ok":
-            summary = health["summary"]
-            print(f"  Team '{health['team_name']}': "
-                  f"{summary['healthy']}/{summary['total_members']} healthy")
-            if summary["unhealthy"] > 0:
-                for action in health.get("actions_taken", []):
-                    print(f"    Action: {action['action']} on {action['agent_id']}: "
-                          f"{', '.join(action['issues'])}")
-
-    # 2. Auto-composition suggestion
-    compose = mcp__asdlc__auto_compose_team(sprint_id=sprint_id)
-    if compose["status"] == "ok" and compose.get("proposed_assignments"):
-        print(f"\n  Team composition suggestion for {sprint_id}:")
-        for assignment in compose["proposed_assignments"]:
-            print(f"    {assignment['display_name']} ({assignment['persona_type']}) "
-                  f"-> {assignment['assigned_component']} ({assignment['task_count']} tasks)")
-        if compose.get("coverage_gaps"):
-            print(f"    Coverage gaps: {compose['coverage_gaps']}")
-
-    # 3. Self-assessment for task routing
-    # During execution, before claiming each task, agents call:
-    #   assessment = mcp__asdlc__self_assess(agent_id=my_id, task_id=task_id)
-    #   if assessment["confidence"] < 40:
-    #       # Consider reassigning to a better-matched agent
-    print("\n  Governance pre-flight complete. Self-assessment enabled for task routing.")
-else:
-    # Governance disabled — skip all team health and composition checks
-    pass
-```
 
 ### 1.5. Resume from Checkpoint (if --resume)
 
@@ -835,233 +790,18 @@ def classify_max_turns(task: dict) -> int:
 Tasks within a batch dispatch up to `max_parallel` concurrently — the orchestrator fills available slots, polls all active subprocesses, and fills new slots as tasks complete. This balances throughput against API rate limits and token consumption.
 
 **Key principles:**
-- Each task gets a fresh subprocess via `mcp__asdlc__execute_task()`
+- Each task is dispatched to a subagent via the orchestrator's `Task` tool
 - The subagent receives lightweight dispatch info (from Step 3.5) plus pre-loaded shared context and self-loads task-specific content via MCP tools
 - The subagent submits self-review evidence via `submit_review(reviewer_type='self')` and returns — it does NOT dispatch reviewer subagents or mark tasks complete
 - **Review dispatch happens at the orchestrator level** (Step 4.4) — the orchestrator checks self-review, optionally dispatches a reviewer subagent, and handles the approve/reject flow
 - **Parallelism is capped** at `max_parallel` (default: 3) to prevent token overconsumption
-- **Fallback policy**: If `execute_task` returns `{"status": "error"}`, the task is marked BLOCKED — do NOT fall back to Task tool subagents (which share context and cause token bloat)
 
-#### Subprocess Dispatch via `execute_task` (Non-Blocking)
+The `dispatch_info` string (from `build_dispatch_info()`, Step 3.5) is injected into the subagent prompt, providing dependency outcomes and batch context.
 
-For each task in the current batch, the orchestrator dispatches a **memory-safe subprocess** via the `execute_task` MCP tool. The call is **non-blocking** — it returns immediately with a handle (`pid` + `log_path`). The orchestrator MUST then poll `check_execution()` every 30 seconds to monitor progress, detect stalls, and retrieve the final outcome.
+The `shared_context` string (from `build_batch_shared_context()`, see below) is built **once per batch** and injected into every subagent, replacing ~20-50KB of per-agent file reads with a ~2-3KB pre-loaded summary.
 
-```python
-# Step 1: Launch (returns immediately)
-handle = mcp__asdlc__execute_task(
-    task_id=task["id"],
-    executor="claude",    # or read from .sdlc/config.yaml daemon.adapter
-    max_turns=classify_max_turns(task),  # heavy=80, medium=50, light=20
-    dispatch_info=dispatch_info,  # from build_dispatch_info() — ~200-500 bytes
-    shared_context=batch_shared_context,  # pre-loaded once per batch — ~2-3KB
-)
-# handle = {"status": "launched", "pid": 12345, "log_path": "~/.a-sdlc/exec-logs/PROJ-T00001.jsonl"}
+**Note**: The subagent runs autonomously — it cannot propagate `AskUserQuestion` back to the user. If the subagent encounters unresolvable questions, it marks the task as `BLOCKED` in its outcome.
 
-# IMPORTANT: If execute_task returns {"status": "error"}, mark task as BLOCKED
-# Do NOT fall back to Task tool subagents (causes context bloat)
-if handle.get("status") == "error":
-    mcp__asdlc__log_correction(
-        context_type="task", context_id=task["id"],
-        category="process", description=f"execute_task failed: {handle.get('error', 'unknown')}")
-    mcp__asdlc__update_task(task_id=task["id"], status="blocked")
-    record_outcome(task, {"verdict": "BLOCKED", "summary": f"Dispatch failed: {handle.get('error', '')[:100]}"}, outcomes)
-    continue  # Skip to next task
-
-# Step 2: Poll until completion (MANDATORY — never fire-and-forget)
-result = poll_until_completion(handle, task_id=task["id"])
-# result = {"status": "completed", "outcome": {"verdict": "PASS", ...}, "turns": 25, "cost_usd": 1.50}
-```
-
-The subprocess prompt is built internally by `execute_task` and includes:
-- Pre-loaded shared context (architecture, config, lessons) — avoids ~20-50KB of redundant reads per agent
-- Self-loading instructions (get_task, get_prd, get_design via MCP) — only task-specific content
-- Full implementation instructions
-- Self-review gates with test evidence requirements
-- Correction logging instructions
-- Git config awareness (auto_commit, testing.runtime)
-- Structured `---TASK-OUTCOME---` output block
-
-The `dispatch_info` string (from `build_dispatch_info()`, Step 3.5) is injected into the subprocess prompt, providing dependency outcomes and batch context.
-
-The `shared_context` string (from `build_batch_shared_context()`, see below) is built **once per batch** and injected into every subprocess, replacing ~20-50KB of per-agent file reads with a ~2-3KB pre-loaded summary.
-
-**Note**: The subprocess runs autonomously — it cannot propagate `AskUserQuestion` back to the user. If the subprocess encounters unresolvable questions, it marks the task as `BLOCKED` in its outcome.
-
-#### Polling and Stall Detection
-
-The orchestrator MUST continuously monitor every dispatched subprocess. **Never leave a subprocess running without active polling.**
-
-```python
-def poll_until_completion(handle: dict, task_id: str,
-                          max_stall_minutes: int = 5,
-                          poll_interval: int = 30,
-                          max_retries: int = 1) -> dict:
-    """Poll check_execution until task completes, with stall detection and retry.
-
-    CRITICAL: The orchestrator MUST call this after every execute_task dispatch.
-    Fire-and-forget is forbidden — a stuck subprocess wastes API credits and
-    blocks sprint progress.
-
-    On stall detection, the function retries once using checkpoint context
-    before killing permanently. The checkpoint file (written by the subprocess
-    per Checkpoint Instructions) enables the retried subprocess to resume
-    from where the stalled one left off.
-
-    Args:
-        handle: Non-blocking handle from execute_task: {status, pid, log_path}
-        task_id: For logging and diagnostics.
-        max_stall_minutes: Kill process if no activity for this long (default: 5).
-        poll_interval: Seconds between check_execution polls (default: 30).
-        max_retries: Number of retry attempts on stall before permanent kill (default: 1).
-
-    Returns:
-        Completed status dict with outcome, or failure dict.
-    """
-    log_path = handle["log_path"]
-    pid = handle["pid"]
-    max_stall_seconds = max_stall_minutes * 60
-    retries_remaining = max_retries
-
-    last_turns = -1
-    last_tool = ""
-    stall_start = None  # timestamp when stall was first detected
-
-    while True:
-        sleep(poll_interval)
-        status = mcp__asdlc__check_execution(log_path=log_path, pid=pid)
-
-        # --- Terminal states: return immediately ---
-        if status["status"] == "completed":
-            return status  # Contains status["outcome"]
-        if status["status"] in ("failed", "error"):
-            return {
-                "status": "failed",
-                "outcome": {
-                    "verdict": "FAIL",
-                    "summary": status.get("message", "Process failed"),
-                },
-            }
-
-        # --- Running: check for stall ---
-        current_turns = status.get("turns", 0)
-        current_tool = status.get("last_tool", "")
-
-        if current_turns != last_turns or current_tool != last_tool:
-            # Progress detected — reset stall timer
-            last_turns = current_turns
-            last_tool = current_tool
-            stall_start = None
-        else:
-            # No progress — start or continue stall timer
-            if stall_start is None:
-                stall_start = current_time()
-            elapsed = current_time() - stall_start
-            if elapsed > max_stall_seconds:
-                # STALL DETECTED: stop the subprocess
-                mcp__asdlc__stop_execution(pid=pid)
-
-                if retries_remaining > 0:
-                    # --- RETRY: re-dispatch with checkpoint context ---
-                    retries_remaining -= 1
-                    mcp__asdlc__log_correction(
-                        context_type="task", context_id=task_id,
-                        category="execution-recovery",
-                        description=f"Process stalled ({elapsed}s no activity). "
-                                    f"Retrying with checkpoint (retries_remaining={retries_remaining}).")
-
-                    # Re-dispatch: execute_task reads checkpoint automatically (T00204)
-                    retry_handle = mcp__asdlc__execute_task(
-                        task_id=task_id,
-                        executor=executor,
-                        max_turns=classify_max_turns(task),
-                        dispatch_info=f"RETRY: previous attempt stalled after {elapsed}s",
-                        shared_context=batch_shared_context,
-                    )
-
-                    if retry_handle.get("status") == "error":
-                        return {
-                            "status": "failed",
-                            "outcome": {
-                                "verdict": "FAIL",
-                                "summary": f"Retry dispatch failed: {retry_handle.get('error', 'unknown')}",
-                            },
-                        }
-
-                    # Update tracking for the new subprocess
-                    handle = retry_handle
-                    log_path = handle["log_path"]
-                    pid = handle["pid"]
-                    last_turns = -1
-                    last_tool = ""
-                    stall_start = None
-                else:
-                    # --- NO RETRIES LEFT: kill permanently ---
-                    return {
-                        "status": "failed",
-                        "outcome": {
-                            "verdict": "FAIL",
-                            "summary": f"Process stalled after retry ({elapsed}s no activity). Permanently killed.",
-                        },
-                    }
-```
-
-#### Dispatch Sequence (Capped Parallelism Example)
-
-```python
-# Batch 1: 5 tasks, max_parallel=3 — dispatch up to 3 concurrently
-outcomes = {}
-active_handles = {}  # {task_id: (task, handle)}
-pending = list(executable)  # tasks in this batch
-
-# Build shared context ONCE for the entire batch
-batch_shared_context = build_batch_shared_context()
-
-while pending or active_handles:
-    # --- Fill up to max_parallel slots ---
-    while pending and len(active_handles) < max_parallel:
-        task = pending.pop(0)
-        update_task(task["id"], status="in_progress")
-        info = build_dispatch_info(task, outcomes)
-        handle = mcp__asdlc__execute_task(
-            task_id=task["id"],
-            executor=executor,
-            max_turns=classify_max_turns(task),
-            dispatch_info=info,
-            shared_context=batch_shared_context,
-        )
-
-        # Error check: if dispatch failed, mark BLOCKED and skip
-        if handle.get("status") == "error":
-            mcp__asdlc__log_correction(
-                context_type="task", context_id=task["id"],
-                category="process",
-                description=f"execute_task failed: {handle.get('error', 'unknown')}")
-            mcp__asdlc__update_task(task_id=task["id"], status="blocked")
-            record_outcome(task, {"verdict": "BLOCKED",
-                "summary": f"Dispatch failed: {handle.get('error', '')[:100]}"}, outcomes)
-            continue
-
-        active_handles[task["id"]] = (task, handle)
-
-    # --- Poll all active handles ---
-    if not active_handles:
-        break
-    sleep(30)
-    for task_id, (task, handle) in list(active_handles.items()):
-        status = mcp__asdlc__check_execution(
-            log_path=handle["log_path"], pid=handle["pid"])
-
-        if status["status"] in ("completed", "failed", "error"):
-            del active_handles[task_id]
-            outcome = parse_task_outcome(status)
-            review_result = orchestrator_review_dispatch(task, review_config)
-            if review_result == "approved":
-                update_task(task_id, status="completed")
-            record_outcome(task, status, outcomes)
-            write_state_checkpoint(outcomes, batches, batch_num)
-
-# → Batch checkpoint (Step 4.5) → proceed to Batch 2
-```
 
 ### 4.3. Track Task Outcomes
 
@@ -1078,25 +818,21 @@ After each subagent completes, the orchestrator extracts an outcome summary and 
 outcomes = {}  # Initialized at the start of run_simple_mode()
 
 def parse_task_outcome(result) -> dict:
-    """Extract the outcome dict from a completed check_execution result.
+    """Extract the outcome dict from a subagent result.
 
-    After polling with ``poll_until_completion()``, the completed status
-    dict contains an ``outcome`` key with the parsed result.
-
-    For backward compatibility, if the result is a raw string (e.g. from
-    a Task tool dispatch), it falls back to parsing the ---TASK-OUTCOME---
-    block.
+    If the result is a dict with an ``outcome`` key, returns it directly.
+    Otherwise, parses the raw text for the ---TASK-OUTCOME--- block.
 
     Returns a compact dict (~200 bytes) that stays in orchestrator context.
 
     Args:
-        result: Completed check_execution status dict (has "outcome" key)
+        result: Subagent result dict (has "outcome" key)
                 or raw subagent result string.
 
     Returns:
         Structured outcome dict with verdict, summary, files, tests.
     """
-    # Completed check_execution() result has outcome key
+    # Subagent result has outcome key
     if isinstance(result, dict) and "outcome" in result:
         return result["outcome"]
 
@@ -1758,7 +1494,7 @@ Task(
 )
 ```
 
-**Note**: PRD agents use `run_in_background=true` via the `Task` tool because the orchestrator manages multiple PRDs concurrently. Within each PRD agent, tasks execute sequentially (no background dispatch). Isolated mode keeps `Task()` dispatch because each PRD agent is a single long-running session (lower memory pressure than per-task subagents in simple mode). Optionally, each PRD agent can call `mcp__asdlc__execute_task()` per task within the PRD to get memory-safe per-task isolation — but MUST then poll `mcp__asdlc__check_execution()` every 30 seconds until completion (see `poll_until_completion()` pattern above).
+**Note**: PRD agents use `run_in_background=true` via the `Task` tool because the orchestrator manages multiple PRDs concurrently. Within each PRD agent, tasks execute sequentially (no background dispatch). Isolated mode keeps `Task()` dispatch because each PRD agent is a single long-running session (lower memory pressure than per-task subagents in simple mode).
 
 ---
 
@@ -1838,6 +1574,27 @@ mcp__asdlc__log_correction(
 ```
 
 **Reminder to agents:** Each task agent should call `mcp__asdlc__log_correction()` whenever it discovers and fixes issues during implementation (bugs, missing tests, pattern violations, etc.). Log corrections as they happen — don't wait until task completion.
+
+### 12.5. Verify Task Status Consistency (MANDATORY)
+
+Before generating the summary, verify that all task statuses in the database match their actual outcomes. This safety net catches cases where `update_task(status='completed')` was skipped due to session interruption or orchestrator flow issues.
+
+```python
+sprint_tasks = mcp__asdlc__get_sprint_tasks(sprint_id=sprint_id)
+for task in sprint_tasks:
+    expected_status = outcomes.get(task["id"], {}).get("status")
+    actual_status = task["status"]
+
+    # If task was successfully completed (PASS verdict) but DB still shows in_progress
+    if expected_status == "completed" and actual_status == "in_progress":
+        mcp__asdlc__update_task(task_id=task["id"], status="completed")
+
+    # If task failed but DB still shows in_progress
+    elif expected_status == "failed" and actual_status == "in_progress":
+        mcp__asdlc__update_task(task_id=task["id"], status="blocked")
+```
+
+This step is a consistency check — if the orchestrator already updated statuses correctly in Step 4/9, this will be a no-op. It only takes action when statuses are out of sync.
 
 ### 13. Generate Summary
 
@@ -2161,7 +1918,7 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
             if user_clarification:
                 info += f"\n\n## User Clarification\n{user_clarification}"
             result = dispatch_subagent(task, info,
-                                       shared_context=batch_shared_context)  # Non-blocking launch + poll
+                                       shared_context=batch_shared_context)
 
             # --- Track context consumption (FR-004) ---
             # Only count what stays in orchestrator context: the parsed outcome dict
@@ -2180,7 +1937,7 @@ def run_simple_mode(sprint_id, prd_groups, max_parallel, resume_state=None,
                     if rounds >= review_config.get("max_rounds", 3):
                         failure_decision = ask_failure_handler(task, review_result.feedback)
                         if failure_decision == "retry":
-                            result = dispatch_subagent(task, info, fresh=True)  # Launches + polls
+                            result = dispatch_subagent(task, info, fresh=True)
                             review_result = orchestrator_review_dispatch(task, review_config)
                         elif failure_decision == "skip":
                             update_task(task["id"], status="blocked", reason="review failure")
@@ -2428,13 +2185,9 @@ Post-Flight Remediation: INCOMPLETE (max passes reached)
 
 def dispatch_subagent(task: dict, dispatch_info: str, fresh: bool = False,
                       shared_context: str = "") -> dict:
-    """Dispatch a task to a memory-safe subprocess and poll until completion.
+    """Dispatch a task to a subagent via the Task tool and return its result.
 
-    Non-blocking: launches the subprocess via ``execute_task`` (returns
-    immediately), then polls ``check_execution`` every 30 seconds with
-    automatic stall detection.
-
-    The subprocess receives pre-loaded shared context to avoid redundant reads
+    The subagent receives pre-loaded shared context to avoid redundant reads
     of architecture.md, config.yaml, and lesson-learn.md (~20-50KB savings per
     agent). It self-loads only task-specific content via MCP tools and submits
     self-review evidence via submit_review(reviewer_type='self'). It does NOT dispatch reviewer
@@ -2448,8 +2201,7 @@ def dispatch_subagent(task: dict, dispatch_info: str, fresh: bool = False,
         shared_context: Pre-loaded shared context from build_batch_shared_context().
 
     Returns:
-        Completed status dict with ``outcome`` key from poll_until_completion(),
-        or error dict if dispatch failed.
+        Result dict with ``outcome`` key, or error dict if dispatch failed.
     """
     info = dispatch_info
     if fresh:
@@ -2459,38 +2211,14 @@ def dispatch_subagent(task: dict, dispatch_info: str, fresh: bool = False,
             "Pay extra attention to the review feedback from the prior attempt.\n"
         )
 
-    # Read executor from .sdlc/config.yaml daemon.adapter (default: "claude")
-    executor = read_config_value("daemon.adapter", default="claude")
-
-    # NON-BLOCKING MCP call — returns immediately with a handle
-    handle = mcp__asdlc__execute_task(
-        task_id=task["id"],
-        executor=executor,
-        max_turns=classify_max_turns(task),
-        dispatch_info=info,
-        shared_context=shared_context,
+    # Dispatch via Task tool
+    result = Task(
+        description=f"Execute task {task['id']}: {task.get('title', '')}",
+        prompt=build_subagent_prompt(task, info, shared_context),
+        subagent_type="general-purpose",
     )
-    # handle = {"status": "launched", "pid": N, "log_path": "..."}
 
-    # ERROR CHECK: If dispatch failed, do NOT fall back to Task tool subagents
-    if handle.get("status") == "error":
-        mcp__asdlc__log_correction(
-            context_type="task", context_id=task["id"],
-            category="process",
-            description=f"execute_task failed: {handle.get('error', 'unknown')}")
-        return {
-            "status": "failed",
-            "outcome": {
-                "verdict": "BLOCKED",
-                "summary": f"Dispatch failed: {handle.get('error', '')[:200]}",
-            },
-        }
-
-    # MANDATORY: Poll until completion with stall detection
-    # Never fire-and-forget — always monitor the subprocess
-    result = poll_until_completion(handle, task_id=task["id"])
-
-    return result
+    return parse_task_outcome(result)
 
 
 def orchestrator_review_dispatch(task: dict, review_config: dict) -> str:

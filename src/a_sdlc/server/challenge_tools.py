@@ -53,8 +53,8 @@ def challenge_artifact(
 
     try:
         db = _server.get_db()
-        content_mgr = _server.get_content_manager()
         storage = _server.get_storage()
+        content_mgr = storage.content_mgr
 
         # ---- Load artifact content ----
         artifact_content = ""

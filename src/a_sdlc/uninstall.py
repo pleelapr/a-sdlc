@@ -164,7 +164,7 @@ def build_uninstall_plan(
     plan.has_monitoring_dir = MONITORING_DIR.exists()
 
     # Check data directory
-    from a_sdlc.core.database import get_data_dir
+    from a_sdlc.storage import get_data_dir
 
     data_dir = get_data_dir()
     plan.has_data_dir = data_dir.exists()
@@ -191,7 +191,7 @@ def execute_uninstall(plan: UninstallPlan) -> UninstallResult:
     """
     result = UninstallResult()
 
-    # Phase 1: Clean ~/.claude.json (asdlc MCP server)
+    # Phase 1: Clean asdlc MCP server from target config files
     _remove_asdlc_mcp(plan, result)
 
     # Phase 2: Clean ~/.claude/settings.json (serena, hooks, env)

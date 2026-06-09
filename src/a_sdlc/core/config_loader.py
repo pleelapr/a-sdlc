@@ -31,7 +31,7 @@ def load_section(section: str, project_dir: Path | None = None) -> dict[str, Any
     """Load a specific section from project config.
 
     Args:
-        section: Config section key (e.g. ``"routing"``, ``"governance"``, ``"daemon"``).
+        section: Config section key (e.g. ``"routing"``, ``"governance"``, ``"execution"``).
         project_dir: Project root directory. Defaults to current working directory.
 
     Returns:
