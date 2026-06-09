@@ -89,14 +89,14 @@ class PluginManager:
         """Load configuration from both global and project files."""
         # Load global config
         if self.GLOBAL_CONFIG_FILE.exists():
-            with open(self.GLOBAL_CONFIG_FILE) as f:
+            with open(self.GLOBAL_CONFIG_FILE, encoding="utf-8") as f:
                 self._global_config = yaml.safe_load(f) or {}
         else:
             self._global_config = {}
 
         # Load project config
         if self.project_config_path.exists():
-            with open(self.project_config_path) as f:
+            with open(self.project_config_path, encoding="utf-8") as f:
                 self._project_config = yaml.safe_load(f) or {}
         else:
             self._project_config = {}
@@ -129,7 +129,7 @@ class PluginManager:
 
         # Ensure directory exists and save
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_file, "w") as f:
+        with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(current_config, f, default_flow_style=False)
 
     def list_plugins(self) -> list[str]:

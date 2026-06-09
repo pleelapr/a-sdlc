@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from a_sdlc.core.content import (  # noqa: F401 — kept for test mocking compatibility
     get_content_manager as get_content_manager,
@@ -399,13 +400,47 @@ def get_db():
 # Waivers persist for the lifetime of the MCP server process (FR-037).
 _sprint_waivers: dict[str, dict[str, Any]] = {}
 
+def _build_transport_security() -> TransportSecuritySettings:
+    """Configure MCP DNS-rebinding (Host header) validation.
+
+    FastMCP auto-enables Host validation with a localhost-only allow-list
+    when its host is 127.0.0.1, which rejects every request with a 421
+    "Invalid Host header" once the server runs behind a reverse proxy or
+    cloud host (Docker/Railway), where the Host header is the public domain.
+
+    By default (no ``A_SDLC_ALLOWED_HOSTS`` set) the Host check is disabled
+    so the server works behind any proxy. The endpoint stays protected by
+    bearer-token auth (``A_SDLC_AUTH_TOKEN``) and TLS. Set
+    ``A_SDLC_ALLOWED_HOSTS`` to a comma-separated allow-list (e.g.
+    ``"example.com,host:*"``) to re-enable strict validation; localhost
+    patterns are always included.
+    """
+    raw = os.environ.get("A_SDLC_ALLOWED_HOSTS", "").strip()
+    if not raw:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    hosts = [h.strip() for h in raw.split(",") if h.strip()]
+    localhost_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    localhost_origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
+    # Bare hostnames (no port) reach us over HTTPS behind the proxy.
+    host_origins = [f"https://{h}" for h in hosts if ":" not in h]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts + localhost_hosts,
+        allowed_origins=host_origins + localhost_origins,
+    )
+
+
 # Initialize FastMCP server
 # stateless_http=True avoids in-memory session tracking, which prevents
 # "Session not found" 404s after container/process restarts.
+# transport_security is set explicitly so we control Host-header validation
+# instead of FastMCP's localhost-only default (which 421s behind a proxy).
 mcp: FastMCP = FastMCP(
     name="asdlc",
     instructions="SDLC management tools for PRDs, tasks, and sprints",
     stateless_http=True,
+    transport_security=_build_transport_security(),
 )
 
 

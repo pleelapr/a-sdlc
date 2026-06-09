@@ -150,7 +150,7 @@ def configure_mcp_server(
     if not force:
         try:
             if settings_path.exists():
-                with open(settings_path) as f:
+                with open(settings_path, encoding="utf-8") as f:
                     settings = json.load(f)
                 if "asdlc" in settings.get("mcpServers", {}):
                     return {
@@ -178,7 +178,7 @@ def configure_mcp_server(
 
     # --- Fallback: direct file editing ---------------------------------
     if settings_path.exists():
-        with open(settings_path) as f:
+        with open(settings_path, encoding="utf-8") as f:
             settings = json.load(f)
     else:
         settings = {}
@@ -193,7 +193,7 @@ def configure_mcp_server(
     settings["mcpServers"]["asdlc"] = mcp_config
 
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(settings_path, "w") as f:
+    with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
     return {

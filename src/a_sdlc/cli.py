@@ -1571,7 +1571,7 @@ def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
     for t in detected:
         try:
             if t.mcp_config_path.exists():
-                with open(t.mcp_config_path) as f:
+                with open(t.mcp_config_path, encoding="utf-8") as f:
                     target_settings = json.load(f)
                 has_mcp = "asdlc" in target_settings.get("mcpServers", {})
             else:
@@ -1592,7 +1592,7 @@ def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
     settings_path = get_claude_settings_path()
     try:
         if settings_path.exists():
-            with open(settings_path) as f:
+            with open(settings_path, encoding="utf-8") as f:
                 claude_settings = json.load(f)
             mcp_ok = "asdlc" in claude_settings.get("mcpServers", {})
         else:
@@ -5674,7 +5674,7 @@ def logs_cmd(follow: bool, level_filter: str | None, num_lines: int) -> None:
 
     # Read and display the last N lines
     try:
-        with open(log_file) as f:
+        with open(log_file, encoding="utf-8") as f:
             all_lines = f.readlines()
     except OSError as e:
         click.echo(f"Error reading log file: {e}", err=True)
@@ -5703,7 +5703,7 @@ def logs_cmd(follow: bool, level_filter: str | None, num_lines: int) -> None:
     import time
 
     try:
-        with open(log_file) as f:
+        with open(log_file, encoding="utf-8") as f:
             # Seek to end of file
             f.seek(0, 2)
             while True:

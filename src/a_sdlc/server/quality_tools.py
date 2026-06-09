@@ -186,7 +186,7 @@ def log_correction(
     entry_line = f"{timestamp} | {context_type}:{context_id} | {category} | {description.strip()}\n"
 
     try:
-        with open(log_file, "a") as f:
+        with open(log_file, "a", encoding="utf-8") as f:
             f.write(entry_line)
     except Exception as e:
         return {"status": "error", "message": f"Failed to write corrections.log: {e}"}
