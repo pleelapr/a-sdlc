@@ -73,6 +73,7 @@ def get_claude_settings_path() -> Path:
 def _build_mcp_config(
     port: int = DEFAULT_MCP_PORT,
     url: str | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     """Build MCP server configuration payload (HTTP only).
 
@@ -80,14 +81,19 @@ def _build_mcp_config(
         port: Port for HTTP transport (default 8765).
         url: Explicit MCP server URL. Overrides port when provided.
              Use for Docker or cloud instances (e.g., "http://my-host:19765/mcp").
+        auth_token: Bearer token for server authentication. When provided,
+             adds an Authorization header to the MCP client config.
 
     Returns:
         Dict with MCP server configuration.
     """
-    return {
+    config: dict[str, Any] = {
         "type": "http",
         "url": url or f"http://localhost:{port}/mcp",
     }
+    if auth_token:
+        config["headers"] = {"Authorization": f"Bearer {auth_token}"}
+    return config
 
 
 def _configure_via_cli(
@@ -118,6 +124,7 @@ def configure_mcp_server(
     target: CLITarget | None = None,
     port: int = DEFAULT_MCP_PORT,
     url: str | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     """Configure a-sdlc MCP server in CLI settings (HTTP transport only).
 
@@ -130,13 +137,14 @@ def configure_mcp_server(
         target: CLI target to configure for. Defaults to Claude Code.
         port: Port for HTTP transport (default 8765).
         url: Explicit MCP server URL (overrides port). For Docker/cloud instances.
+        auth_token: Bearer token for server authentication.
 
     Returns:
         Dict with status and message.
     """
     effective_target = target or CLAUDE_TARGET
     settings_path = effective_target.mcp_config_path
-    mcp_config = _build_mcp_config(port=port, url=url)
+    mcp_config = _build_mcp_config(port=port, url=url, auth_token=auth_token)
 
     # --- Check if already configured (skip when force=True) ----------
     if not force:
@@ -211,6 +219,7 @@ class Installer:
         configure_mcp: bool = True,
         port: int = DEFAULT_MCP_PORT,
         url: str | None = None,
+        auth_token: str | None = None,
     ) -> list[str]:
         """Install all skill templates to target directory.
 
@@ -219,6 +228,7 @@ class Installer:
             configure_mcp: If True, also configure MCP server in Claude Code settings.
             port: Port for HTTP transport (default 8765).
             url: Explicit MCP server URL (overrides port). For Docker/cloud instances.
+            auth_token: Bearer token for server authentication.
 
         Returns:
             List of installed template names.
@@ -263,7 +273,8 @@ class Installer:
         # Configure MCP server
         if configure_mcp:
             configure_mcp_server(
-                force=force, target=self.target, port=port, url=url
+                force=force, target=self.target, port=port, url=url,
+                auth_token=auth_token,
             )
 
         return installed

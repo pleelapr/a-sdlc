@@ -152,6 +152,11 @@ def serve(
     default=None,
     help="MCP server URL for Docker/cloud instances (e.g., http://my-host:19765/mcp)",
 )
+@click.option(
+    "--auth-token",
+    default=None,
+    help="Bearer token for MCP server authentication (written to client config headers)",
+)
 def install(
     list_skills: bool,
     force: bool,
@@ -160,6 +165,7 @@ def install(
     with_playwright: bool,
     no_agent_teams: bool,
     url: str | None,
+    auth_token: str | None,
 ) -> None:
     """Deploy skill templates to Claude Code (non-interactive).
 
@@ -173,6 +179,7 @@ def install(
         a-sdlc install --target claude    # Install for Claude Code only
         a-sdlc install --target gemini    # Install for Gemini CLI only
         a-sdlc install --url http://my-host:19765/mcp  # Docker/cloud instance
+        a-sdlc install --url https://example.com/mcp --auth-token mytoken  # With auth
     """
     targets = resolve_targets(cli_target)
     if not targets:
@@ -192,7 +199,7 @@ def install(
         target_names = []
         for t in targets:
             installer = Installer(target_dir=target_dir, target=t)
-            installed = installer.install(force=force, url=url)
+            installed = installer.install(force=force, url=url, auth_token=auth_token)
             all_installed.extend(installed)
             personas = installer.list_installed_personas()
             all_personas.extend(personas)
