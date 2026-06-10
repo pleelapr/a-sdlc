@@ -1,0 +1,4 @@
+# Frozen pre-migration fixtures: byte-exact baselines for the AC-004
+# byte-overhead gate. Disable line-ending conversion so the committed
+# bytes are identical on every platform and match baseline_sizes.json.
+tests/fixtures/pre_migration/* -text

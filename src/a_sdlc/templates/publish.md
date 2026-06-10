@@ -5,8 +5,8 @@ Publish SDLC artifacts to external documentation systems (Confluence).
 ## Usage
 
 ```
-/sdlc:publish                    # Publish all artifacts
-/sdlc:publish architecture       # Publish specific artifact
+/sdlc:publish                    # Publish all publishable (Markdown) artifacts
+/sdlc:publish requirements       # Publish specific artifact
 /sdlc:publish --force            # Force republish all
 /sdlc:publish --status           # Show publish status
 ```
@@ -21,6 +21,21 @@ Publish SDLC artifacts to external documentation systems (Confluence).
 
 2. **Generate Artifacts First**:
    Run `/sdlc:scan` to generate artifacts before publishing.
+
+## HTML Scan Artifacts Are Skipped
+
+The five scan artifacts (`codebase-summary`, `architecture`, `data-model`, `key-workflows`, `directory-structure`) are generated as **HTML** files (`*.html`). Confluence publishing for HTML artifacts is **deferred until the follow-up PRD** — they are skipped by publish, and the CLI push guard reports:
+
+```
+scan artifacts are HTML — Confluence publish for HTML is deferred (see follow-up PRD)
+```
+
+Only the Markdown artifacts still publish to Confluence:
+
+- `code-quality.md`
+- `requirements.md`
+
+Do not attempt to convert the HTML artifacts to Confluence pages manually or via the plugin — report them as skipped.
 
 ## Workflow
 
@@ -37,7 +52,7 @@ First, check what artifacts exist and their publish status:
 
 ### Publish Artifacts
 
-For each artifact to publish:
+For each **Markdown** artifact to publish (HTML scan artifacts are skipped — see above):
 
 1. Read the markdown content from `.sdlc/artifacts/{artifact}.md`
 2. Use the Confluence plugin to create/update the page
@@ -48,14 +63,15 @@ For each artifact to publish:
 
 ### Artifact Types
 
-| Artifact | Confluence Page Title |
-|----------|----------------------|
-| `codebase-summary.md` | [SDLC] Codebase Summary |
-| `architecture.md` | [SDLC] Architecture |
-| `data-model.md` | [SDLC] Data Model |
-| `key-workflows.md` | [SDLC] Key Workflows |
-| `directory-structure.md` | [SDLC] Directory Structure |
-| `requirements.md` | [SDLC] Requirements |
+| Artifact | Format | Publish Behavior |
+|----------|--------|------------------|
+| `codebase-summary.html` | HTML | ⏭️ Skipped (deferred until follow-up PRD) |
+| `architecture.html` | HTML | ⏭️ Skipped (deferred until follow-up PRD) |
+| `data-model.html` | HTML | ⏭️ Skipped (deferred until follow-up PRD) |
+| `key-workflows.html` | HTML | ⏭️ Skipped (deferred until follow-up PRD) |
+| `directory-structure.html` | HTML | ⏭️ Skipped (deferred until follow-up PRD) |
+| `code-quality.md` | Markdown | ✅ Publishes as "[SDLC] Code Quality" |
+| `requirements.md` | Markdown | ✅ Publishes as "[SDLC] Requirements" |
 
 ## Configuration
 
@@ -93,15 +109,19 @@ After publishing, report:
 ```
 ## Publish Summary
 
-Published 5 artifacts to Confluence:
+scan artifacts are HTML — Confluence publish for HTML is deferred (see follow-up PRD)
+
+Published 2 artifacts to Confluence:
 
 | Artifact | Status | URL |
 |----------|--------|-----|
-| codebase-summary | ✅ Created | https://company.atlassian.net/wiki/... |
-| architecture | ✅ Updated | https://company.atlassian.net/wiki/... |
-| data-model | ✅ Created | https://company.atlassian.net/wiki/... |
-| key-workflows | ❌ Failed | Error: Permission denied |
-| requirements | ⏭️ Skipped | No changes |
+| code-quality | ✅ Created | https://company.atlassian.net/wiki/... |
+| requirements | ✅ Updated | https://company.atlassian.net/wiki/... |
+| codebase-summary | ⏭️ Skipped | HTML (deferred) |
+| architecture | ⏭️ Skipped | HTML (deferred) |
+| data-model | ⏭️ Skipped | HTML (deferred) |
+| key-workflows | ⏭️ Skipped | HTML (deferred) |
+| directory-structure | ⏭️ Skipped | HTML (deferred) |
 
 Space: PROJ
 Parent Page: SDLC Documentation
@@ -117,17 +137,20 @@ If publishing fails:
 
 ## Manual Fallback
 
-If Confluence API is not available, provide manual instructions:
+If Confluence API is not available, provide manual instructions (Markdown artifacts only — HTML scan artifacts stay local):
 
 ```markdown
 ## Manual Publishing Required
 
 Could not connect to Confluence. Create pages manually:
 
-### 1. Codebase Summary
+### 1. Requirements
 - Space: PROJ
-- Title: [SDLC] Codebase Summary
-- Content: Copy from `.sdlc/artifacts/codebase-summary.md`
+- Title: [SDLC] Requirements
+- Content: Copy from `.sdlc/artifacts/requirements.md`
 
-[Continue for each artifact...]
+### 2. Code Quality
+- Space: PROJ
+- Title: [SDLC] Code Quality
+- Content: Copy from `.sdlc/artifacts/code-quality.md`
 ```

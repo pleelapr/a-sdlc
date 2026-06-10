@@ -1,7 +1,10 @@
 """Tests for the web UI routes and dashboard enhancements."""
 
+import asyncio
+import re
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -504,6 +507,238 @@ class TestPRDRoutes:
         response = client.get("/prds/TEST-P0001")
         assert response.status_code == 200
         assert "Design first, then split into tasks:" not in response.text
+
+
+# =============================================================================
+# Artifact Serving Route (DD-8 hardened)
+# =============================================================================
+
+
+SAMPLE_ARTIFACT_HTML = (
+    "<!DOCTYPE html>\n<html><body><h1>Scan Overview</h1></body></html>\n"
+)
+
+
+def _symlinks_supported() -> bool:
+    """Detect whether symlink creation is permitted (needs privileges on Windows)."""
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "target.txt"
+            target.write_text("x", encoding="utf-8")
+            (Path(d) / "link.txt").symlink_to(target)
+        return True
+    except (OSError, NotImplementedError):
+        return False
+
+
+@pytest.fixture
+def artifact_client(temp_storage, tmp_path, monkeypatch):
+    """Client + artifacts dir for a project with one HTML artifact on disk."""
+    project_dir = tmp_path / "artproj"
+    artifacts_dir = project_dir / ".sdlc" / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    (artifacts_dir / "overview.html").write_text(SAMPLE_ARTIFACT_HTML, encoding="utf-8")
+    temp_storage.create_project("art-proj", "Artifact Project", str(project_dir))
+    client = _make_client(temp_storage, monkeypatch)
+    return client, artifacts_dir
+
+
+class TestArtifactRoute:
+    """Test the secured artifact-serving route."""
+
+    def test_artifact_route_serves_html(self, artifact_client):
+        """Valid artifact is served as text/html; charset=utf-8."""
+        client, _ = artifact_client
+        response = client.get("/projects/art-proj/artifacts/overview.html")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/html; charset=utf-8"
+        assert response.text == SAMPLE_ARTIFACT_HTML
+
+    def test_headers_exact_bytes(self, artifact_client):
+        """All 4 security headers match byte-for-byte."""
+        client, _ = artifact_client
+        response = client.get("/projects/art-proj/artifacts/overview.html")
+        assert response.status_code == 200
+        assert response.headers["Content-Security-Policy"] == (
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
+            "frame-ancestors 'none'; form-action 'none'; base-uri 'none'; sandbox"
+        )
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert response.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+
+    def test_invalid_filename_404_no_path_echo(self, artifact_client):
+        """Invalid filename returns 404 (not 400) without echoing the path."""
+        client, _ = artifact_client
+        response = client.get("/projects/art-proj/artifacts/secret.js")
+        assert response.status_code == 404
+        assert "secret.js" not in response.text
+        assert "artproj" not in response.text
+        assert ".sdlc" not in response.text
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "sub%2Fpage.html",   # encoded slash (subdirectory)
+            "page.txt",          # wrong extension
+            "page.HTML",         # case variant rejected by allowlist
+            "page.htm",          # truncated extension
+            "page",              # no extension
+            "page.html.html",    # dot in stem rejected by allowlist
+            "pa ge.html",        # whitespace in stem
+        ],
+    )
+    def test_regex_rejects_subdirs_and_non_html(self, artifact_client, bad_name):
+        """Allowlist regex rejects subdirectories and non-.html names with 404."""
+        client, _ = artifact_client
+        response = client.get(f"/projects/art-proj/artifacts/{bad_name}")
+        assert response.status_code == 404
+        assert "artproj" not in response.text
+        assert ".sdlc" not in response.text
+
+    def test_unknown_project_404(self, artifact_client):
+        """Unknown project and missing file both return 404 without path leak."""
+        client, _ = artifact_client
+        response = client.get("/projects/no-such-proj/artifacts/overview.html")
+        assert response.status_code == 404
+        assert "overview.html" not in response.text
+
+        # Known project but missing file is also a plain 404
+        response = client.get("/projects/art-proj/artifacts/missing.html")
+        assert response.status_code == 404
+        assert "missing.html" not in response.text
+        assert "artproj" not in response.text
+
+    def test_containment_rejects_escaping_path(self, artifact_client, monkeypatch):
+        """Containment check rejects paths escaping the artifacts dir (defense in depth).
+
+        The allowlist regex already blocks traversal input, so this exercises
+        the containment layer directly with the regex loosened.
+        """
+        import a_sdlc.ui as ui_module
+
+        client, artifacts_dir = artifact_client
+        outside = artifacts_dir.parent / "escape.html"
+        outside.write_text("<p>top secret</p>", encoding="utf-8")
+
+        monkeypatch.setattr(ui_module, "_ARTIFACT_NAME_RE", re.compile(r"^.+$"))
+        response = asyncio.run(ui_module.serve_artifact("art-proj", "../escape.html"))
+        assert response.status_code == 404
+        assert b"top secret" not in response.body
+        assert b"escape" not in response.body
+
+    @pytest.mark.skipif(
+        not _symlinks_supported(),
+        reason="symlink creation requires privileges on this platform",
+    )
+    def test_symlink_refused(self, artifact_client):
+        """Symlinks are refused even when they point inside the artifacts dir."""
+        client, artifacts_dir = artifact_client
+        link = artifacts_dir / "linked.html"
+        link.symlink_to(artifacts_dir / "overview.html")
+
+        response = client.get("/projects/art-proj/artifacts/linked.html")
+        assert response.status_code == 404
+        assert "overview" not in response.text
+        assert "linked.html" not in response.text
+
+        # The real file is still served directly
+        direct = client.get("/projects/art-proj/artifacts/overview.html")
+        assert direct.status_code == 200
+
+
+class TestArtifactRouteAdversarial:
+    """Path-traversal corpus against the artifact route (DD-8 exercised adversarially).
+
+    Every payload must yield a 404 (route 404 or the uniform not-found page) --
+    never a 200, never a 500, and never an echo of the requested path or any
+    filesystem detail. New traversal techniques get appended here as named cases.
+    """
+
+    # Each payload is the raw {name} URL segment. Mix of literal traversal,
+    # single/double percent-encoding, backslash, null byte, absolute and UNC.
+    TRAVERSAL_PAYLOADS = [
+        "../overview.html",
+        "..%2Foverview.html",
+        "%2e%2e%2foverview.html",
+        "%2e%2e/overview.html",
+        "%252e%252e%252foverview.html",  # double-encoded ../
+        "..%5coverview.html",  # backslash
+        "%5c..%5coverview.html",
+        "%2e%2e%5coverview.html",
+        "....//overview.html",
+        "overview.HTML",  # case variant (allowlist is case-sensitive)
+        "overview.html%00.png",  # null byte
+        "%00overview.html",
+        "%2Fetc%2Fpasswd",  # absolute (encoded)
+        "..%2f..%2f..%2fetc%2fpasswd",
+        "C:%5cWindows%5cwin.ini",  # windows absolute
+        "%5c%5cserver%5cshare%5cx.html",  # UNC path
+    ]
+
+    @pytest.mark.parametrize("payload", TRAVERSAL_PAYLOADS)
+    def test_traversal_payload_returns_404_no_leak(self, artifact_client, payload):
+        client, _ = artifact_client
+        response = client.get(f"/projects/art-proj/artifacts/{payload}")
+        assert response.status_code == 404, payload
+        body = response.text
+        decoded = unquote(payload)
+        leaks = ("artproj", ".sdlc", "passwd", "win.ini", "Scan Overview",
+                 payload, decoded, unquote(decoded))
+        for leak in leaks:
+            assert leak not in body, f"{leak!r} leaked for payload {payload!r}"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../escape.html",  # parent-dir escape
+            "..\\escape.html",  # backslash escape
+            "subdir/escape.html",  # nested
+        ],
+    )
+    def test_containment_layer_rejects_escape(self, artifact_client, monkeypatch, name):
+        """With the regex loosened, the resolve()+containment layer still refuses escapes."""
+        import a_sdlc.ui as ui_module
+
+        _, artifacts_dir = artifact_client
+        outside = artifacts_dir.parent / "escape.html"
+        outside.write_text("<p>top secret payload</p>", encoding="utf-8")
+
+        monkeypatch.setattr(ui_module, "_ARTIFACT_NAME_RE", re.compile(r"^.+$"))
+        response = asyncio.run(ui_module.serve_artifact("art-proj", name))
+        assert response.status_code == 404
+        assert b"top secret" not in response.body
+        assert b"escape" not in response.body
+
+    def test_absolute_path_name_rejected_by_containment(self, artifact_client, monkeypatch):
+        """An absolute path as {name} must not escape the artifacts dir."""
+        import a_sdlc.ui as ui_module
+
+        _, artifacts_dir = artifact_client
+        outside = artifacts_dir.parent / "abs.html"
+        outside.write_text("<p>absolute secret</p>", encoding="utf-8")
+
+        monkeypatch.setattr(ui_module, "_ARTIFACT_NAME_RE", re.compile(r"^.+$"))
+        response = asyncio.run(ui_module.serve_artifact("art-proj", str(outside)))
+        assert response.status_code == 404
+        assert b"absolute secret" not in response.body
+
+    @pytest.mark.skipif(
+        not _symlinks_supported(),
+        reason="symlink creation requires privileges on this platform",
+    )
+    def test_symlink_outside_project_refused(self, artifact_client, tmp_path):
+        """A symlink inside artifacts/ pointing OUTSIDE the project is refused."""
+        client, artifacts_dir = artifact_client
+        secret = tmp_path / "outside_secret.html"
+        secret.write_text("<p>exfiltrated</p>", encoding="utf-8")
+        link = artifacts_dir / "leak.html"
+        link.symlink_to(secret)
+
+        response = client.get("/projects/art-proj/artifacts/leak.html")
+        assert response.status_code == 404
+        assert "exfiltrated" not in response.text
+        assert "leak.html" not in response.text
 
 
 # =============================================================================

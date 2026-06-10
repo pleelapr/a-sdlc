@@ -2186,3 +2186,148 @@ class TestDoctorConsistency:
             result = runner.invoke(main, ["doctor", "--check-consistency"])
 
         assert result.exit_code == 1
+
+
+class TestArtifactsPushHtmlGuard:
+    """Tests for the Confluence push guard on HTML scan artifacts (DD-9)."""
+
+    @staticmethod
+    def _write_artifacts() -> None:
+        """Create .sdlc/artifacts/ with one HTML scan artifact and one md artifact."""
+        artifacts_dir = Path(".sdlc") / "artifacts"
+        artifacts_dir.mkdir(parents=True)
+        (artifacts_dir / "architecture.html").write_text(
+            "<html><head><title>Architecture</title></head><body></body></html>",
+            encoding="utf-8",
+        )
+        (artifacts_dir / "code-quality.md").write_text("# Code Quality\n", encoding="utf-8")
+
+    def test_push_skips_html_artifacts_with_message(self, runner: CliRunner) -> None:
+        """push skips HTML artifacts, prints deferral message, keeps md publishable."""
+        with runner.isolated_filesystem():
+            self._write_artifacts()
+            result = runner.invoke(main, ["artifacts", "push", "--dry-run"])
+
+        assert result.exit_code == 0
+        # Deferral message for HTML scan artifacts
+        assert "deferred" in result.output
+        # md artifact is still publishable
+        assert "code-quality" in result.output
+        # html artifact is excluded from the publish list
+        assert "architecture" not in result.output
+
+    def test_push_only_html_prints_message_and_exits_cleanly(self, runner: CliRunner) -> None:
+        """push with only HTML artifacts prints the message and publishes nothing."""
+        with runner.isolated_filesystem():
+            artifacts_dir = Path(".sdlc") / "artifacts"
+            artifacts_dir.mkdir(parents=True)
+            (artifacts_dir / "data-model.html").write_text(
+                "<html><head><title>Data Model</title></head><body></body></html>",
+                encoding="utf-8",
+            )
+            result = runner.invoke(main, ["artifacts", "push"])
+
+        assert result.exit_code == 0
+        assert "deferred" in result.output
+        assert "Nothing to publish" in result.output
+
+
+class TestArtifactsScaffoldValidateCommands:
+    """Exit-code contracts for `a-sdlc artifacts scaffold` and `validate`."""
+
+    @staticmethod
+    def _fill_minimal(artifacts_dir: Path) -> None:
+        """Fill scaffolded skeletons with minimal valid <main> content."""
+        import re
+
+        from a_sdlc.artifacts import validator as artifact_validator
+        from a_sdlc.artifacts.base import ArtifactType
+
+        for path in artifacts_dir.glob("*.html"):
+            if path.name == "index.html":
+                continue
+            artifact_type = ArtifactType.from_filename(path.name)
+            assert artifact_type is not None
+            required = artifact_validator.MANIFESTS[artifact_type.value].required_sections
+            sections = []
+            for section_id in required:
+                title = section_id.replace("-", " ").title()
+                sections.append(
+                    f'<section id="{section_id}"><details open>'
+                    f"<summary><h2>{title}</h2></summary>"
+                    f"<p>Minimal but sufficiently descriptive content for the {section_id} "
+                    f"section of this artifact page.</p></details></section>"
+                )
+            body = "\n".join(sections)
+            toc = "".join(
+                f'<li><a href="#{section_id}">{section_id}</a></li>' for section_id in required
+            )
+            html = path.read_text(encoding="utf-8")
+            html = re.sub(
+                r"<main>.*?</main>",
+                lambda _m, body=body: f"<main>\n{body}\n</main>",
+                html,
+                flags=re.DOTALL,
+            )
+            html = html.replace("<ul></ul>", f"<ul>{toc}</ul>", 1)
+            path.write_text(html, encoding="utf-8", newline="\n")
+
+    def test_scaffold_writes_six_files_exit_0(self, runner: CliRunner) -> None:
+        with runner.isolated_filesystem():
+            result = runner.invoke(main, ["artifacts", "scaffold"])
+            assert result.exit_code == 0
+            artifacts_dir = Path(".sdlc") / "artifacts"
+            files = {p.name for p in artifacts_dir.glob("*.html")}
+        assert "Scaffolded 6 files" in result.output
+        assert files == {
+            "index.html",
+            "codebase-summary.html",
+            "architecture.html",
+            "data-model.html",
+            "key-workflows.html",
+            "directory-structure.html",
+        }
+
+    def test_scaffold_custom_dir_and_project_name(self, runner: CliRunner) -> None:
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                main, ["artifacts", "scaffold", "--dir", "out", "--project-name", "Acme"]
+            )
+            assert result.exit_code == 0
+            html = (Path("out") / "architecture.html").read_text(encoding="utf-8")
+        assert "<title>Architecture — Acme</title>" in html
+
+    def test_validate_missing_dir_exit_2(self, runner: CliRunner) -> None:
+        with runner.isolated_filesystem():
+            result = runner.invoke(main, ["artifacts", "validate"])
+        assert result.exit_code == 2
+        assert "not found" in result.output
+
+    def test_validate_errors_exit_1_and_writes_evidence(self, runner: CliRunner) -> None:
+        with runner.isolated_filesystem():
+            runner.invoke(main, ["artifacts", "scaffold"])  # unfilled -> errors
+            result = runner.invoke(main, ["artifacts", "validate"])
+            evidence = Path(".sdlc") / ".cache" / "validation.json"
+            assert evidence.exists()
+            payload = json.loads(evidence.read_text(encoding="utf-8"))
+        assert result.exit_code == 1
+        assert payload["passed"] is False
+
+    def test_validate_pass_exit_0(self, runner: CliRunner) -> None:
+        with runner.isolated_filesystem():
+            runner.invoke(main, ["artifacts", "scaffold"])
+            self._fill_minimal(Path(".sdlc") / "artifacts")
+            result = runner.invoke(main, ["artifacts", "validate"])
+        assert result.exit_code == 0
+        assert "PASS" in result.output
+
+    def test_validate_json_output(self, runner: CliRunner) -> None:
+        with runner.isolated_filesystem():
+            runner.invoke(main, ["artifacts", "scaffold"])
+            self._fill_minimal(Path(".sdlc") / "artifacts")
+            result = runner.invoke(main, ["artifacts", "validate", "--json"])
+        assert result.exit_code == 0
+        entries = json.loads(result.output)
+        assert len(entries) == 6
+        for entry in entries:
+            assert set(entry) == {"file", "type", "errors", "warnings"}

@@ -6,10 +6,78 @@ maintaining compatibility with the existing file-based workflow.
 """
 
 import json
+import warnings
 from datetime import datetime
 from pathlib import Path
 
 from a_sdlc.artifacts.base import Artifact, ArtifactPlugin, ArtifactType
+
+# Exact-name allowlist for legacy markdown cleanup (DD-7). Only these five
+# scan artifact stems are ever eligible for stale-.md deletion; everything
+# else (notably requirements.md and code-quality.md, which remain markdown
+# by design) must never be touched.
+STALE_MARKDOWN_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "architecture",
+        "codebase-summary",
+        "data-model",
+        "directory-structure",
+        "key-workflows",
+    }
+)
+
+
+def remove_stale_markdown(artifacts_dir: Path | str) -> list[str]:
+    """Remove legacy ``.md`` scan artifacts replaced by ``.html`` siblings.
+
+    Scoped to the exact five scan artifact names in
+    ``STALE_MARKDOWN_ALLOWLIST``. A ``.md`` file is deleted only when its
+    ``.html`` replacement exists on disk; if the replacement is missing,
+    the markdown is kept as the source of truth. Invoked by the scan
+    workflow only after validation passes — never auto-invoked here.
+
+    Defensive by design: a missing directory, already-deleted files, or
+    permission errors produce a ``UserWarning`` at most, never an exception.
+
+    Args:
+        artifacts_dir: Path to the ``.sdlc/artifacts`` directory.
+
+    Returns:
+        Names of the deleted markdown files (e.g., ``['architecture.md']``).
+    """
+    directory = Path(artifacts_dir)
+    deleted: list[str] = []
+
+    try:
+        if not directory.is_dir():
+            return deleted
+    except OSError as exc:
+        warnings.warn(
+            f"Could not access artifacts directory {directory}: {exc}",
+            UserWarning,
+            stacklevel=2,
+        )
+        return deleted
+
+    for stem in sorted(STALE_MARKDOWN_ALLOWLIST):
+        md_path = directory / f"{stem}.md"
+        html_path = directory / f"{stem}.html"
+        try:
+            if not md_path.is_file():
+                continue
+            if not html_path.is_file():
+                # No .html replacement yet — keep the legacy markdown.
+                continue
+            md_path.unlink()
+            deleted.append(md_path.name)
+        except OSError as exc:
+            warnings.warn(
+                f"Could not remove stale markdown {md_path}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    return deleted
 
 
 class LocalArtifactPlugin(ArtifactPlugin):
@@ -62,10 +130,33 @@ class LocalArtifactPlugin(ArtifactPlugin):
             json.dump(self._metadata, f, indent=2)
 
     def _get_artifact_path(self, artifact_id: str) -> Path:
-        """Get path to artifact file."""
-        # Ensure .md extension
-        filename = artifact_id if artifact_id.endswith(".md") else f"{artifact_id}.md"
-        return self.artifacts_dir / filename
+        """Get canonical path to artifact file.
+
+        The extension is delegated to ArtifactType.format ('html' for scan
+        artifacts, 'md' for requirements/code-quality). Unknown artifact ids
+        default to '.md'.
+        """
+        if artifact_id.endswith((".md", ".html")):
+            return self.artifacts_dir / artifact_id
+
+        artifact_type = ArtifactType.from_filename(artifact_id)
+        extension = artifact_type.format if artifact_type is not None else "md"
+        return self.artifacts_dir / f"{artifact_id}.{extension}"
+
+    def _resolve_existing_path(self, artifact_id: str) -> Path | None:
+        """Resolve artifact id to an existing file on disk.
+
+        Prefers the canonical extension for the artifact type; falls back to
+        the alternate extension for legacy/migration states (e.g., a scan
+        artifact still on disk as '.md').
+        """
+        preferred = self._get_artifact_path(artifact_id)
+        if preferred.exists():
+            return preferred
+
+        alt_suffix = ".md" if preferred.suffix == ".html" else ".html"
+        alternate = preferred.with_suffix(alt_suffix)
+        return alternate if alternate.exists() else None
 
     def store_artifact(self, artifact: Artifact) -> str:
         """Store artifact as markdown file."""
@@ -92,9 +183,9 @@ class LocalArtifactPlugin(ArtifactPlugin):
 
     def get_artifact(self, artifact_id: str) -> Artifact | None:
         """Retrieve artifact from file."""
-        artifact_path = self._get_artifact_path(artifact_id)
+        artifact_path = self._resolve_existing_path(artifact_id)
 
-        if not artifact_path.exists():
+        if artifact_path is None:
             return None
 
         content = artifact_path.read_text(encoding="utf-8")
@@ -137,8 +228,20 @@ class LocalArtifactPlugin(ArtifactPlugin):
 
         artifacts: list[Artifact] = []
 
-        for md_file in self.artifacts_dir.glob("*.md"):
-            artifact_id = md_file.stem
+        # index.html is the artifact viewer shell, not an artifact
+        html_stems = {f.stem for f in self.artifacts_dir.glob("*.html") if f.stem != "index"}
+        md_stems = {f.stem for f in self.artifacts_dir.glob("*.md")}
+
+        for stem in sorted(html_stems & md_stems):
+            resolved = self._resolve_existing_path(stem)
+            winner = resolved.name if resolved is not None else f"{stem}.html"
+            warnings.warn(
+                f"Both {stem}.html and {stem}.md exist; using {winner}",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        for artifact_id in sorted(html_stems | md_stems):
             artifact = self.get_artifact(artifact_id)
 
             if artifact is not None and (artifact_type is None or artifact.artifact_type == artifact_type):
@@ -147,13 +250,17 @@ class LocalArtifactPlugin(ArtifactPlugin):
         return sorted(artifacts, key=lambda a: a.id)
 
     def delete_artifact(self, artifact_id: str) -> None:
-        """Delete artifact file and metadata."""
-        artifact_path = self._get_artifact_path(artifact_id)
+        """Delete artifact file(s) and metadata."""
+        artifact_path = self._resolve_existing_path(artifact_id)
 
-        if not artifact_path.exists():
+        if artifact_path is None:
             raise KeyError(f"Artifact not found: {artifact_id}")
 
-        artifact_path.unlink()
+        # Remove both extension variants if present (legacy/migration states)
+        for suffix in (".html", ".md"):
+            candidate = artifact_path.with_suffix(suffix)
+            if candidate.exists():
+                candidate.unlink()
 
         # Remove metadata
         if artifact_id in self._metadata:
@@ -182,9 +289,14 @@ class LocalArtifactPlugin(ArtifactPlugin):
         """Get artifacts that haven't been published to external system.
 
         Returns:
-            List of artifacts without external_id.
+            List of artifacts without external_id. HTML-format artifacts are
+            excluded: Confluence publish for HTML is deferred (see DD-9).
         """
-        return [a for a in self.list_artifacts() if not a.external_id]
+        return [
+            a
+            for a in self.list_artifacts()
+            if not a.external_id and a.artifact_type.format != "html"
+        ]
 
     def get_stale_artifacts(self) -> list[Artifact]:
         """Get artifacts that have been modified since last publish.
@@ -197,8 +309,8 @@ class LocalArtifactPlugin(ArtifactPlugin):
         for artifact in self.list_artifacts():
             if artifact.external_id:
                 # Compare file modification time with metadata updated_at
-                artifact_path = self._get_artifact_path(artifact.id)
-                if artifact_path.exists():
+                artifact_path = self._resolve_existing_path(artifact.id)
+                if artifact_path is not None:
                     file_mtime = datetime.fromtimestamp(artifact_path.stat().st_mtime)
                     if file_mtime > artifact.updated_at:
                         stale.append(artifact)

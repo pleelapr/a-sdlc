@@ -298,7 +298,7 @@ If round_table_enabled = true, perform domain detection and panel assembly:
 Analyze available context to identify relevant domains. Check in priority order:
 
 1. **Explicit tags** — Look for `<!-- personas: frontend, security -->` markers in PRD/design content. If found, use those domains directly.
-2. **Codebase signals** — From `.sdlc/artifacts/architecture.md`, identify affected components (e.g., components with "UI", "React", "frontend" -> frontend domain; "API", "database" -> backend domain; "CI/CD", "Docker" -> devops domain).
+2. **Codebase signals** — From the `architecture` artifact (`.sdlc/artifacts/architecture.html`, fallback `architecture.md`), identify affected components (e.g., components with "UI", "React", "frontend" -> frontend domain; "API", "database" -> backend domain; "CI/CD", "Docker" -> devops domain).
 3. **Keyword analysis** — Scan PRD content and design doc for domain keywords:
    - Frontend: UI, component, React, CSS, layout, responsive, accessibility
    - Backend: API, endpoint, database, query, migration, service, middleware
@@ -362,14 +362,26 @@ Use the design document to:
 
 1. **Read Project Artifacts** (CRITICAL for task quality)
    Read ALL available artifacts — these provide essential context for accurate component
-   assignments, file paths, and pattern adherence in generated tasks:
+   assignments, file paths, and pattern adherence in generated tasks (resolve each
+   extension per the rule below):
    ```
-   Read: .sdlc/artifacts/architecture.md         → Components, boundaries, dependencies
-   Read: .sdlc/artifacts/directory-structure.md   → File organization and placement
-   Read: .sdlc/artifacts/codebase-summary.md      → Tech stack, conventions, patterns
-   Read: .sdlc/artifacts/data-model.md            → Entities, relationships, schemas
-   Read: .sdlc/artifacts/key-workflows.md         → Existing flows to integrate with
+   Read: .sdlc/artifacts/architecture.html (fallback: architecture.md)                → Components, boundaries, dependencies
+   Read: .sdlc/artifacts/directory-structure.html (fallback: directory-structure.md)   → File organization and placement
+   Read: .sdlc/artifacts/codebase-summary.html (fallback: codebase-summary.md)         → Tech stack, conventions, patterns
+   Read: .sdlc/artifacts/data-model.html (fallback: data-model.md)                     → Entities, relationships, schemas
+   Read: .sdlc/artifacts/key-workflows.html (fallback: key-workflows.md)               → Existing flows to integrate with
    ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
+
    If NO artifacts are found:
    ```
    ⚠️ WARNING: No codebase artifacts found in .sdlc/artifacts/.

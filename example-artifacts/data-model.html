@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Model — Example Project</title>
+<style>
+  :root{--ink:#1a1a1a;--muted:#6b7280;--line:#d1d5db;--accent:#2563eb;--bg-soft:#f6f8fa}
+  *{box-sizing:border-box}
+  body{margin:0 auto;max-width:60rem;padding:0 1.5rem 4rem;font:16px/1.6 system-ui,Segoe UI,sans-serif;color:var(--ink);background:#fff}
+  h1{font-size:1.6rem;margin:.8rem 0 .2rem}
+  h2{font-size:1.25rem;margin:0}
+  h3{font-size:1.05rem;margin:1.2rem 0 .4rem}
+  p{margin:.6rem 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header nav{display:flex;flex-wrap:wrap;gap:.25rem;padding:.6rem 0;border-bottom:1px solid var(--line);font-size:.875rem}
+  header nav a{padding:.25rem .6rem;border-radius:.375rem}
+  header nav a[aria-current]{background:var(--accent);color:#fff}
+  header nav a:not([aria-current]):hover{background:var(--bg-soft);text-decoration:none}
+  nav[aria-label="Contents"]{margin:1rem 0;padding:.75rem 1rem;background:var(--bg-soft);border:1px solid var(--line);border-radius:.5rem;font-size:.9rem}
+  nav[aria-label="Contents"] ul{margin:0;padding-left:1.2rem}
+  section{margin:1.25rem 0}
+  details{border:1px solid var(--line);border-radius:.5rem;padding:0 1rem}
+  details[open]{padding-bottom:.75rem}
+  summary{cursor:pointer;padding:.7rem 0;list-style:none;display:flex;align-items:baseline;gap:.6rem}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"\25B8";flex:none;color:var(--muted);font-size:1.25rem;line-height:1}
+  details[open]>summary::before{content:"\25BE"}
+  summary h2{display:inline}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.75rem 0}
+  th,td{border:1px solid var(--line);padding:.4rem .6rem;text-align:left;vertical-align:top}
+  th{background:var(--bg-soft)}
+  pre{background:var(--bg-soft);border:1px solid var(--line);border-radius:.5rem;padding:.75rem 1rem;overflow-x:auto;font-size:.85rem;line-height:1.45}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:var(--bg-soft);padding:.1em .35em;border-radius:.25rem}
+  pre code{background:none;padding:0}
+  figure.diagram{margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:.5rem;overflow-x:auto}
+  figure.diagram figcaption{margin-top:.75rem;font-size:.85rem;color:var(--muted);text-align:center}
+  .row{display:flex;align-items:stretch;justify-content:center;gap:.5rem;flex-wrap:wrap;margin:.25rem 0}
+  .box{border:1.5px solid var(--ink);border-radius:.375rem;padding:.45rem .9rem;background:#fff;font-size:.85rem;text-align:center;display:flex;align-items:center;justify-content:center}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:1.1rem;padding:0 .25rem}
+  .arrow.down{width:100%;padding:.1rem 0}
+  .group{border:1.5px dashed var(--muted);border-radius:.5rem;padding:1.4rem .75rem .75rem;position:relative;display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center}
+  .group-label{position:absolute;top:.35rem;left:.75rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <nav aria-label="Artifacts">
+    <a href="index.html">Index</a>
+    <a href="codebase-summary.html">Summary</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="data-model.html" aria-current="page">Data Model</a>
+    <a href="key-workflows.html">Workflows</a>
+    <a href="directory-structure.html">Directory</a>
+  </nav>
+  <h1>Data Model</h1>
+</header>
+<nav aria-label="Contents">
+  <ul>
+    <li><a href="#entities">Entity Breakdown</a></li>
+    <li><a href="#additional-entities">Additional Entities</a></li>
+  </ul>
+</nav>
+<main>
+<section id="entities">
+<details open>
+<summary><h2>Entity Breakdown</h2></summary>
+<p>Data persistence is primarily handled through a PostgreSQL database, with Redis used for caching and session management. The application leverages Pydantic models to define the structure and validation of data, which are then processed within a LangGraph agent workflow.</p>
+<h3>AdventureOutline</h3>
+<p>Defines the high-level structure and synopsis of an entire adventure, including its name, number of chapters, and overall story.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>adventure_name</code></td><td>str</td><td>Name of the adventure (required)</td></tr>
+    <tr><td><code>number_of_chapters</code></td><td>int</td><td>Number of chapters (required)</td></tr>
+    <tr><td><code>story_synopsis</code></td><td>str</td><td>Synopsis of the adventure (required)</td></tr>
+    <tr><td><code>chapter_list</code></td><td>List[Chapter]</td><td>List of chapters (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> one-to-many with <code>Chapter</code>.</p>
+<h3>ChapterDetail</h3>
+<p>Provides detailed information for a specific chapter within an adventure, including its synopsis and a list of encounters.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>chapter_no</code></td><td>str</td><td>Number of the chapter (required)</td></tr>
+    <tr><td><code>chapter_name</code></td><td>str</td><td>Name of the chapter (required)</td></tr>
+    <tr><td><code>chapter_synopsis</code></td><td>str</td><td>Synopsis of the chapter (required)</td></tr>
+    <tr><td><code>chapter_encounters</code></td><td>List[EncounterDetail]</td><td>List of encounters in the chapter (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>AdventureOutline</code>; one-to-many with <code>EncounterDetail</code>.</p>
+<h3>EncounterDetail</h3>
+<p>Describes the specifics of an encounter within a chapter, detailing its objectives, setting, participants, and potential outcomes.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>encounter_no</code></td><td>str</td><td>Number of the encounter (required)</td></tr>
+    <tr><td><code>encounter_name</code></td><td>str</td><td>Name of the encounter (required)</td></tr>
+    <tr><td><code>encounter_objectives</code></td><td>List[str]</td><td>Objectives of the encounter (required)</td></tr>
+    <tr><td><code>encounter_setting</code></td><td>str</td><td>Setting of the encounter (required)</td></tr>
+    <tr><td><code>encounter_detail</code></td><td>str</td><td>Detail of the encounter (required)</td></tr>
+    <tr><td><code>encounter_location</code></td><td>List[str]</td><td>Location of the encounter (required)</td></tr>
+    <tr><td><code>encounter_active_npcs</code></td><td>List[str]</td><td>Active NPCs in the encounter (required)</td></tr>
+    <tr><td><code>encounter_monsters</code></td><td>List[EncounterMonster]</td><td>Monsters in the encounter (required)</td></tr>
+    <tr><td><code>encounter_traps</code></td><td>List[str]</td><td>Traps in the encounter (required)</td></tr>
+    <tr><td><code>encounter_treasures</code></td><td>List[str]</td><td>Treasures in the encounter (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>ChapterDetail</code>; one-to-many with <code>EncounterMonster</code>.</p>
+<h3>EncounterMonster</h3>
+<p>Specifies a monster participating in an encounter, including its name, quantity, and whether it is a boss.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>monster_name</code></td><td>str</td><td>Name of the monster (required)</td></tr>
+    <tr><td><code>number_of_monster</code></td><td>str</td><td>Number of the monster (required)</td></tr>
+    <tr><td><code>is_monster_boss</code></td><td>bool</td><td>Is the monster a boss? (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>EncounterDetail</code>.</p>
+<h3>Location</h3>
+<p>Defines a specific location within the adventure, providing its narrative, role, and a list of areas it contains.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>location_name</code></td><td>str</td><td>Name of the location (required)</td></tr>
+    <tr><td><code>location_narrative</code></td><td>str</td><td>Describe the location with at least 200 words (required)</td></tr>
+    <tr><td><code>chapter_no</code></td><td>int</td><td>Chapter number that the location is in (required)</td></tr>
+    <tr><td><code>chapter_name</code></td><td>str</td><td>Chapter name that the location is in (required)</td></tr>
+    <tr><td><code>additional_narrative</code></td><td>str</td><td>Additional narrative of the location (required)</td></tr>
+    <tr><td><code>location_role</code></td><td>str</td><td>Role and importance of the location (required)</td></tr>
+    <tr><td><code>area_list</code></td><td>List[Area]</td><td>List of areas in the location (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> one-to-many with <code>Area</code>.</p>
+<h3>Area</h3>
+<p>Describes a specific area within a location, including its narrative and key investigation points or skill checks.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>area_name</code></td><td>str</td><td>Name of the area (required)</td></tr>
+    <tr><td><code>area_narrative</code></td><td>str</td><td>Describe the area with at least 200 words (required)</td></tr>
+    <tr><td><code>area_keys</code></td><td>List[AreaKey]</td><td>List of key investigation or skill checks of the area (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>Location</code>; one-to-many with <code>AreaKey</code>.</p>
+<h3>AreaKey</h3>
+<p>Defines a key investigation or skill check within an area, detailing its name, skill check, difficulty class, description, and outcomes.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>area_key_name</code></td><td>str</td><td>Name of the area key (required)</td></tr>
+    <tr><td><code>area_key_skill_check</code></td><td>Optional[str]</td><td>Skill check of the area key (optional)</td></tr>
+    <tr><td><code>area_key_dc</code></td><td>Optional[str]</td><td>DC of the area key (optional)</td></tr>
+    <tr><td><code>area_key_description</code></td><td>str</td><td>Description of the area key (required)</td></tr>
+    <tr><td><code>area_key_success_outcome</code></td><td>str</td><td>Success outcome of the area key (required)</td></tr>
+    <tr><td><code>area_key_failure_outcome</code></td><td>str</td><td>Failure outcome of the area key (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>Area</code>.</p>
+<h3>Item</h3>
+<p>Describes an item found in the adventure, including its type, rarity, appearance, and special features.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>item_name</code></td><td>str</td><td>Name of the item (required)</td></tr>
+    <tr><td><code>item_type</code></td><td>str</td><td>Type of the item (required)</td></tr>
+    <tr><td><code>attunement_requirement</code></td><td>str</td><td>Attunement requirement of the item (required)</td></tr>
+    <tr><td><code>rarity</code></td><td>str</td><td>Rarity of the item (required)</td></tr>
+    <tr><td><code>physical_appearance</code></td><td>str</td><td>Physical appearance of the item (required)</td></tr>
+    <tr><td><code>item_description</code></td><td>str</td><td>Description of the item (required)</td></tr>
+    <tr><td><code>item_narrative</code></td><td>str</td><td>Narrative of the item (required)</td></tr>
+    <tr><td><code>item_founded_location</code></td><td>str</td><td>Location where the item is founded (required)</td></tr>
+    <tr><td><code>item_backstory</code></td><td>str</td><td>Backstory of the item (required)</td></tr>
+    <tr><td><code>features</code></td><td>List[ItemFeature]</td><td>Features of the item (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> one-to-many with <code>ItemFeature</code>.</p>
+<h3>ItemFeature</h3>
+<p>Defines a specific feature of an item, including its name and description.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>feature_name</code></td><td>str</td><td>Name of the item feature (required)</td></tr>
+    <tr><td><code>feature_description</code></td><td>str</td><td>Description of the item feature (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>Item</code>.</p>
+<h3>CharacterBase</h3>
+<p>Serves as a base class for characters, providing common attributes like physical appearance, alignment, stat block, and combat-related statistics.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>description</code></td><td>str</td><td>High-level description (required)</td></tr>
+    <tr><td><code>physical_apperance</code></td><td>str</td><td>Physical appearance description (required)</td></tr>
+    <tr><td><code>alignment</code></td><td>str</td><td>Alignment, e.g. lawful good, chaotic evil (required)</td></tr>
+    <tr><td><code>size</code></td><td>str</td><td>Size, e.g. medium, large, huge, gargantuan (required)</td></tr>
+    <tr><td><code>stat_block</code></td><td>StatBlock</td><td>Stat block (required)</td></tr>
+    <tr><td><code>saving_throws</code></td><td>List[str]</td><td>Saving throws (required)</td></tr>
+    <tr><td><code>armor_class</code></td><td>str</td><td>Armor class (required)</td></tr>
+    <tr><td><code>speed</code></td><td>List[str]</td><td>Speed (required)</td></tr>
+    <tr><td><code>hp</code></td><td>str</td><td>Hit points (required)</td></tr>
+    <tr><td><code>challenge</code></td><td>str</td><td>Challenge rating or CR, from 0 to 30 (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> one-to-one with <code>StatBlock</code>; one-to-many with <code>Action</code>, <code>Feats</code>, and <code>Spell</code>.</p>
+<h3>Monster</h3>
+<p>Defines a monster, inheriting base character attributes and adding monster-specific details like type and boss mechanics.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>monster_name</code></td><td>str</td><td>Name of the monster (required)</td></tr>
+    <tr><td><code>monster_type</code></td><td>str</td><td>Type of the monster (required)</td></tr>
+    <tr><td><code>boss_mechanic</code></td><td>Optional[List[BossMechanic]]</td><td>Boss mechanic (optional)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> inherits from <code>CharacterBase</code>; one-to-many with <code>BossMechanic</code>.</p>
+<h3>NPC</h3>
+<p>Defines a Non-Player Character (NPC), inheriting base character attributes and adding NPC-specific details like type, race, and roleplaying information.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>character_name</code></td><td>str</td><td>Name of the character (required)</td></tr>
+    <tr><td><code>npc_type</code></td><td>str</td><td>Type of the NPC (required)</td></tr>
+    <tr><td><code>npc_race</code></td><td>str</td><td>Race of the NPC (required)</td></tr>
+    <tr><td><code>roleplaying</code></td><td>str</td><td>Roleplaying guidance for the NPC (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> inherits from <code>CharacterBase</code>.</p>
+<h3>StatBlock</h3>
+<p>Holds the core ability scores and modifiers for a character or monster.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>strength</code></td><td>str</td><td>Strength with modifier (required)</td></tr>
+    <tr><td><code>dexterity</code></td><td>str</td><td>Dexterity with modifier (required)</td></tr>
+    <tr><td><code>constitution</code></td><td>str</td><td>Constitution with modifier (required)</td></tr>
+    <tr><td><code>intelligence</code></td><td>str</td><td>Intelligence with modifier (required)</td></tr>
+    <tr><td><code>wisdom</code></td><td>str</td><td>Wisdom with modifier (required)</td></tr>
+    <tr><td><code>charisma</code></td><td>str</td><td>Charisma with modifier (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> one-to-one with <code>CharacterBase</code>.</p>
+<h3>Action</h3>
+<p>Describes an action that a character or monster can perform, including its name and a detailed description.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>action_name</code></td><td>str</td><td>Name of the action (required)</td></tr>
+    <tr><td><code>action_description</code></td><td>str</td><td>Description of the action (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> many-to-one with <code>CharacterBase</code>.</p>
+<h3>TableOfContent</h3>
+<p>Represents the overall table of contents for the adventure, listing all chapters, characters, and items.</p>
+<table>
+  <thead><tr><th scope="col">Attribute</th><th scope="col">Type</th><th scope="col">Description</th></tr></thead>
+  <tbody>
+    <tr><td><code>chapter_list</code></td><td>List[Chapter]</td><td>List of chapters in the book (required)</td></tr>
+    <tr><td><code>character_list</code></td><td>List[Character]</td><td>List of characters in the book (required)</td></tr>
+    <tr><td><code>item_list</code></td><td>List[Item]</td><td>List of items in the book (required)</td></tr>
+  </tbody>
+</table>
+<p><strong>Relationships:</strong> one-to-many with <code>Chapter</code>, <code>Character</code>, and <code>Item</code> (from <code>section_schema</code>).</p>
+</details>
+</section>
+<section id="additional-entities">
+<details open>
+<summary><h2>Additional Entities</h2></summary>
+<p>The following supporting entities are also defined across the schema and state modules:</p>
+<ul>
+  <li><code>Spell</code>, <code>Feats</code>, <code>BossMechanic</code> — character abilities and boss phases (statblock schema)</li>
+  <li><code>SubSection</code>, <code>SubSectionList</code> — granular chapter content blocks (section schema)</li>
+  <li><code>RelatedSubjects</code>, <code>Editor</code>, <code>Perspectives</code> — editor-selection models</li>
+  <li><code>Summary</code>, <code>AnswerWithCitations</code>, <code>AnswerWithoutCitations</code>, <code>Queries</code> — interview models</li>
+  <li><code>StatBlockList</code> — collection wrapper for statblocks</li>
+  <li><code>InputState</code>, <code>OutlineState</code>, <code>OutputState</code>, <code>SectionImproverState</code>, <code>SectionTextState</code>, <code>Configuration</code> — LangGraph state definitions</li>
+</ul>
+</details>
+</section>
+</main>
+<footer>Generated by a-sdlc scan · 2026-06-10</footer>
+</body>
+</html>

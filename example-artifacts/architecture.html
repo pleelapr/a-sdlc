@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — Example Project</title>
+<style>
+  :root{--ink:#1a1a1a;--muted:#6b7280;--line:#d1d5db;--accent:#2563eb;--bg-soft:#f6f8fa}
+  *{box-sizing:border-box}
+  body{margin:0 auto;max-width:60rem;padding:0 1.5rem 4rem;font:16px/1.6 system-ui,Segoe UI,sans-serif;color:var(--ink);background:#fff}
+  h1{font-size:1.6rem;margin:.8rem 0 .2rem}
+  h2{font-size:1.25rem;margin:0}
+  h3{font-size:1.05rem;margin:1.2rem 0 .4rem}
+  p{margin:.6rem 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header nav{display:flex;flex-wrap:wrap;gap:.25rem;padding:.6rem 0;border-bottom:1px solid var(--line);font-size:.875rem}
+  header nav a{padding:.25rem .6rem;border-radius:.375rem}
+  header nav a[aria-current]{background:var(--accent);color:#fff}
+  header nav a:not([aria-current]):hover{background:var(--bg-soft);text-decoration:none}
+  nav[aria-label="Contents"]{margin:1rem 0;padding:.75rem 1rem;background:var(--bg-soft);border:1px solid var(--line);border-radius:.5rem;font-size:.9rem}
+  nav[aria-label="Contents"] ul{margin:0;padding-left:1.2rem}
+  section{margin:1.25rem 0}
+  details{border:1px solid var(--line);border-radius:.5rem;padding:0 1rem}
+  details[open]{padding-bottom:.75rem}
+  summary{cursor:pointer;padding:.7rem 0;list-style:none;display:flex;align-items:baseline;gap:.6rem}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"\25B8";flex:none;color:var(--muted);font-size:1.25rem;line-height:1}
+  details[open]>summary::before{content:"\25BE"}
+  summary h2{display:inline}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.75rem 0}
+  th,td{border:1px solid var(--line);padding:.4rem .6rem;text-align:left;vertical-align:top}
+  th{background:var(--bg-soft)}
+  pre{background:var(--bg-soft);border:1px solid var(--line);border-radius:.5rem;padding:.75rem 1rem;overflow-x:auto;font-size:.85rem;line-height:1.45}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:var(--bg-soft);padding:.1em .35em;border-radius:.25rem}
+  pre code{background:none;padding:0}
+  figure.diagram{margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:.5rem;overflow-x:auto}
+  figure.diagram figcaption{margin-top:.75rem;font-size:.85rem;color:var(--muted);text-align:center}
+  .row{display:flex;align-items:stretch;justify-content:center;gap:.5rem;flex-wrap:wrap;margin:.25rem 0}
+  .box{border:1.5px solid var(--ink);border-radius:.375rem;padding:.45rem .9rem;background:#fff;font-size:.85rem;text-align:center;display:flex;align-items:center;justify-content:center}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:1.1rem;padding:0 .25rem}
+  .arrow.down{width:100%;padding:.1rem 0}
+  .group{border:1.5px dashed var(--muted);border-radius:.5rem;padding:1.4rem .75rem .75rem;position:relative;display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center}
+  .group-label{position:absolute;top:.35rem;left:.75rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <nav aria-label="Artifacts">
+    <a href="index.html">Index</a>
+    <a href="codebase-summary.html">Summary</a>
+    <a href="architecture.html" aria-current="page">Architecture</a>
+    <a href="data-model.html">Data Model</a>
+    <a href="key-workflows.html">Workflows</a>
+    <a href="directory-structure.html">Directory</a>
+  </nav>
+  <h1>Architecture</h1>
+</header>
+<nav aria-label="Contents">
+  <ul>
+    <li><a href="#component-overview">Component Overview</a></li>
+    <li><a href="#data-flow">Data Flow</a></li>
+    <li><a href="#cross-cutting-concerns">Cross-Cutting Concerns</a></li>
+  </ul>
+</nav>
+<main>
+<section id="component-overview">
+<details open>
+<summary><h2>Component Overview</h2></summary>
+<p>This codebase implements a LangGraph-based agent system designed for generating Dungeons and Dragons 5E adventure content. The architecture is primarily agent-oriented, leveraging large language models (LLMs) for various content generation and refinement tasks, orchestrated through a stateful graph. The core technology stack includes Python, LangChain, LangGraph, Pydantic for data schemas, and OpenAI models, with deployment facilitated by Docker and integration with external services like Tavily Search and Azure Blob Storage.</p>
+<figure class="diagram">
+  <div class="row">
+    <div class="group">
+      <span class="group-label">Orchestration</span>
+      <div class="box">graph.py (StateGraph workflow)</div>
+      <div class="box">state.py (OutlineState)</div>
+    </div>
+  </div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row">
+    <div class="group">
+      <span class="group-label">Agents</span>
+      <div class="box">PromptImprover</div>
+      <div class="box">EditorSelector</div>
+      <div class="box">Interview</div>
+      <div class="box">Outliner</div>
+      <div class="box">TableOfContent</div>
+      <div class="box">SectionWriter</div>
+      <div class="box">Publisher</div>
+    </div>
+  </div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row">
+    <div class="group">
+      <span class="group-label">Shared Utilities</span>
+      <div class="box">nodes.py (LLM factory)</div>
+      <div class="box">tools.py (TavilySearch)</div>
+      <div class="box">writer_agent.py</div>
+      <div class="box">file_formats.py</div>
+    </div>
+    <div class="group">
+      <span class="group-label">External Services</span>
+      <div class="box">OpenAI</div>
+      <div class="box">Wikipedia</div>
+      <div class="box">Tavily</div>
+      <div class="box">Azure Blob Storage</div>
+    </div>
+  </div>
+  <figcaption>Layered component architecture of the adventure-generation agent system</figcaption>
+</figure>
+<h3>src/agent/graph.py</h3>
+<p>Defines the overall LangGraph workflow for the Realmforge Agent, orchestrating the sequence and interaction of various specialized agents to generate adventure content. The primary export is <code>workflow</code>, a <code>StateGraph</code> instance that defines the nodes and edges connecting the different agents. It instantiates <code>PromptImproverAgent</code>, <code>EditorSelectorAgent</code>, <code>InterviewAgent</code>, <code>OutlinerAgent</code>, <code>TableOfContentAgent</code>, <code>SectionWriterAgent</code>, and <code>PublisherAgent</code>, manages the overall <code>OutlineState</code> as it flows through the graph, and defines the <code>Configuration</code> TypedDict for graph parameters.</p>
+<h3>src/agent/utils/state.py</h3>
+<p>Defines the <code>TypedDict</code> data structures that represent the state of the agent system at different stages: <code>InputState</code> (<code>adventure_description</code>, <code>difficulty</code>, <code>number_of_chapters</code>), <code>OutlineState</code> (a comprehensive set of fields such as <code>improved_prompt</code>, <code>editors</code>, <code>outline_data</code>, <code>section_texts</code>, <code>statblocks</code>, <code>items</code>, <code>report</code>, and <code>url</code>), and <code>OutputState</code>. This module is central to state management, explicitly defining the schema for the shared state passed between nodes in the LangGraph workflow.</p>
+<h3>src/agent/utils/prompt_improver.py</h3>
+<p>The <code>PromptImproverAgent</code> takes an initial, high-level adventure idea and refines it into a more detailed and actionable prompt. Its <code>execute</code> method refines the prompt via an LLM and <code>ChatPromptTemplate</code>; its <code>run</code> method reads <code>adventure_description</code>, <code>number_of_chapters</code>, and <code>difficulty</code> from <code>InputState</code> and updates <code>improved_prompt</code> in <code>OutlineState</code>.</p>
+<h3>src/agent/utils/editor_selector.py</h3>
+<p>The <code>EditorSelectorAgent</code> surveys related subjects based on the improved prompt and generates a list of "editors" (personas) with specific affiliations, roles, and descriptions. It uses a <code>WikipediaRetriever</code> for information gathering and LLM chains (<code>survey_subjects</code>, <code>generate_idea</code>, <code>generate_editor</code>) to produce <code>Editor</code> Pydantic objects, populating the <code>editors</code> field in <code>OutlineState</code>.</p>
+<h3>src/agent/utils/interview_graph.py</h3>
+<p>The <code>InterviewAgent</code> orchestrates a simulated interview where an <code>InterviewQuestionAgent</code> and an <code>InterviewAnswerAgent</code> converse to gather detailed information for each editor persona, with an <code>InterviewSummaryAgent</code> summarizing the logs. It builds a sub-graph using <code>StateGraph</code> for the question-answer loop and defines the <code>InterviewState</code>, <code>AnswerWithCitations</code>, <code>AnswerWithoutCitations</code>, and <code>Queries</code> models. It reads <code>editors</code> and <code>improved_prompt</code> from <code>OutlineState</code> and populates <code>interview_result</code> and <code>interview_summary</code>.</p>
+<h3>src/agent/utils/outliner.py</h3>
+<p>The <code>OutlinerAgent</code> generates the initial high-level adventure outline from the improved prompt and interview summaries. <code>draft_outline</code> produces a structured <code>AdventureOutline</code> via LLM structured output, and <code>run_writing_outline_text</code> converts it to markdown using an internal <code>WriterAgent</code>. It populates <code>outline_data</code> and <code>outline_text</code> in <code>OutlineState</code>.</p>
+<h3>src/agent/utils/table_of_content_agent.py</h3>
+<p>The <code>TableOfContentAgent</code> generates a detailed table of contents (chapters, characters, and items) from the initial outline and interview summaries, using an LLM with structured output to produce a <code>TableOfContent</code> Pydantic object stored in <code>OutlineState.table_of_contents</code>.</p>
+<h3>src/agent/utils/section_writer_agent.py</h3>
+<p>The <code>SectionWriterAgent</code> generates the detailed text content for individual sections of the adventure, often with iterative refinement. It orchestrates <code>SubSectionWriterAgent</code>, <code>StatblockWriterAgent</code>, and <code>ItemWriterAgent</code> (plus commenter/improver sub-agents) through sub-graphs, and exposes <code>run_writing_subsection_text_parallel</code> for concurrent writing tasks. It defines <code>SectionImproverState</code> and <code>SectionTextState</code> and produces section texts, statblocks, and item statblocks for <code>OutlineState</code>.</p>
+<h3>src/agent/utils/publisher_agent.py</h3>
+<p>The <code>PublisherAgent</code> compiles all generated content into a final document and publishes it in multiple formats (Markdown, PDF, Word, Azure Blob Storage). <code>generate_full_content</code> assembles the final text from <code>outline_text</code>, <code>section_texts</code>, <code>statblocks</code>, and <code>items</code>; <code>write_report_by_formats</code> handles file output; the published location is stored in <code>OutlineState.url</code>.</p>
+<h3>src/agent/utils/writer_agent.py</h3>
+<p>A generic agent that converts structured JSON content into full markdown text via LLMs, using predefined markdown examples selected through the <code>MarkdownExampleKey</code> enum (<code>get_example_markdown</code>, <code>run_writing_text</code>).</p>
+<h3>Schema Modules (src/agent/utils/schema/)</h3>
+<table>
+  <thead>
+    <tr><th scope="col">Module</th><th scope="col">Exports</th><th scope="col">Responsibility</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>outline_schema.py</code></td><td><code>AdventureOutline</code>, <code>Chapter</code>, <code>Encounter</code></td><td>High-level outline of an adventure: adventure, chapters, encounters.</td></tr>
+    <tr><td><code>detail_outline_schema.py</code></td><td><code>ChapterDetail</code>, <code>EncounterDetail</code>, <code>EncounterMonster</code></td><td>Detailed chapter/encounter outline including monsters.</td></tr>
+    <tr><td><code>section_schema.py</code></td><td><code>TableOfContent</code>, <code>Chapter</code>, <code>SubSection</code>, <code>Character</code>, <code>Item</code>, <code>SubSectionList</code></td><td>Sections of the adventure and the overall table of contents.</td></tr>
+    <tr><td><code>statblock_schema.py</code></td><td><code>StatBlock</code>, <code>CharacterBase</code>, <code>Action</code>, <code>Spell</code>, <code>Feats</code>, <code>BossMechanic</code></td><td>Character stat blocks, actions, spells, feats, and boss mechanics.</td></tr>
+    <tr><td><code>item_schema.py</code></td><td><code>Item</code>, <code>ItemFeature</code></td><td>Items and their features, appearance, and game mechanics.</td></tr>
+    <tr><td><code>location_schema.py</code></td><td><code>Location</code>, <code>Area</code>, <code>AreaKey</code></td><td>Locations, their areas, and key investigation points.</td></tr>
+    <tr><td><code>monster_schema.py</code></td><td><code>Monster</code></td><td>Monsters, extending <code>CharacterBase</code> with type and boss mechanics.</td></tr>
+    <tr><td><code>npc_schema.py</code></td><td><code>NPC</code></td><td>NPCs, extending <code>CharacterBase</code> with type, race, and roleplaying notes.</td></tr>
+  </tbody>
+</table>
+<h3>Supporting Utilities and Configuration</h3>
+<table>
+  <thead>
+    <tr><th scope="col">Component</th><th scope="col">Responsibility</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>src/agent/utils/file_formats.py</code></td><td>Asynchronous functions for writing content to Markdown, JSON, PDF, and Word files and uploading to Azure Blob Storage (<code>write_to_file</code>, <code>write_text_to_md</code>, <code>write_json</code>, <code>write_md_to_pdf</code>, <code>write_md_to_word</code>, <code>write_md_to_azure_blob</code>).</td></tr>
+    <tr><td><code>src/agent/utils/nodes.py</code></td><td>Cached <code>_get_model</code> factory for <code>ChatOpenAI</code> instances (via <code>lru_cache</code>) and the <code>tool_node</code> (<code>ToolNode</code>) integrating external tools into the graph.</td></tr>
+    <tr><td><code>src/agent/utils/tools.py</code></td><td>Exports the <code>tools</code> list, currently containing a <code>TavilySearch</code> instance for web search.</td></tr>
+    <tr><td><code>src/agent/utils/views.py</code></td><td>Consistent logging and colored console output for agent activities (<code>AgentColor</code>, <code>print_agent_output</code>, <code>log</code>).</td></tr>
+    <tr><td><code>src/agent/utils/prompt_examples/</code></td><td>Predefined markdown example strings (encounter, introduction, item, location, spell list, statblock, whole chapter) used by <code>WriterAgent</code> as LLM prompt examples.</td></tr>
+    <tr><td><code>tests/integration_tests/test_graph.py</code></td><td>Integration test (<code>test_agent_simple_passthrough</code>) invoking the full <code>workflow</code> graph end-to-end with sample inputs.</td></tr>
+    <tr><td><code>docker-compose.yml</code></td><td>Defines the multi-container application: postgres, redis, and <code>langgraph-api</code> services, with environment variables, ports, and health checks.</td></tr>
+    <tr><td><code>Dockerfile</code></td><td>Builds the <code>langgraph-api</code> image on <code>langchain/langgraph-api:3.11</code>, installs dependencies, and sets <code>LANGSERVE_GRAPHS</code> to the main workflow.</td></tr>
+    <tr><td><code>langgraph.json</code></td><td>Specifies Python dependencies and maps the <code>realmforge-agent</code> graph to <code>src/agent/graph.py:workflow</code> for deployment.</td></tr>
+    <tr><td><code>pyproject.toml</code> / <code>Makefile</code></td><td>Project metadata, dependencies, build system, and tool configuration; common development commands (test, lint, format, spell check).</td></tr>
+  </tbody>
+</table>
+</details>
+</section>
+<section id="data-flow">
+<details open>
+<summary><h2>Data Flow</h2></summary>
+<p>The system primarily uses an internal, stateful graph (<code>StateGraph</code>) for communication between its agent components. Each agent reads from and writes to the shared <code>OutlineState</code> as the adventure progresses from idea to published document.</p>
+<figure class="diagram">
+  <div class="row">
+    <div class="box">InputState</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">Agent Graph (StateGraph)</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">OutlineState</div>
+    <div class="arrow">&#8594;</div>
+    <div class="box">Published Document</div>
+  </div>
+  <figcaption>State flow through the LangGraph workflow</figcaption>
+</figure>
+<ul>
+  <li>External communication with LLMs (OpenAI) is handled via <code>langchain-openai</code> and <code>ChatPromptTemplate</code> for structured input/output.</li>
+  <li>External data retrieval is performed through <code>TavilySearch</code> and <code>WikipediaRetriever</code> tools.</li>
+  <li>File storage and retrieval leverage <code>aiofiles</code> for local file system operations and <code>azure-storage-blob</code> for cloud storage.</li>
+</ul>
+</details>
+</section>
+<section id="cross-cutting-concerns">
+<details open>
+<summary><h2>Cross-Cutting Concerns</h2></summary>
+<ul>
+  <li><strong>Authentication &amp; Authorization:</strong> API keys for OpenAI, LangSmith, Tavily, and Azure Storage are managed via environment variables (<code>.env</code> file and Docker Compose). The system assumes pre-authenticated access to these services.</li>
+  <li><strong>Error Handling:</strong> No centralized error handling mechanism beyond standard Python exceptions is visible; LLM calls often include retry logic implicitly handled by LangChain/LangGraph.</li>
+  <li><strong>Logging &amp; Monitoring:</strong> Basic logging uses Python's <code>logging</code> module plus custom <code>print_agent_output</code> and <code>log</code> functions in <code>src/agent/utils/views.py</code> for colored console output. LangSmith integration (<code>pytest.mark.langsmith</code>, <code>LANGSMITH_API_KEY</code>) provides tracing and monitoring.</li>
+  <li><strong>Configuration:</strong> Managed through environment variables (API keys and service URIs), <code>pyproject.toml</code> (dependencies and tool settings), <code>langgraph.json</code> (graph deployment), and <code>docker-compose.yml</code> (service orchestration).</li>
+  <li><strong>Security:</strong> Sensitive information like API keys is handled via environment variables, preventing hardcoding. File operations include UTF-8 encoding with error replacement. Generated content may contain sensitive information and should be handled carefully.</li>
+</ul>
+</details>
+</section>
+</main>
+<footer>Generated by a-sdlc scan · 2026-06-10</footer>
+</body>
+</html>

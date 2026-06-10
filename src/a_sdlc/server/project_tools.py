@@ -66,7 +66,11 @@ def get_context() -> dict[str, Any]:
     available_artifacts = []
     if artifacts_dir.is_dir():
         for name in artifact_names:
-            if (artifacts_dir / f"{name}.md").is_file():
+            # Dual-extension transition (DD-7): .html is canonical, but
+            # legacy .md artifacts still count as scanned.
+            if (artifacts_dir / f"{name}.html").is_file() or (
+                artifacts_dir / f"{name}.md"
+            ).is_file():
                 available_artifacts.append(name)
 
     artifact_count = len(available_artifacts)

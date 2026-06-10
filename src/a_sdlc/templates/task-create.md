@@ -96,8 +96,18 @@ context = mcp__asdlc__get_context()
 If `context.artifacts.available` includes `"architecture"`:
 
 ```
-Read: .sdlc/artifacts/architecture.md
+Read: .sdlc/artifacts/architecture.html (fallback: architecture.md)
 ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 Parse the component names from the architecture document. When the user provides a task title and description, suggest the most relevant component based on keyword matching against component descriptions.
 

@@ -342,13 +342,23 @@ If round_table_enabled = true, perform domain detection after sprint analysis pr
 Analyze sprint context to identify relevant domains. Unlike single-PRD templates, a sprint may span multiple domains simultaneously. Check in priority order:
 
 1. **Explicit tags** -- Look for `<!-- personas: frontend, security -->` markers in ALL PRD and task content across the sprint. If found, use those domains directly.
-2. **Codebase signals** -- From `.sdlc/artifacts/architecture.md`, identify affected components across ALL sprint tasks (e.g., components with "UI", "React", "frontend" -> frontend domain; "API", "database" -> backend domain; "CI/CD", "Docker" -> devops domain).
+2. **Codebase signals** -- From the `architecture` artifact (`.sdlc/artifacts/architecture.html`, fallback `architecture.md`), identify affected components across ALL sprint tasks (e.g., components with "UI", "React", "frontend" -> frontend domain; "API", "database" -> backend domain; "CI/CD", "Docker" -> devops domain).
 3. **Keyword analysis** -- Scan ALL sprint PRDs and tasks for domain keywords:
    - Frontend: UI, component, React, CSS, layout, responsive, accessibility
    - Backend: API, endpoint, database, query, migration, service, middleware
    - DevOps: CI/CD, pipeline, Docker, deploy, infrastructure, monitoring
    - Security: auth, vulnerability, encryption, OWASP, credentials, permissions
 4. **Content structure** -- PRD functional requirements referencing specific technical domains
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 **Sprint-specific note**: Multiple domains are expected in a sprint scope. Assemble all relevant domain personas rather than selecting a single lead domain.
 
@@ -438,7 +448,7 @@ If round_table_enabled = true, run the round-table discussion BEFORE presenting 
 For each persona in the panel, build a filtered context package containing sprint-level information relevant to their domain:
 
 - **PM**: Sprint goal, PRD summaries (titles + overviews), business context, acceptance criteria summaries
-- **Architect**: Architecture sections from `.sdlc/artifacts/architecture.md`, design docs for all sprint PRDs, dependency graph structure, cross-PRD integration points
+- **Architect**: Architecture sections from the `architecture` artifact (`.sdlc/artifacts/architecture.html`, fallback `architecture.md`), design docs for all sprint PRDs, dependency graph structure, cross-PRD integration points
 - **Frontend/Backend/DevOps**: Domain-specific architecture sections + PRD requirements relevant to their domain + task details for their component area
 - **QA**: Acceptance criteria from all tasks, test patterns from `.sdlc/artifacts/`, quality gates, testing configuration from `.sdlc/config.yaml`
 - **Security**: Security-related requirements across all PRDs, API surface area, authentication/authorization patterns, data handling requirements
@@ -658,13 +668,13 @@ def build_batch_shared_context() -> str:
 
     Reads common files once and compresses them into a compact summary.
     This prevents N subagents from each independently reading the same
-    ~20KB architecture.md, ~5KB config.yaml, ~3KB lesson-learn.md,
+    ~20KB architecture artifact, ~5KB config.yaml, ~3KB lesson-learn.md,
     plus PRD content and design documents per batch.
 
     Target: ~3-4KB total (replaces ~30-70KB of per-agent reads).
 
     Sections:
-    1. Architecture summary (~1KB compressed from architecture.md)
+    1. Architecture summary (~1KB compressed from the architecture artifact)
     2. Config flags as compact JSON (~200B)
     3. Key lessons from lesson-learn.md (~500B)
     4. PRD summaries for this batch (~500 chars, bounded)
@@ -676,9 +686,10 @@ def build_batch_shared_context() -> str:
     """
     sections = []
 
-    # 1. Architecture summary (~1KB compressed from architecture.md)
+    # 1. Architecture summary (~1KB compressed from the architecture artifact)
     try:
-        arch = Read(".sdlc/artifacts/architecture.md")
+        # html preferred, md fallback — see "Reading scan artifacts" above
+        arch = Read(".sdlc/artifacts/architecture.html")  # or architecture.md
         # Extract key sections only: project structure, conventions, patterns
         # Compress to ~1KB — enough for agents to follow conventions
         sections.append("### Architecture (compressed)\n" + compress_to_summary(arch, max_chars=1000))
@@ -1416,7 +1427,7 @@ For EACH task:
 1. Call `mcp__asdlc__get_task(task_id)` to load full task content
 2. Call `mcp__asdlc__get_prd(prd_id)` if you need PRD context
 3. Call `mcp__asdlc__get_design(prd_id)` if you need design context (may not exist)
-4. Read `.sdlc/artifacts/architecture.md` for codebase patterns (if it exists)
+4. Read the `architecture` artifact for codebase patterns if it exists (`.sdlc/artifacts/architecture.html` preferred, fallback `architecture.md`)
 5. Call mcp__asdlc__update_task(task_id, status="in_progress")
 6. Implement the task following the Implementation Steps from the task content
 7. Read .sdlc/config.yaml — check `git.auto_commit`:
@@ -2188,7 +2199,7 @@ def dispatch_subagent(task: dict, dispatch_info: str, fresh: bool = False,
     """Dispatch a task to a subagent via the Task tool and return its result.
 
     The subagent receives pre-loaded shared context to avoid redundant reads
-    of architecture.md, config.yaml, and lesson-learn.md (~20-50KB savings per
+    of the architecture artifact, config.yaml, and lesson-learn.md (~20-50KB savings per
     agent). It self-loads only task-specific content via MCP tools and submits
     self-review evidence via submit_review(reviewer_type='self'). It does NOT dispatch reviewer
     subagents or mark the task as completed — that happens at the orchestrator

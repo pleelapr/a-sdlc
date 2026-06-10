@@ -15,6 +15,7 @@ import atexit
 import contextlib
 import logging
 import os
+import re
 
 try:
     import resource
@@ -382,6 +383,79 @@ async def project_dashboard(request: Request, project_id: str):
             "task_stats": task_stats,
             "active_sprint": active_sprint,
         }
+    )
+
+
+# =============================================================================
+# Artifact Serving (DD-8 hardened)
+# =============================================================================
+
+
+_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+\.html$")
+
+_ARTIFACT_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
+        "frame-ancestors 'none'; form-action 'none'; base-uri 'none'; sandbox"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+
+
+def _artifact_not_found() -> HTMLResponse:
+    """Uniform 404 response that never echoes the requested path."""
+    return HTMLResponse(content="<h1>Not Found</h1>", status_code=404)
+
+
+@app.get("/projects/{project_id}/artifacts/{name}")
+async def serve_artifact(project_id: str, name: str) -> HTMLResponse:
+    """Serve a generated scan artifact HTML file (read-only, DD-8 hardened).
+
+    Protections:
+    - ``name`` must match a strict allowlist regex (``^[A-Za-z0-9_-]+\\.html$``);
+      anything else returns 404 (never 400, never echoing the path).
+    - The resolved path must remain inside the project's ``.sdlc/artifacts``
+      directory (``Path.resolve()`` + ``is_relative_to`` containment).
+    - Symlinks are refused outright.
+    - Responses carry explicit security headers (CSP sandbox is the backstop
+      if upstream validation ever misses active content).
+
+    Known limitation: the server needs filesystem access to the project path.
+    Containerized deployments without the repository mounted return 404 for
+    every artifact.
+    """
+    if not _ARTIFACT_NAME_RE.fullmatch(name):
+        return _artifact_not_found()
+
+    storage = get_storage()
+    project = storage.get_project(project_id)
+    if not project or not project.get("path"):
+        return _artifact_not_found()
+
+    artifacts_dir = (Path(project["path"]) / ".sdlc" / "artifacts").resolve()
+    candidate = artifacts_dir / name
+
+    if candidate.is_symlink():
+        return _artifact_not_found()
+
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(artifacts_dir):
+        return _artifact_not_found()
+
+    if not resolved.is_file():
+        return _artifact_not_found()
+
+    try:
+        content = resolved.read_text(encoding="utf-8")
+    except OSError:
+        return _artifact_not_found()
+
+    return HTMLResponse(
+        content=content,
+        status_code=200,
+        headers=dict(_ARTIFACT_SECURITY_HEADERS),
     )
 
 

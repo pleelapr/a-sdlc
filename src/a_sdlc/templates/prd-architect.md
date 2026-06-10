@@ -77,13 +77,13 @@ If round_table_enabled = true:
 
 #### 1.5.1: Check for Codebase Artifacts
 
-Check whether `.sdlc/artifacts/` directory exists and contains scan output (e.g., `architecture.md`, `codebase-summary.md`).
+Check whether `.sdlc/artifacts/` directory exists and contains scan output (e.g., `architecture.html` or pre-migration `architecture.md`).
 
 ```
-Use Glob to check: .sdlc/artifacts/*.md
+Use Glob to check: .sdlc/artifacts/*.html and .sdlc/artifacts/*.md
 ```
 
-If artifacts exist (at least one `.md` file found): proceed to Step 2.
+If artifacts exist (at least one `.html` or `.md` file found): proceed to Step 2.
 
 If artifacts do NOT exist (directory missing or empty):
 
@@ -154,17 +154,27 @@ Proceed to Step 2.
 
 **Read all files in a single parallel batch — do NOT read them sequentially.**
 
-If `.sdlc/artifacts/` exists, read all 7 files in one parallel batch:
+If `.sdlc/artifacts/` exists, read all 7 files in one parallel batch (resolve each artifact extension per the rule below):
 ```
 Parallel Read (all at once):
-- .sdlc/artifacts/architecture.md
-- .sdlc/artifacts/directory-structure.md
-- .sdlc/artifacts/codebase-summary.md
-- .sdlc/artifacts/data-model.md
-- .sdlc/artifacts/key-workflows.md
+- .sdlc/artifacts/architecture.html (fallback: architecture.md)
+- .sdlc/artifacts/directory-structure.html (fallback: directory-structure.md)
+- .sdlc/artifacts/codebase-summary.html (fallback: codebase-summary.md)
+- .sdlc/artifacts/data-model.html (fallback: data-model.md)
+- .sdlc/artifacts/key-workflows.html (fallback: key-workflows.md)
 - .sdlc/lesson-learn.md
 - ~/.a-sdlc/lesson-learn.md
 ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 If artifacts don't exist (user overrode the scan gate in Step 1.5):
 ```
