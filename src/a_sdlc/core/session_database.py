@@ -182,7 +182,7 @@ class SessionDatabase:
         self,
         project_id: str,
         name: str,
-        path: str,
+        path: str | None = None,
         shortname: str | None = None,
     ) -> dict[str, Any] | None:
         """Create a new project."""

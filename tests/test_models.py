@@ -226,9 +226,11 @@ class TestValidation:
         with pytest.raises(ValidationError):
             Project.model_validate({"id": "p1", "shortname": "X", "path": "/p"})
 
-    def test_project_requires_path(self):
-        with pytest.raises(ValidationError):
-            Project.model_validate({"id": "p1", "shortname": "X", "name": "N"})
+    def test_project_path_is_optional(self):
+        # Remote/centralized deployments create projects without a
+        # server-side path; the column is nullable since migration 0002.
+        project = Project.model_validate({"id": "p1", "shortname": "X", "name": "N"})
+        assert project.path is None
 
     def test_task_requires_title(self):
         with pytest.raises(ValidationError):

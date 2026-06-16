@@ -77,7 +77,10 @@ class Project(SQLModel, table=True):
     id: str = Field(primary_key=True)
     shortname: str = Field(unique=True, index=True)
     name: str
-    path: str = Field(unique=True, index=True)
+    # Nullable for centralized/remote deployments where the project has no
+    # server-side path. UNIQUE still holds for non-NULL values; multiple NULL
+    # paths are allowed (NULLs are distinct in SQLite and PostgreSQL).
+    path: str | None = Field(default=None, unique=True, index=True)
     created_at: datetime | None = _ts_field(default_now=True)
     last_accessed: datetime | None = _ts_field(default_now=True)
 

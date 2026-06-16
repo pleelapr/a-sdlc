@@ -260,7 +260,7 @@ Sprint -> PRD -> Task
 ### Database Schema
 
 ```sql
-projects (id, shortname UNIQUE, name, path UNIQUE, created_at, last_accessed)
+projects (id, shortname UNIQUE, name, path UNIQUE nullable, created_at, last_accessed)
 prds (id, project_id FK, sprint_id FK nullable, title, file_path, status[draft|approved|split|completed], version)
 tasks (id, project_id FK, prd_id FK, title, file_path, status[pending|in_progress|blocked|completed], priority[low|medium|high|critical], component)
 sprints (id, project_id FK, title, goal, status[planned|active|completed], external_id)
@@ -286,7 +286,8 @@ Content editing pattern: `create_*()` returns `file_path` -> agent writes conten
 ### Context Tools
 - `get_context()` -- Current project + statistics
 - `list_projects()` -- All projects
-- `init_project(name?, shortname?)` -- Initialize project
+- `init_project(name?, shortname?)` -- Initialize project for the server's current directory (local deployments)
+- `create_project(name, shortname?, path?)` -- Create a project independent of the server's cwd (remote/centralized deployments). Writes no files on the server; returns `init_files` specs (path, scope, content) for the client to create locally. Sets the new project as the active context.
 - `relocate_project(shortname)` -- Re-link project to current directory
 - `switch_project(project_id)` -- Switch project context
 

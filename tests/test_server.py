@@ -1795,6 +1795,164 @@ class TestInitProjectExistingContext:
         assert "message" in result
 
 
+class TestCreateProject:
+    """Test the create_project() tool for remote/centralized deployments."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_active_project(self):
+        """Keep the in-memory active project from leaking across tests."""
+        import a_sdlc.server as server
+
+        server._active_project_id = None
+        yield
+        server._active_project_id = None
+
+    def _mock_db(self):
+        db = MagicMock()
+        db.validate_shortname.return_value = (True, "")
+        db.is_shortname_available.return_value = True
+        db.get_project.return_value = None
+        db.get_project_by_path.return_value = None
+        db.generate_unique_shortname.return_value = "AUTO"
+        db.create_project.side_effect = lambda pid, name, path, shortname: {
+            "id": pid,
+            "shortname": shortname,
+            "name": name,
+            "path": path,
+        }
+        return db
+
+    @patch("a_sdlc.server.get_db")
+    def test_create_with_explicit_shortname(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote Project", shortname="PCRA")
+
+        assert result["status"] == "created"
+        assert result["project"]["id"] == "pcra"
+        assert result["project"]["shortname"] == "PCRA"
+        assert result["project"]["path"] is None
+        db.create_project.assert_called_once_with("pcra", "Remote Project", None, "PCRA")
+        assert result["id_format_examples"]["task"] == "PCRA-T00001"
+
+    @patch("a_sdlc.server.get_db")
+    def test_sets_active_project(self, mock_get_db):
+        import a_sdlc.server as server
+        from a_sdlc.server import create_project
+
+        mock_get_db.return_value = self._mock_db()
+
+        create_project(name="Remote Project", shortname="PCRA")
+
+        assert server._active_project_id == "pcra"
+
+    @patch("a_sdlc.server.get_db")
+    def test_returns_init_files_specs(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        mock_get_db.return_value = self._mock_db()
+
+        result = create_project(name="Remote Project", shortname="PCRA")
+
+        init_files = result["init_files"]
+        assert isinstance(init_files, list)
+        paths = {f["path"] for f in init_files}
+        assert "CLAUDE.md" in paths
+        assert ".sdlc/lesson-learn.md" in paths
+        assert ".sdlc/config.yaml" in paths
+        assert "~/.a-sdlc/lesson-learn.md" in paths
+        for f in init_files:
+            assert f["content"]
+            assert f["scope"] in ("project", "global")
+        assert "init_instructions" in result
+
+    @patch("a_sdlc.server.get_db")
+    def test_auto_generates_shortname(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote Project")
+
+        db.generate_unique_shortname.assert_called_once_with("Remote Project")
+        assert result["project"]["shortname"] == "AUTO"
+        assert result["project"]["id"] == "auto"
+
+    @patch("a_sdlc.server.get_db")
+    def test_records_path_when_provided(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote", shortname="PCRA", path="/home/me/repo")
+
+        assert result["project"]["path"] == "/home/me/repo"
+        db.create_project.assert_called_once_with(
+            "pcra", "Remote", "/home/me/repo", "PCRA"
+        )
+
+    @patch("a_sdlc.server.get_db")
+    def test_invalid_shortname(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        db.validate_shortname.return_value = (False, "must be 4 letters")
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote", shortname="X")
+
+        assert result["status"] == "error"
+        assert "Invalid shortname" in result["message"]
+
+    @patch("a_sdlc.server.get_db")
+    def test_shortname_taken(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        db.is_shortname_available.return_value = False
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote", shortname="PCRA")
+
+        assert result["status"] == "error"
+        assert "already in use" in result["message"]
+
+    @patch("a_sdlc.server.get_db")
+    def test_project_id_collision(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        db.get_project.return_value = {"id": "pcra"}
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote", shortname="PCRA")
+
+        assert result["status"] == "error"
+        assert "already exists" in result["message"]
+
+    @patch("a_sdlc.server.get_db")
+    def test_path_collision(self, mock_get_db):
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        db.get_project_by_path.return_value = {
+            "id": "other",
+            "name": "Other",
+            "shortname": "OTHR",
+        }
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote", shortname="PCRA", path="/dup")
+
+        assert result["status"] == "error"
+        assert "already linked" in result["message"]
+
+
 # =============================================================================
 # Design Document MCP Tools
 # =============================================================================
