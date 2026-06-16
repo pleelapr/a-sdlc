@@ -36,9 +36,15 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Restore NOT NULL on projects.path.
 
-    Rows with NULL paths must be removed or backfilled before downgrading,
-    otherwise the NOT NULL constraint will fail.
+    Projects created without a path (centralized/remote deployments) would
+    violate the restored NOT NULL constraint, so backfill those rows before
+    re-applying it. ``path`` is UNIQUE, so each placeholder must be distinct;
+    deriving it from the primary key guarantees uniqueness. ``||`` is the SQL
+    string-concatenation operator in both SQLite and PostgreSQL.
     """
+    op.execute(
+        "UPDATE projects SET path = '__null_path__/' || id WHERE path IS NULL"
+    )
     with op.batch_alter_table("projects") as batch_op:
         batch_op.alter_column(
             "path",
