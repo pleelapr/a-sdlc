@@ -1952,6 +1952,24 @@ class TestCreateProject:
         assert result["status"] == "error"
         assert "already linked" in result["message"]
 
+    @patch("a_sdlc.server.get_db")
+    def test_integrity_error_maps_to_conflict(self, mock_get_db):
+        from sqlalchemy.exc import IntegrityError
+
+        from a_sdlc.server import create_project
+
+        db = self._mock_db()
+        # Pre-checks pass, but a concurrent insert collides at commit time.
+        db.create_project.side_effect = IntegrityError(
+            "INSERT INTO projects ...", {}, Exception("UNIQUE constraint failed")
+        )
+        mock_get_db.return_value = db
+
+        result = create_project(name="Remote", shortname="PCRA")
+
+        assert result["status"] == "error"
+        assert "conflicts with an existing project" in result["message"]
+
 
 # =============================================================================
 # Design Document MCP Tools

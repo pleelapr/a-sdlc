@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 import a_sdlc.server as _server
 
 __all__ = [
@@ -286,6 +288,18 @@ def create_project(
         return {
             "status": "error",
             "message": str(e),
+        }
+    except IntegrityError:
+        # The pre-checks above are not atomic: a concurrent create_project
+        # call can pass them and still collide on the id/shortname/path
+        # unique constraints at commit time. Map that to a controlled
+        # conflict result instead of an unhandled internal error.
+        return {
+            "status": "error",
+            "message": (
+                f"Project '{shortname}' conflicts with an existing project "
+                "(id, shortname, or path already in use)."
+            ),
         }
 
     # Make this the active project so subsequent tool calls resolve context
