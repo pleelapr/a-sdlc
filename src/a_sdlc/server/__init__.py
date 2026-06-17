@@ -165,9 +165,19 @@ def _init_storage_backend() -> None:
 
     Called once at server startup.
     """
-    from a_sdlc.core.storage_config import get_storage_config
+    from a_sdlc.core.storage_config import StorageConfigError, get_storage_config
 
     config = get_storage_config()
+
+    # Defense in depth: get_storage_config() already rejects non-PostgreSQL
+    # URLs, but if a caller (or a test) supplies a config object directly we
+    # must not silently try to open SQLite. Raising here also gives a clearer
+    # message than the connect-args mismatch the engine factory would emit.
+    if not config.is_postgresql:
+        raise StorageConfigError(
+            f"PostgreSQL is required. Got: {config.database_url}. "
+            "Set A_SDLC_DATABASE_URL to a PostgreSQL URL or use Docker Compose."
+        )
 
     # Log the resolved backend URL up front -- before any connection -- so the
     # configured target is visible in logs even when the database is unreachable.

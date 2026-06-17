@@ -92,6 +92,7 @@ class TestInitStorageBackend:
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         mock_storage = MagicMock()
         with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
+             patch("a_sdlc.server._wait_for_database"), \
              patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init, \
              patch("a_sdlc.server._run_auto_migration") as mock_migrate, \
              patch("a_sdlc.server._migrate_local_content_to_s3"):
@@ -111,6 +112,7 @@ class TestInitStorageBackend:
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         mock_storage = MagicMock()
         with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
+             patch("a_sdlc.server._wait_for_database"), \
              patch("a_sdlc.storage.init_storage", return_value=mock_storage), \
              patch("a_sdlc.server._run_auto_migration"), \
              patch("a_sdlc.server._migrate_local_content_to_s3") as mock_s3_migrate:
@@ -147,6 +149,7 @@ class TestInitStorageBackend:
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         existing_storage = MagicMock()
         with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
+             patch("a_sdlc.server._wait_for_database"), \
              patch("a_sdlc.storage.init_storage", return_value=existing_storage), \
              patch("a_sdlc.server._run_auto_migration"), \
              patch("a_sdlc.server._migrate_local_content_to_s3"):
@@ -165,6 +168,7 @@ class TestInitStorageBackend:
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         mock_storage = MagicMock()
         with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
+             patch("a_sdlc.server._wait_for_database"), \
              patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init, \
              patch("a_sdlc.server._run_auto_migration"), \
              patch("a_sdlc.server._migrate_local_content_to_s3"):
