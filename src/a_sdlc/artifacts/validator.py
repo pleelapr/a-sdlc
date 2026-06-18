@@ -676,7 +676,10 @@ def validate_file(
             if artifact_type is None or artifact_type.format != "html":
                 raise ValueError(f"Not a validatable HTML artifact: {path.name}")
             manifest_key = artifact_type.value
-    manifest = MANIFESTS[manifest_key]
+    try:
+        manifest = MANIFESTS[manifest_key]
+    except KeyError as exc:
+        raise ValueError(f"Unknown manifest key: {manifest_key}") from exc
     directory = directory or path.parent
 
     raw = path.read_text(encoding="utf-8")
@@ -741,6 +744,7 @@ def validate_directory(directory: Path) -> tuple[list[ValidationResult], list[st
             skipped.append(path.name)
             continue
         if path.suffix != ".html":
+            skipped.append(path.name)
             continue
         if path.name == "index.html":
             results.append(validate_file(path, INDEX_KEY, directory))

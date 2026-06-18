@@ -646,6 +646,41 @@ class TestArtifactRoute:
         direct = client.get("/projects/art-proj/artifacts/overview.html")
         assert direct.status_code == 200
 
+    @pytest.mark.skipif(
+        not _symlinks_supported(),
+        reason="symlink creation requires privileges on this platform",
+    )
+    def test_symlinked_artifacts_dir_escaping_root_refused(
+        self, temp_storage, tmp_path, monkeypatch
+    ):
+        """A symlinked .sdlc/artifacts pointing outside the project is refused.
+
+        Resolving artifacts_dir alone proves containment within the symlink
+        target, not the repository -- so a file under the target must not be
+        served.
+        """
+        project_dir = tmp_path / "symproj"
+        (project_dir / ".sdlc").mkdir(parents=True)
+        external = tmp_path / "external_artifacts"
+        external.mkdir()
+        (external / "overview.html").write_text("<p>escaped secret</p>", encoding="utf-8")
+        (project_dir / ".sdlc" / "artifacts").symlink_to(external)
+        temp_storage.create_project("sym-proj", "Symlink Project", str(project_dir))
+        client = _make_client(temp_storage, monkeypatch)
+
+        response = client.get("/projects/sym-proj/artifacts/overview.html")
+        assert response.status_code == 404
+        assert "escaped secret" not in response.text
+
+    def test_non_utf8_artifact_returns_404_not_500(self, artifact_client):
+        """A tampered (non-UTF-8) artifact yields the uniform 404, never a 500."""
+        client, artifacts_dir = artifact_client
+        (artifacts_dir / "overview.html").write_bytes(b"\xff\xfe\xff")
+
+        response = client.get("/projects/art-proj/artifacts/overview.html")
+        assert response.status_code == 404
+        assert "artproj" not in response.text
+
 
 class TestArtifactRouteAdversarial:
     """Path-traversal corpus against the artifact route (DD-8 exercised adversarially).

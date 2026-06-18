@@ -163,6 +163,22 @@ class TestScaffoldComposition:
         assert failures == []
         assert skipped == []
 
+    def test_unknown_non_html_file_recorded_as_skipped(self, tmp_path: Path) -> None:
+        """Unknown non-.html files appear in skipped, per the evidence contract."""
+        directory = make_valid_dir(tmp_path)
+        (directory / "notes.txt").write_text("scratch", encoding="utf-8")
+        results, skipped = val.validate_directory(directory)
+        assert "notes.txt" in skipped
+        assert "notes.txt" not in {r.file for r in results}
+
+    def test_validate_file_invalid_manifest_key_raises_valueerror(
+        self, tmp_path: Path
+    ) -> None:
+        """An unknown manifest_key raises ValueError, not KeyError (documented contract)."""
+        directory = make_valid_dir(tmp_path)
+        with pytest.raises(ValueError):
+            val.validate_file(directory / "architecture.html", "nonexistent-manifest", directory)
+
     def test_scaffold_writes_six_files(self, tmp_path: Path) -> None:
         written = val.scaffold(tmp_path / "out", "Proj")
         assert len(written) == 6

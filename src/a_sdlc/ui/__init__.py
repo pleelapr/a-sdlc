@@ -434,7 +434,15 @@ async def serve_artifact(project_id: str, name: str) -> HTMLResponse:
     if not project or not project.get("path"):
         return _artifact_not_found()
 
-    artifacts_dir = (Path(project["path"]) / ".sdlc" / "artifacts").resolve()
+    project_root = Path(project["path"]).resolve()
+    artifacts_dir = (project_root / ".sdlc" / "artifacts").resolve()
+
+    # Reject a symlinked .sdlc/artifacts that escapes the project tree:
+    # resolving artifacts_dir alone only proves containment within the symlink
+    # target, not within the repository.
+    if not artifacts_dir.is_relative_to(project_root):
+        return _artifact_not_found()
+
     candidate = artifacts_dir / name
 
     if candidate.is_symlink():
@@ -448,8 +456,10 @@ async def serve_artifact(project_id: str, name: str) -> HTMLResponse:
         return _artifact_not_found()
 
     try:
+        # ValueError covers UnicodeDecodeError for non-UTF-8 (tampered) files,
+        # keeping the route's uniform "not found" behavior instead of a 500.
         content = resolved.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):
         return _artifact_not_found()
 
     return HTMLResponse(
