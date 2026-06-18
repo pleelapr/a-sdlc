@@ -196,14 +196,14 @@ class TestUpgrade:
         assert not missing, f"Missing indexes: {missing}"
 
     def test_alembic_version_at_head(self, migrated_db: Config) -> None:
-        """The alembic_version table should have revision '0001'."""
+        """The alembic_version table should be at the latest revision."""
         conn = _get_connection(migrated_db)
         cursor = conn.execute("SELECT version_num FROM alembic_version")
         row = cursor.fetchone()
         conn.close()
 
         assert row is not None
-        assert row[0] == "0001"
+        assert row[0] == "0002"
 
 
 # ---------------------------------------------------------------------------

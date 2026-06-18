@@ -18,6 +18,7 @@ from a_sdlc.core.init_files import (
     generate_gemini_md,
     generate_init_files,
     generate_lesson_learn,
+    render_init_files,
 )
 
 
@@ -494,3 +495,46 @@ class TestConfigYamlUpgrade:
         content = config_file.read_text()
         # Quality section has a descriptive comment in the template
         assert "Quality Gates" in content
+
+
+class TestRenderInitFiles:
+    """Tests for render_init_files (content-only, no disk writes)."""
+
+    def test_returns_expected_paths(self):
+        files = render_init_files("My Project")
+        paths = {f["path"] for f in files}
+        assert paths == {
+            "CLAUDE.md",
+            ".sdlc/lesson-learn.md",
+            ".sdlc/config.yaml",
+            "~/.a-sdlc/lesson-learn.md",
+        }
+
+    def test_each_spec_has_required_keys(self):
+        files = render_init_files("My Project")
+        for spec in files:
+            assert spec["path"]
+            assert spec["content"]
+            assert spec["scope"] in ("project", "global")
+            assert spec["description"]
+
+    def test_context_file_substitutes_project_name(self):
+        files = render_init_files("My Project")
+        claude = next(f for f in files if f["path"] == "CLAUDE.md")
+        assert "My Project" in claude["content"]
+        assert "{{PROJECT_OVERVIEW}}" not in claude["content"]
+
+    def test_global_lesson_marked_global_scope(self):
+        files = render_init_files("My Project")
+        glob = next(f for f in files if f["path"] == "~/.a-sdlc/lesson-learn.md")
+        assert glob["scope"] == "global"
+
+    def test_gemini_target_renders_gemini_context(self):
+        files = render_init_files("My Project", targets=[GEMINI_TARGET])
+        paths = {f["path"] for f in files}
+        assert "GEMINI.md" in paths
+        assert "CLAUDE.md" not in paths
+
+    def test_writes_nothing_to_disk(self, temp_project):
+        render_init_files("My Project")
+        assert list(temp_project.iterdir()) == []

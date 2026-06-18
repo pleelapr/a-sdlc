@@ -89,6 +89,24 @@ def _extract_template_sections(template_text: str) -> dict[str, str]:
     return sections
 
 
+def _render_context_content(template_name: str, project_name: str) -> str:
+    """Render a context-file template with project-specific placeholders.
+
+    Shared by the file-writing generators and the content-only renderers so
+    both paths produce byte-identical output.
+    """
+    content = _load_template(template_name)
+    content = content.replace(
+        "{{PROJECT_OVERVIEW}}",
+        f"{project_name} — managed with a-sdlc.",
+    )
+    content = content.replace(
+        "{{DEVELOPMENT_COMMANDS}}",
+        "<!-- Add your project's development commands here -->",
+    )
+    return content
+
+
 def generate_claude_md(
     project_path: Path,
     project_name: str,
@@ -113,18 +131,7 @@ def generate_claude_md(
             "message": "CLAUDE.md already exists. Skipped to avoid overwriting.",
         }
 
-    template = _load_template("claude-md.template.md")
-
-    # Replace placeholders with project-specific values
-    content = template.replace(
-        "{{PROJECT_OVERVIEW}}",
-        f"{project_name} — managed with a-sdlc.",
-    )
-    content = content.replace(
-        "{{DEVELOPMENT_COMMANDS}}",
-        "<!-- Add your project's development commands here -->",
-    )
-
+    content = _render_context_content("claude-md.template.md", project_name)
     claude_md_path.write_text(content, encoding="utf-8")
 
     return {
@@ -158,17 +165,7 @@ def generate_gemini_md(
             "message": "GEMINI.md already exists. Skipped to avoid overwriting.",
         }
 
-    template = _load_template("gemini-md.template.md")
-
-    content = template.replace(
-        "{{PROJECT_OVERVIEW}}",
-        f"{project_name} — managed with a-sdlc.",
-    )
-    content = content.replace(
-        "{{DEVELOPMENT_COMMANDS}}",
-        "<!-- Add your project's development commands here -->",
-    )
-
+    content = _render_context_content("gemini-md.template.md", project_name)
     gemini_md_path.write_text(content, encoding="utf-8")
 
     return {
@@ -372,3 +369,67 @@ def generate_init_files(
     results.append(ensure_global_lesson_learn())
 
     return {"results": results}
+
+
+def render_init_files(
+    project_name: str,
+    targets: list[CLITarget] | None = None,
+) -> list[dict[str, str]]:
+    """Render init file contents without writing anything to disk.
+
+    Used by the ``create_project()`` MCP tool in remote/centralized
+    deployments, where the server cannot (and should not) write into the
+    client's repository. The returned specs let the MCP client create each
+    file in the right place on its own machine.
+
+    Args:
+        project_name: Human-readable project name.
+        targets: CLI targets to render context files for. Defaults to Claude
+            only, since the server cannot detect the client's installed CLIs.
+
+    Returns:
+        A list of file specs, each a dict with:
+            - ``path``: target path (relative to the project root, or a
+              ``~``-prefixed user-global path for ``scope="global"``)
+            - ``scope``: ``"project"`` or ``"global"``
+            - ``content``: full file contents to write
+            - ``description``: human-readable purpose
+    """
+    if targets is None:
+        targets = [CLAUDE_TARGET]
+
+    files: list[dict[str, str]] = []
+
+    for target in targets:
+        template_name = (
+            "gemini-md.template.md"
+            if target.context_file == "GEMINI.md"
+            else "claude-md.template.md"
+        )
+        files.append({
+            "path": target.context_file,
+            "scope": "project",
+            "content": _render_context_content(template_name, project_name),
+            "description": f"{target.display_name} context file (project root)",
+        })
+
+    files.append({
+        "path": ".sdlc/lesson-learn.md",
+        "scope": "project",
+        "content": _load_template("lesson-learn.template.md"),
+        "description": "Project-specific lessons and rules",
+    })
+    files.append({
+        "path": ".sdlc/config.yaml",
+        "scope": "project",
+        "content": _load_template("config.template.yaml"),
+        "description": "Project configuration",
+    })
+    files.append({
+        "path": "~/.a-sdlc/lesson-learn.md",
+        "scope": "global",
+        "content": _load_template("lesson-learn.template.md"),
+        "description": "Global cross-project lessons (create only if absent)",
+    })
+
+    return files

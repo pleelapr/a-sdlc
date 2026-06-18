@@ -194,8 +194,11 @@ class TestCleanupStaleMcpPid:
     def test_live_process_is_not_cleaned(self, tmp_path):
         from a_sdlc.server import _cleanup_stale_mcp_pid
 
+        # Use a PID that is *not* ours: _cleanup_stale_mcp_pid() treats its own
+        # PID as stale (container PID-1 restart guard) and would unlink the
+        # file before consulting os.kill, defeating the "live process" mock.
         pid_file = tmp_path / "mcp.pid"
-        pid_file.write_text(str(os.getpid()))
+        pid_file.write_text(str(os.getpid() + 1))
 
         with (
             patch("a_sdlc.server._MCP_PID_FILE", pid_file),

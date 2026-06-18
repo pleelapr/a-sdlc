@@ -4,12 +4,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
+
 import a_sdlc.server as _server
 
 __all__ = [
     "get_context",
     "list_projects",
     "init_project",
+    "create_project",
     "switch_project",
     "relocate_project",
 ]
@@ -208,6 +211,122 @@ def init_project(
             "prd": f"{shortname}-P0001",
         },
         "init_files": init_results["results"],
+    }
+
+
+@_server.mcp.tool()
+def create_project(
+    name: str,
+    shortname: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Create a project without relying on the server's working directory.
+
+    Use this in remote/centralized deployments where the MCP server runs on a
+    different host than the client (Docker, cloud). Project identity comes from
+    the arguments rather than ``os.getcwd()``, so it works even when the server
+    cwd is ``/``. Unlike ``init_project``, this writes NO files on the server;
+    the init file contents are returned for the client to create locally.
+
+    Args:
+        name: Human-readable project name.
+        shortname: Optional 4-character uppercase project key (e.g. "PCRA").
+                  Must be exactly 4 uppercase letters (A-Z). Auto-generated
+                  from ``name`` when omitted. The project id is derived from
+                  the shortname, so it does not depend on any directory name.
+        path: Optional client-side path to record for reference. May be
+              omitted entirely in centralized deployments; content is keyed by
+              project id, not path.
+
+    Returns:
+        Created project details, id-format examples, and ``init_files`` -- a
+        list of {path, scope, content, description} specs the client should
+        write into its local repository.
+    """
+    db = _server.get_db()
+
+    # Validate provided shortname, or auto-generate one.
+    if shortname is not None:
+        is_valid, error_msg = db.validate_shortname(shortname)
+        if not is_valid:
+            return {
+                "status": "error",
+                "message": f"Invalid shortname: {error_msg}",
+            }
+        if not db.is_shortname_available(shortname):
+            return {
+                "status": "error",
+                "message": f"Shortname '{shortname}' is already in use by another project.",
+            }
+    else:
+        shortname = db.generate_unique_shortname(name)
+
+    # Derive the project id from the shortname so identity is independent of
+    # the server's working directory.
+    project_id = shortname.lower()
+    if db.get_project(project_id):
+        return {
+            "status": "error",
+            "message": f"Project id '{project_id}' already exists.",
+        }
+
+    # Honor the unique-path constraint when a path is supplied.
+    if path is not None:
+        existing = db.get_project_by_path(path)
+        if existing:
+            return {
+                "status": "error",
+                "message": (
+                    f"Path '{path}' is already linked to project "
+                    f"'{existing['name']}' ({existing['shortname']})."
+                ),
+            }
+
+    try:
+        project = db.create_project(project_id, name, path, shortname)
+    except ValueError as e:
+        return {
+            "status": "error",
+            "message": str(e),
+        }
+    except IntegrityError:
+        # The pre-checks above are not atomic: a concurrent create_project
+        # call can pass them and still collide on the id/shortname/path
+        # unique constraints at commit time. Map that to a controlled
+        # conflict result instead of an unhandled internal error.
+        return {
+            "status": "error",
+            "message": (
+                f"Project '{shortname}' conflicts with an existing project "
+                "(id, shortname, or path already in use)."
+            ),
+        }
+
+    # Make this the active project so subsequent tool calls resolve context
+    # without requiring a separate switch_project() (cwd won't match remotely).
+    _server._active_project_id = project_id
+
+    from a_sdlc.core.init_files import render_init_files
+
+    init_files = render_init_files(name)
+
+    return {
+        "status": "created",
+        "message": f"Project '{name}' created with shortname '{shortname}'.",
+        "project": project,
+        "id_format_examples": {
+            "task": f"{shortname}-T00001",
+            "sprint": f"{shortname}-S0001",
+            "prd": f"{shortname}-P0001",
+        },
+        "init_files": init_files,
+        "init_instructions": (
+            "These files were NOT written on the server. Create each entry in "
+            "your local repository at its 'path' (relative to the project root; "
+            "'~'-prefixed paths are user-global). Skip any file that already "
+            "exists so local edits are preserved. If your CLI uses a context "
+            "file other than CLAUDE.md (e.g. GEMINI.md), rename accordingly."
+        ),
     }
 
 
