@@ -1,5 +1,11 @@
 """Tests for plugin system."""
 
+from pathlib import Path
+
+import pytest
+
+from a_sdlc.artifacts.base import Artifact, ArtifactType
+from a_sdlc.artifacts.local import LocalArtifactPlugin, remove_stale_markdown
 from a_sdlc.plugins.base import Task, TaskPriority, TaskStatus
 
 
@@ -162,5 +168,213 @@ def test_task_to_dict_with_new_fields() -> None:
     assert len(data["implementation_steps"]) == 1
     assert data["implementation_steps"][0]["title"] == "Step 1"
     assert data["implementation_steps"][0]["code_hint"] == "def foo():\n    pass"
+
+
+# ---------------------------------------------------------------------------
+# Artifact format plumbing (ArtifactType.format, stem ids, dual extensions)
+# ---------------------------------------------------------------------------
+
+HTML_TYPES = [
+    ArtifactType.CODEBASE_SUMMARY,
+    ArtifactType.ARCHITECTURE,
+    ArtifactType.DATA_MODEL,
+    ArtifactType.KEY_WORKFLOWS,
+    ArtifactType.DIRECTORY_STRUCTURE,
+]
+MD_TYPES = [ArtifactType.REQUIREMENTS, ArtifactType.CODE_QUALITY]
+
+
+def test_artifact_type_format_property() -> None:
+    """Scan artifact types are 'html'; requirements/code-quality stay 'md'."""
+    for artifact_type in HTML_TYPES:
+        assert artifact_type.format == "html"
+        assert artifact_type.to_filename() == f"{artifact_type.value}.html"
+    for artifact_type in MD_TYPES:
+        assert artifact_type.format == "md"
+        assert artifact_type.to_filename() == f"{artifact_type.value}.md"
+
+    # Spot-check the exact filenames from the acceptance criteria
+    assert ArtifactType.ARCHITECTURE.to_filename() == "architecture.html"
+    assert ArtifactType.REQUIREMENTS.to_filename() == "requirements.md"
+
+
+def test_from_filename_both_extensions_and_index_none() -> None:
+    """from_filename resolves .md, .html, and bare stems; index.html is None."""
+    assert ArtifactType.from_filename("data-model.html") is ArtifactType.DATA_MODEL
+    assert ArtifactType.from_filename("data-model.md") is ArtifactType.DATA_MODEL
+    assert ArtifactType.from_filename("data-model") is ArtifactType.DATA_MODEL
+    assert ArtifactType.from_filename("requirements.md") is ArtifactType.REQUIREMENTS
+    assert ArtifactType.from_filename("architecture.html") is ArtifactType.ARCHITECTURE
+
+    # index.html is the viewer shell, never an artifact
+    assert ArtifactType.from_filename("index.html") is None
+    assert ArtifactType.from_filename("unknown-thing.html") is None
+    assert ArtifactType.from_filename("random-notes.md") is None
+
+
+def test_stem_based_ids_reproducible(tmp_path: Path) -> None:
+    """Artifact ids are bare stems for both formats and stable across re-scans."""
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "architecture.html").write_text(
+        "<html><head><title>System Architecture</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    (artifacts_dir / "requirements.md").write_text("# Requirements\n", encoding="utf-8")
+
+    plugin = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+
+    first_ids = [a.id for a in plugin.list_artifacts()]
+    assert first_ids == ["architecture", "requirements"]
+
+    # Re-scan (rewrite) the html artifact; ids must not change
+    (artifacts_dir / "architecture.html").write_text(
+        "<html><head><title>System Architecture v2</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    second_ids = [a.id for a in plugin.list_artifacts()]
+    assert second_ids == first_ids
+
+    # from_file also produces bare stem ids and extracts HTML titles
+    html_artifact = Artifact.from_file(
+        str(artifacts_dir / "architecture.html"),
+        (artifacts_dir / "architecture.html").read_text(encoding="utf-8"),
+    )
+    assert html_artifact.id == "architecture"
+    assert html_artifact.artifact_type is ArtifactType.ARCHITECTURE
+    assert html_artifact.title == "System Architecture v2"
+
+    # Unknown .html files are rejected instead of coerced to CODEBASE_SUMMARY
+    with pytest.raises(ValueError):
+        Artifact.from_file("whatever/index.html", "<html></html>")
+
+
+def test_html_wins_when_both_exist_warns(tmp_path: Path) -> None:
+    """When both extensions exist for a scan type, .html wins with a warning."""
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "architecture.html").write_text(
+        "<html><head><title>HTML Architecture</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    (artifacts_dir / "architecture.md").write_text("# Legacy MD Architecture\n", encoding="utf-8")
+
+    plugin = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+
+    with pytest.warns(UserWarning, match="architecture.html"):
+        artifacts = plugin.list_artifacts()
+
+    assert len(artifacts) == 1
+    assert artifacts[0].id == "architecture"
+    assert "HTML Architecture" in artifacts[0].content
+
+
+def test_get_pending_publish_skips_html(tmp_path: Path) -> None:
+    """get_pending_publish excludes HTML artifacts (Confluence HTML deferred)."""
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "architecture.html").write_text(
+        "<html><head><title>Architecture</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    (artifacts_dir / "code-quality.md").write_text("# Code Quality\n", encoding="utf-8")
+
+    plugin = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+
+    pending_ids = [a.id for a in plugin.get_pending_publish()]
+    assert pending_ids == ["code-quality"]
+
+
+# ---------------------------------------------------------------------------
+# Stale markdown deletion (remove_stale_markdown) and index.html exclusion
+# ---------------------------------------------------------------------------
+
+SCAN_STEMS = [
+    "architecture",
+    "codebase-summary",
+    "data-model",
+    "directory-structure",
+    "key-workflows",
+]
+
+
+def test_stale_md_deletion_exact_names_only(tmp_path: Path) -> None:
+    """Only the 5 exact scan names are deleted; lookalikes/protected survive."""
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+
+    # All five scan artifacts: legacy .md plus the .html replacement
+    for stem in SCAN_STEMS:
+        (artifacts_dir / f"{stem}.md").write_text(f"# {stem}\n", encoding="utf-8")
+        (artifacts_dir / f"{stem}.html").write_text("<html></html>", encoding="utf-8")
+
+    # Sixth lookalike .md (even with an .html sibling) must survive
+    (artifacts_dir / "architecture-notes.md").write_text("# Notes\n", encoding="utf-8")
+    (artifacts_dir / "architecture-notes.html").write_text("<html></html>", encoding="utf-8")
+
+    # Protected markdown artifacts must never be touched
+    (artifacts_dir / "code-quality.md").write_text("# Code Quality\n", encoding="utf-8")
+    (artifacts_dir / "requirements.md").write_text("# Requirements\n", encoding="utf-8")
+
+    deleted = remove_stale_markdown(artifacts_dir)
+
+    assert sorted(deleted) == sorted(f"{stem}.md" for stem in SCAN_STEMS)
+    for stem in SCAN_STEMS:
+        assert not (artifacts_dir / f"{stem}.md").exists()
+        assert (artifacts_dir / f"{stem}.html").exists()  # replacements untouched
+    assert (artifacts_dir / "architecture-notes.md").exists()
+    assert (artifacts_dir / "code-quality.md").exists()
+    assert (artifacts_dir / "requirements.md").exists()
+
+
+def test_deletion_requires_html_sibling(tmp_path: Path) -> None:
+    """A legacy .md is kept when its .html replacement does not exist."""
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+
+    # md with html sibling → deleted; md without sibling → kept
+    (artifacts_dir / "architecture.md").write_text("# Architecture\n", encoding="utf-8")
+    (artifacts_dir / "architecture.html").write_text("<html></html>", encoding="utf-8")
+    (artifacts_dir / "data-model.md").write_text("# Data Model\n", encoding="utf-8")
+
+    deleted = remove_stale_markdown(artifacts_dir)
+
+    assert deleted == ["architecture.md"]
+    assert not (artifacts_dir / "architecture.md").exists()
+    assert (artifacts_dir / "data-model.md").exists()
+
+
+def test_deletion_defensive_on_degraded_states(tmp_path: Path) -> None:
+    """Missing directory or empty directory returns [] without raising."""
+    assert remove_stale_markdown(tmp_path / "does-not-exist") == []
+
+    empty_dir = tmp_path / "artifacts"
+    empty_dir.mkdir()
+    assert remove_stale_markdown(empty_dir) == []
+    # Also accepts a string path
+    assert remove_stale_markdown(str(empty_dir)) == []
+
+
+def test_index_html_excluded_from_ingestion(tmp_path: Path) -> None:
+    """index.html (viewer shell) is never ingested as an artifact."""
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "index.html").write_text(
+        "<html><head><title>Artifact Viewer</title></head></html>", encoding="utf-8"
+    )
+    (artifacts_dir / "architecture.html").write_text(
+        "<html><head><title>Architecture</title></head></html>", encoding="utf-8"
+    )
+
+    plugin = LocalArtifactPlugin({"artifacts_dir": str(artifacts_dir)})
+
+    ids = [a.id for a in plugin.list_artifacts()]
+    assert ids == ["architecture"]
+
+    # sync_from_local also skips the viewer shell
+    target = LocalArtifactPlugin({"artifacts_dir": str(tmp_path / "synced")})
+    synced = target.sync_from_local(str(artifacts_dir))
+    assert synced == 1
+    assert [a.id for a in target.list_artifacts()] == ["architecture"]
 
 

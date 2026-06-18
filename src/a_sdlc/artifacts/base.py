@@ -5,10 +5,12 @@ All artifact storage backends must implement the ArtifactPlugin interface
 to ensure consistent behavior across different storage mechanisms.
 """
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 
 
 class ArtifactType(Enum):
@@ -22,37 +24,47 @@ class ArtifactType(Enum):
     REQUIREMENTS = "requirements"
     CODE_QUALITY = "code-quality"
 
+    @property
+    def format(self) -> str:
+        """File format for this artifact type.
+
+        Scan artifacts are HTML; requirements and code-quality stay markdown.
+
+        Returns:
+            'html' or 'md'.
+        """
+        if self in (ArtifactType.REQUIREMENTS, ArtifactType.CODE_QUALITY):
+            return "md"
+        return "html"
+
     @classmethod
     def from_filename(cls, filename: str) -> "ArtifactType | None":
         """Get artifact type from filename.
 
         Args:
-            filename: Artifact filename (e.g., 'architecture.md').
+            filename: Artifact filename (e.g., 'architecture.html',
+                'requirements.md') or bare stem (e.g., 'architecture').
 
         Returns:
-            ArtifactType if recognized, None otherwise.
+            ArtifactType if recognized, None otherwise. 'index.html' is
+            never an artifact and always returns None.
         """
-        name_map = {
-            "codebase-summary": cls.CODEBASE_SUMMARY,
-            "architecture": cls.ARCHITECTURE,
-            "data-model": cls.DATA_MODEL,
-            "key-workflows": cls.KEY_WORKFLOWS,
-            "directory-structure": cls.DIRECTORY_STRUCTURE,
-            "requirements": cls.REQUIREMENTS,
-            "code-quality": cls.CODE_QUALITY,
-        }
-
-        # Handle both .md and without extension
-        base_name = filename.replace(".md", "")
-        return name_map.get(base_name)
+        stem = Path(filename).stem
+        if stem == "index":
+            return None
+        try:
+            return cls(stem)
+        except ValueError:
+            return None
 
     def to_filename(self) -> str:
         """Get filename for this artifact type.
 
         Returns:
-            Filename with .md extension.
+            Filename with the extension matching this type's format
+            (e.g., 'architecture.html', 'requirements.md').
         """
-        return f"{self.value}.md"
+        return f"{self.value}.{self.format}"
 
     def to_title(self) -> str:
         """Get human-readable title.
@@ -119,32 +131,48 @@ class Artifact:
         """Create artifact from file content.
 
         Args:
-            filepath: Path to artifact file.
-            content: Markdown content.
+            filepath: Path to artifact file (.md or .html).
+            content: File content (markdown or HTML).
 
         Returns:
             Artifact instance.
+
+        Raises:
+            ValueError: If an .html file does not map to a known artifact
+                type (unknown HTML files must be skipped, not coerced).
         """
         import os
-        from pathlib import Path
 
         path = Path(filepath)
         filename = path.name
         artifact_type = ArtifactType.from_filename(filename)
 
         if artifact_type is None:
-            # Default to codebase summary for unknown types
+            if path.suffix == ".html":
+                raise ValueError(f"Unknown HTML artifact file: {filename}")
+            # Default to codebase summary for unknown markdown types
             artifact_type = ArtifactType.CODEBASE_SUMMARY
 
-        # Extract title from first heading or use type
+        # Extract title from content or fall back to type title
         title = artifact_type.to_title()
-        for line in content.split("\n"):
-            if line.startswith("# "):
-                title = line[2:].strip()
-                break
+        if path.suffix == ".html":
+            match = re.search(r"<title[^>]*>(.*?)</title>", content, re.IGNORECASE | re.DOTALL)
+            if not match:
+                match = re.search(r"<h1[^>]*>(.*?)</h1>", content, re.IGNORECASE | re.DOTALL)
+            if match:
+                # Strip any nested tags and collapse whitespace
+                extracted = re.sub(r"<[^>]+>", "", match.group(1))
+                extracted = " ".join(extracted.split())
+                if extracted:
+                    title = extracted
+        else:
+            for line in content.split("\n"):
+                if line.startswith("# "):
+                    title = line[2:].strip()
+                    break
 
         return cls(
-            id=filename.replace(".md", ""),
+            id=path.stem,
             artifact_type=artifact_type,
             title=title,
             content=content,
@@ -250,16 +278,20 @@ class ArtifactPlugin(ABC):
         Returns:
             Number of artifacts synced.
         """
-        from pathlib import Path
-
         artifacts_dir = Path(local_dir)
         if not artifacts_dir.exists():
             return 0
 
         synced = 0
-        for md_file in artifacts_dir.glob("*.md"):
-            content = md_file.read_text(encoding="utf-8")
-            artifact = Artifact.from_file(str(md_file), content)
+        files = sorted(artifacts_dir.glob("*.md")) + sorted(artifacts_dir.glob("*.html"))
+        for artifact_file in files:
+            # index.html is the artifact viewer shell, not an artifact;
+            # unknown HTML files are skipped rather than coerced to a type.
+            is_unknown = ArtifactType.from_filename(artifact_file.name) is None
+            if artifact_file.suffix == ".html" and is_unknown:
+                continue
+            content = artifact_file.read_text(encoding="utf-8")
+            artifact = Artifact.from_file(str(artifact_file), content)
             self.store_artifact(artifact)
             synced += 1
 

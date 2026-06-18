@@ -100,8 +100,18 @@ context = mcp__asdlc__get_context()
 If `context.artifacts.scan_status` is `"complete"` or `"partial"` AND the task has a `component`:
 
 ```
-Read: .sdlc/artifacts/architecture.md
+Read: .sdlc/artifacts/architecture.html (fallback: architecture.md)
 ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 Extract the section relevant to the task's component (its description, key files, dependencies) and display it alongside the task details.
 
@@ -117,7 +127,7 @@ Sprint: SPRINT-01
 Description:
 Add JWT-based authentication to the API endpoints.
 
-Component Context (from architecture.md):
+Component Context (from the architecture artifact):
   auth-service: Handles authentication and authorization
   Key files: src/auth/handlers.py, src/auth/models.py
   Dependencies: database, config-service
@@ -326,7 +336,8 @@ if task["prd_id"]:
 codebase_section = ""
 context = mcp__asdlc__get_context()
 if context["artifacts"]["scan_status"] in ("complete", "partial"):
-    codebase_summary = Read(".sdlc/artifacts/codebase-summary.md")
+    # html preferred, md fallback — see "Reading scan artifacts" above
+    codebase_summary = Read(".sdlc/artifacts/codebase-summary.html")  # or codebase-summary.md
     # Extract: tech stack, naming conventions, patterns relevant to task component
     codebase_section = codebase_summary
 

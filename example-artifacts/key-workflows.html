@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Key Workflows — Example Project</title>
+<style>
+  :root{--ink:#1a1a1a;--muted:#6b7280;--line:#d1d5db;--accent:#2563eb;--bg-soft:#f6f8fa}
+  *{box-sizing:border-box}
+  body{margin:0 auto;max-width:60rem;padding:0 1.5rem 4rem;font:16px/1.6 system-ui,Segoe UI,sans-serif;color:var(--ink);background:#fff}
+  h1{font-size:1.6rem;margin:.8rem 0 .2rem}
+  h2{font-size:1.25rem;margin:0}
+  h3{font-size:1.05rem;margin:1.2rem 0 .4rem}
+  p{margin:.6rem 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header nav{display:flex;flex-wrap:wrap;gap:.25rem;padding:.6rem 0;border-bottom:1px solid var(--line);font-size:.875rem}
+  header nav a{padding:.25rem .6rem;border-radius:.375rem}
+  header nav a[aria-current]{background:var(--accent);color:#fff}
+  header nav a:not([aria-current]):hover{background:var(--bg-soft);text-decoration:none}
+  nav[aria-label="Contents"]{margin:1rem 0;padding:.75rem 1rem;background:var(--bg-soft);border:1px solid var(--line);border-radius:.5rem;font-size:.9rem}
+  nav[aria-label="Contents"] ul{margin:0;padding-left:1.2rem}
+  section{margin:1.25rem 0}
+  details{border:1px solid var(--line);border-radius:.5rem;padding:0 1rem}
+  details[open]{padding-bottom:.75rem}
+  summary{cursor:pointer;padding:.7rem 0;list-style:none;display:flex;align-items:baseline;gap:.6rem}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"\25B8";flex:none;color:var(--muted);font-size:1.25rem;line-height:1}
+  details[open]>summary::before{content:"\25BE"}
+  summary h2{display:inline}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.75rem 0}
+  th,td{border:1px solid var(--line);padding:.4rem .6rem;text-align:left;vertical-align:top}
+  th{background:var(--bg-soft)}
+  pre{background:var(--bg-soft);border:1px solid var(--line);border-radius:.5rem;padding:.75rem 1rem;overflow-x:auto;font-size:.85rem;line-height:1.45}
+  code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:var(--bg-soft);padding:.1em .35em;border-radius:.25rem}
+  pre code{background:none;padding:0}
+  figure.diagram{margin:1rem 0;padding:1rem;border:1px solid var(--line);border-radius:.5rem;overflow-x:auto}
+  figure.diagram figcaption{margin-top:.75rem;font-size:.85rem;color:var(--muted);text-align:center}
+  .row{display:flex;align-items:stretch;justify-content:center;gap:.5rem;flex-wrap:wrap;margin:.25rem 0}
+  .box{border:1.5px solid var(--ink);border-radius:.375rem;padding:.45rem .9rem;background:#fff;font-size:.85rem;text-align:center;display:flex;align-items:center;justify-content:center}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:1.1rem;padding:0 .25rem}
+  .arrow.down{width:100%;padding:.1rem 0}
+  .group{border:1.5px dashed var(--muted);border-radius:.5rem;padding:1.4rem .75rem .75rem;position:relative;display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center}
+  .group-label{position:absolute;top:.35rem;left:.75rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <nav aria-label="Artifacts">
+    <a href="index.html">Index</a>
+    <a href="codebase-summary.html">Summary</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="data-model.html">Data Model</a>
+    <a href="key-workflows.html" aria-current="page">Workflows</a>
+    <a href="directory-structure.html">Directory</a>
+  </nav>
+  <h1>Key Workflows</h1>
+</header>
+<nav aria-label="Contents">
+  <ul>
+    <li><a href="#workflows">Workflows</a></li>
+    <li><a href="#utility-workflows">Utility Workflows</a></li>
+  </ul>
+</nav>
+<main>
+<section id="workflows">
+<details open>
+<summary><h2>Workflows</h2></summary>
+<p>The following key workflows were identified based on code analysis, focusing on the LangGraph agent's adventure generation process. The codebase contains 20 distinct workflows due to its focused scope on generating Dungeons and Dragons adventures through a multi-agent LangGraph system. Workflows 1&#8211;15 cover the agent pipeline; the five utility workflows (file writing, format conversion, and cloud upload) are summarized in <a href="#utility-workflows">Utility Workflows</a>.</p>
+<h3>1. Adventure Generation Orchestration</h3>
+<p>Orchestrates the entire adventure generation process, chaining various agents to produce a complete adventure document. Entry point: <code>workflow.ainvoke</code> in <code>src/agent/graph.py</code> receives an <code>InputState</code> (adventure description, difficulty, chapters) and each agent updates the shared <code>OutlineState</code> in turn.</p>
+<figure class="diagram">
+  <div class="row"><div class="box">PromptImproverAgent.run</div></div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row"><div class="box">EditorSelectorAgent.run</div></div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row"><div class="box">InterviewAgent.run_interview</div></div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row"><div class="box">OutlinerAgent.run_initial_outliner</div></div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row"><div class="box">TableOfContentAgent.run_writing_table_of_content</div></div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row"><div class="box">SectionWriterAgent.run_writing_subsection_text_parallel</div></div>
+  <div class="arrow down">&#8595;</div>
+  <div class="row"><div class="box">PublisherAgent.run</div></div>
+  <figcaption>Agent pipeline driven by the StateGraph in src/agent/graph.py</figcaption>
+</figure>
+<p><strong>Main components:</strong> <code>graph.py</code>, <code>state.py</code>, <code>prompt_improver.py</code>, <code>editor_selector.py</code>, <code>interview_graph.py</code>, <code>outliner.py</code>, <code>table_of_content_agent.py</code>, <code>section_writer_agent.py</code>, <code>publisher_agent.py</code>. <strong>Relevance:</strong> primary entry point (LangGraph workflow definition), multi-component orchestration, core domain focus.</p>
+<h3>2. Prompt Improvement</h3>
+<p>Refines an initial adventure idea into a more detailed and actionable prompt for subsequent generation steps.</p>
+<p><strong>Main components:</strong> <code>prompt_improver.py</code>, <code>state.py</code>, <code>nodes.py</code>.</p>
+<pre>graph.py
+  &#8594; PromptImproverAgent.run: receives InputState
+      &#8594; PromptImproverAgent.execute (self.prompt | self.model): invokes LLM with initial idea
+      &#8592; returns improved prompt string
+  &#8592; updates OutlineState.improved_prompt</pre>
+<h3>3. Editor Selection and Subject Survey</h3>
+<p>Identifies related subjects for an improved prompt and generates personas for "editors" who will participate in the interview process. Critical external integration: <code>WikipediaRetriever</code>.</p>
+<p><strong>Main components:</strong> <code>editor_selector.py</code>, <code>state.py</code>, <code>nodes.py</code>, <code>tools.py</code>.</p>
+<pre>graph.py
+  &#8594; EditorSelectorAgent.run: receives OutlineState with improved_prompt
+      &#8594; survey_subjects (self.generate_idea): generates related topics using LLM
+      &#8594; survey_subjects (WikipediaRetriever.abatch): retrieves documents from Wikipedia
+      &#8594; generate_editor (model.with_structured_output(Perspectives)): generates editor personas
+      &#8592; returns a list of Editor objects
+  &#8592; updates OutlineState.editors</pre>
+<h3>4. Interview Question Generation</h3>
+<p>Generates interview questions from the <code>InterviewQuestionAgent</code> based on the current interview state and editor persona.</p>
+<p><strong>Main components:</strong> <code>interview_graph.py</code>, <code>state.py</code>, <code>nodes.py</code>.</p>
+<pre>InterviewAgent.run_interview
+  &#8594; InterviewQuestionAgent.generate_question: receives InterviewState
+      &#8594; self.prompt | self.model: invokes LLM to generate a question
+      &#8592; returns an AIMessage containing the question
+  &#8592; updates InterviewState with the new message</pre>
+<h3>5. Interview Answer Generation with Citations</h3>
+<p>Generates answers to interview questions, potentially using external search tools, and includes citations for the information. Critical external integration: <code>TavilySearch</code>.</p>
+<p><strong>Main components:</strong> <code>interview_graph.py</code>, <code>state.py</code>, <code>nodes.py</code>, <code>tools.py</code>.</p>
+<pre>InterviewAgent.run_interview
+  &#8594; InterviewAnswerAgent.run: receives InterviewState with a question
+      &#8594; gen_queries_chain: invokes LLM to generate search queries
+      &#8594; discuss_engine (TavilySearch): executes search queries
+      &#8594; gen_answer_chain (model.with_structured_output(AnswerWithCitations)): generates an answer with citations
+      &#8592; returns an AIMessage containing the answer and cited URLs
+  &#8592; updates InterviewState with the new message</pre>
+<h3>6. Interview Summary Generation</h3>
+<p>Summarizes the entire interview log for a specific editor, extracting key information.</p>
+<p><strong>Main components:</strong> <code>interview_graph.py</code>, <code>state.py</code>, <code>nodes.py</code>.</p>
+<pre>graph.py
+  &#8594; InterviewAgent.run_interview: after all interviews are complete
+      &#8594; InterviewSummaryAgent.generate_summary (self.prompt | self.model): invokes LLM with the full interview log
+      &#8592; returns a summary string
+  &#8592; updates OutlineState.interview_summary</pre>
+<h3>7. Initial Adventure Outline Drafting</h3>
+<p>Generates the high-level structure of the adventure, including chapters and their synopses, based on the improved prompt and interview summaries.</p>
+<p><strong>Main components:</strong> <code>outliner.py</code>, <code>state.py</code>, <code>outline_schema.py</code>, <code>nodes.py</code>, <code>writer_agent.py</code>.</p>
+<pre>graph.py
+  &#8594; OutlinerAgent.run_initial_outliner: receives OutlineState
+      &#8594; draft_outline (model.with_structured_output(AdventureOutline)): generates AdventureOutline
+      &#8594; run_writing_outline_text (writer_agent.run_writing_text): converts the outline to markdown
+      &#8592; returns the structured outline and its markdown representation
+  &#8592; updates OutlineState.outline_data and OutlineState.outline_text</pre>
+<h3>8. Table of Content Generation</h3>
+<p>Generates a detailed table of contents, including chapters, characters, and items, based on the initial adventure outline and interview summaries.</p>
+<p><strong>Main components:</strong> <code>table_of_content_agent.py</code>, <code>state.py</code>, <code>section_schema.py</code>, <code>nodes.py</code>.</p>
+<pre>graph.py
+  &#8594; TableOfContentAgent.run_writing_table_of_content: receives OutlineState
+      &#8594; run_writing_table_of_content_detail (model.with_structured_output(TableOfContent)): generates TableOfContent
+      &#8592; returns the structured table of contents
+  &#8592; updates OutlineState.table_of_contents</pre>
+<h3>9. Section Outline Commenting</h3>
+<p>Reviews a chapter outline and provides comments or recommendations for improvement.</p>
+<p><strong>Main components:</strong> <code>section_writer_agent.py</code>, <code>state.py</code>, <code>nodes.py</code>.</p>
+<pre>SectionWriterAgent.run_writing_subsection_text_parallel
+  &#8594; SectionOutlineCommenterAgent.run_comment_section_outline: receives SectionImproverState with a chapter outline
+      &#8594; self.prompt | self.model: invokes LLM to generate comments on the outline
+      &#8592; returns a list of comment strings
+  &#8592; updates SectionImproverState.comment</pre>
+<h3>10. Section Outline Improvement</h3>
+<p>Takes a chapter outline and comments, then generates an improved version of the outline.</p>
+<p><strong>Main components:</strong> <code>section_writer_agent.py</code>, <code>state.py</code>, <code>section_schema.py</code>, <code>nodes.py</code>.</p>
+<pre>SectionWriterAgent.run_writing_subsection_text_parallel
+  &#8594; SectionImproverAgent.run_improving_section_outline: receives SectionImproverState with outline and comments
+      &#8594; self.prompt | self.model.with_structured_output(Chapter): generates an improved Chapter outline
+      &#8592; returns the improved Chapter object
+  &#8592; updates SectionImproverState with the improved outline</pre>
+<h3>11. Subsection Text Writing</h3>
+<p>Generates the detailed narrative content for a specific subsection of a chapter.</p>
+<p><strong>Main components:</strong> <code>section_writer_agent.py</code>, <code>state.py</code>, <code>nodes.py</code>, <code>writer_agent.py</code>.</p>
+<pre>SectionWriterAgent.run_writing_subsection_text_parallel
+  &#8594; SubSectionWriterAgent.run_writing_subsection_text: receives SectionTextState with subsection details
+      &#8594; writer_agent.run_writing_text (self.prompt | self.model): invokes LLM to generate subsection text
+      &#8592; returns the generated text
+  &#8592; updates SectionTextState with the content</pre>
+<h3>12. Subsection Text Commenting</h3>
+<p>Reviews the generated text for a subsection and provides comments or recommendations for improvement.</p>
+<p><strong>Main components:</strong> <code>section_writer_agent.py</code>, <code>state.py</code>, <code>nodes.py</code>.</p>
+<pre>SectionWriterAgent.run_writing_subsection_text_parallel
+  &#8594; SubSectionCommenterAgent.run_comment_subsection_text: receives SectionTextState with subsection text
+      &#8594; self.prompt | self.model: invokes LLM to generate comments on the text
+      &#8592; returns a list of comment strings
+  &#8592; updates SectionTextState.comment</pre>
+<h3>13. Statblock Content Writing</h3>
+<p>Generates the detailed statblock content for a character (monster or NPC).</p>
+<p><strong>Main components:</strong> <code>section_writer_agent.py</code>, <code>statblock_schema.py</code>, <code>nodes.py</code>, <code>writer_agent.py</code>.</p>
+<pre>SectionWriterAgent.run_writing_subsection_text_parallel
+  &#8594; StatblockWriterAgent.run_writing_statblock_text: receives Character object and difficulty
+      &#8594; writer_agent.run_writing_text: invokes LLM using MarkdownExampleKey.STATBLOCK
+      &#8592; returns the generated statblock text
+  &#8592; statblock text returned to the caller</pre>
+<h3>14. Item Content Writing</h3>
+<p>Generates the detailed description and features for an item.</p>
+<p><strong>Main components:</strong> <code>section_writer_agent.py</code>, <code>item_schema.py</code>, <code>nodes.py</code>, <code>writer_agent.py</code>.</p>
+<pre>SectionWriterAgent.run_writing_subsection_text_parallel
+  &#8594; ItemWriterAgent.run_writing_item_text: receives item name and description
+      &#8594; writer_agent.run_writing_text: invokes LLM using MarkdownExampleKey.ITEM
+      &#8592; returns the generated item text
+  &#8592; item text returned to the caller</pre>
+<h3>15. Full Document Content Assembly</h3>
+<p>Gathers all generated sections, statblocks, and items, and assembles them into a single, coherent markdown document.</p>
+<p><strong>Main components:</strong> <code>publisher_agent.py</code>, <code>state.py</code>.</p>
+<pre>graph.py
+  &#8594; PublisherAgent.run: receives OutlineState containing all generated content
+      &#8594; generate_full_content: iterates through section_texts, statblocks, and items
+      &#8594; concatenates all content into a single markdown string
+      &#8592; returns the complete markdown layout string
+  &#8592; passes the layout string to write_report_by_formats</pre>
+</details>
+</section>
+<section id="utility-workflows">
+<details open>
+<summary><h2>Utility Workflows</h2></summary>
+<p>Five utility workflows in <code>src/agent/utils/file_formats.py</code> handle major data operations for any calling agent (typically the <code>PublisherAgent</code>):</p>
+<table>
+  <thead>
+    <tr><th scope="col">Workflow</th><th scope="col">Entry Point</th><th scope="col">Flow</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>16. Markdown File Writing</td><td><code>write_text_to_md</code></td><td>Ensures directory exists (<code>os.path.dirname</code>), asynchronously writes text to a <code>.md</code> file via <code>aiofiles.open</code>, returns the file path.</td></tr>
+    <tr><td>17. JSON File Writing</td><td><code>write_json</code></td><td>Ensures directory exists, serializes a dictionary with <code>json.dumps</code>, asynchronously writes the JSON string to a <code>.json</code> file, returns the file path.</td></tr>
+    <tr><td>18. Markdown to PDF Conversion</td><td><code>write_md_to_pdf</code></td><td>Converts Markdown to HTML via <code>mistune.html</code>, converts HTML to PDF via an external tool, returns the encoded file path of the PDF.</td></tr>
+    <tr><td>19. Markdown to Word Conversion</td><td><code>write_md_to_word</code></td><td>Converts Markdown to HTML via <code>mistune.html</code>, builds a DOCX with <code>Document()</code>, saves it with <code>doc.save</code>, returns the encoded file path.</td></tr>
+    <tr><td>20. Markdown to Azure Blob Upload</td><td><code>write_md_to_azure_blob</code></td><td>Creates a <code>BlobServiceClient</code> from the connection string, ensures the container exists, uploads the text via <code>blob_client.upload_blob</code>, returns the blob URL. Critical external integration: Azure Blob Storage.</td></tr>
+  </tbody>
+</table>
+</details>
+</section>
+</main>
+<footer>Generated by a-sdlc scan · 2026-06-10</footer>
+</body>
+</html>

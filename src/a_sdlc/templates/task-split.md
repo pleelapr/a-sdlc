@@ -27,13 +27,23 @@ Use `mcp__asdlc__get_prd()` to get the PRD requirements and parse:
 
 ### 2. Load Architecture Context
 
-Read codebase artifacts to understand the project structure:
+Read codebase artifacts to understand the project structure (resolve each extension per the rule below):
 
 ```
-Read: .sdlc/artifacts/architecture.md         → Component boundaries and dependencies
-Read: .sdlc/artifacts/directory-structure.md   → File locations and organization
-Read: .sdlc/artifacts/data-model.md            → Data entities and relationships
+Read: .sdlc/artifacts/architecture.html (fallback: architecture.md)                → Component boundaries and dependencies
+Read: .sdlc/artifacts/directory-structure.html (fallback: directory-structure.md)   → File locations and organization
+Read: .sdlc/artifacts/data-model.html (fallback: data-model.md)                     → Data entities and relationships
 ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 Use these to identify:
 - Component boundaries

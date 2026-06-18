@@ -86,15 +86,25 @@ Extract sections from markdown content:
 
 **1. Read Available Artifacts**
 
-Check and read artifacts from `.sdlc/artifacts/`:
+Check and read artifacts from `.sdlc/artifacts/` (resolve each extension per the rule below):
 
 ```
-Read: .sdlc/artifacts/architecture.md
-Read: .sdlc/artifacts/codebase-summary.md
-Read: .sdlc/artifacts/directory-structure.md
-Read: .sdlc/artifacts/data-model.md
-Read: .sdlc/artifacts/key-workflows.md
+Read: .sdlc/artifacts/architecture.html (fallback: architecture.md)
+Read: .sdlc/artifacts/codebase-summary.html (fallback: codebase-summary.md)
+Read: .sdlc/artifacts/directory-structure.html (fallback: directory-structure.md)
+Read: .sdlc/artifacts/data-model.html (fallback: data-model.md)
+Read: .sdlc/artifacts/key-workflows.html (fallback: key-workflows.md)
 ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 If artifacts are missing or stale, note for recommendation.
 

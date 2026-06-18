@@ -88,9 +88,19 @@ context = mcp__asdlc__get_context()
 
 **If project exists**, gather grounding context:
 - Check `context.artifacts.scan_status`:
-  - If `"complete"` or `"partial"`: Read `.sdlc/artifacts/codebase-summary.md` and `.sdlc/artifacts/architecture.md` for grounding
+  - If `"complete"` or `"partial"`: Read the `codebase-summary` and `architecture` artifacts for grounding (resolve extensions per the rule below)
   - If `"not_scanned"`: Note this — questions will be more open-ended without codebase context
 - Check existing PRDs: `mcp__asdlc__list_prds()` — avoid duplicating existing work
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 **Then acknowledge the user's initial thought and transition to Phase 1.**
 

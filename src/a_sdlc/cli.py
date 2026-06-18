@@ -2676,9 +2676,7 @@ def artifacts_push(artifact_name: str | None, force: bool, dry_run: bool) -> Non
     # Filter by name if specified
     if artifact_name:
         local_artifacts = [
-            a
-            for a in local_artifacts
-            if a.id == artifact_name or a.id == artifact_name.replace(".md", "")
+            a for a in local_artifacts if a.id in (artifact_name, Path(artifact_name).stem)
         ]
         if not local_artifacts:
             console.print(f"[red]Artifact not found: {artifact_name}[/red]")
@@ -2695,6 +2693,19 @@ def artifacts_push(artifact_name: str | None, force: bool, dry_run: bool) -> Non
             to_publish = local_artifacts  # Republish specific artifact
     else:
         to_publish = local_artifacts
+
+    # HTML scan artifacts cannot be published to Confluence yet (DD-9)
+    html_artifacts = [a for a in to_publish if a.artifact_type.format == "html"]
+    if html_artifacts:
+        console.print(
+            "[yellow]scan artifacts are HTML — Confluence publish for HTML is deferred "
+            "(see follow-up PRD)[/yellow]"
+        )
+        to_publish = [a for a in to_publish if a.artifact_type.format != "html"]
+
+    if not to_publish:
+        console.print("[yellow]Nothing to publish.[/yellow]")
+        return
 
     if dry_run:
         console.print("[bold]Dry run - would publish:[/bold]")
@@ -2792,9 +2803,7 @@ def artifacts_pull(artifact_name: str | None, force: bool, dry_run: bool) -> Non
     # Filter by name if specified
     if artifact_name:
         remote_artifacts = [
-            a
-            for a in remote_artifacts
-            if a.id == artifact_name or a.id == artifact_name.replace(".md", "")
+            a for a in remote_artifacts if a.id in (artifact_name, Path(artifact_name).stem)
         ]
         if not remote_artifacts:
             console.print(f"[red]Artifact not found in Confluence: {artifact_name}[/red]")
@@ -2848,6 +2857,116 @@ def artifacts_pull(artifact_name: str | None, force: bool, dry_run: bool) -> Non
 
     console.print()
     console.print(f"[bold]Done:[/bold] {success} pulled, {failed} failed")
+
+
+@artifacts.command("scaffold")
+@click.option(
+    "--dir",
+    "directory",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Target directory (default: .sdlc/artifacts)",
+)
+@click.option(
+    "--project-name",
+    default=None,
+    help="Project name for page titles (default: repository directory name)",
+)
+def artifacts_scaffold(directory: Path | None, project_name: str | None) -> None:
+    """Write the six HTML artifact skeleton files.
+
+    Emits the shared skeleton (head, inlined style, nav strip, footer) for
+    the five scan artifacts plus index.html. The generating agent fills only
+    the <main> slot of each page.
+
+    \b
+    Exit codes:
+      0  skeletons written
+      2  usage or I/O error
+    """
+    from a_sdlc.artifacts import validator as artifact_validator
+
+    dest = directory or Path.cwd() / ".sdlc" / "artifacts"
+    name = project_name or Path.cwd().resolve().name
+    try:
+        written = artifact_validator.scaffold(dest, name)
+    except OSError as e:
+        console.print(f"[red]Failed to write skeletons: {e}[/red]")
+        sys.exit(2)
+    for path in written:
+        console.print(f"  [green]OK[/green] {path.name}")
+    console.print(f"[bold]Scaffolded {len(written)} files in {dest}[/bold]")
+
+
+@artifacts.command("validate")
+@click.option(
+    "--dir",
+    "directory",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Artifacts directory (default: .sdlc/artifacts)",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit machine-readable JSON results to stdout",
+)
+def artifacts_validate(directory: Path | None, as_json: bool) -> None:
+    """Validate HTML artifacts against the generation contract.
+
+    Runs the blocking validation gate (parse integrity, structure contract,
+    TOC anchors, forbidden content, <main> allowlist, escaping, semantic
+    emptiness, accessibility, size budget). Markdown artifacts and unknown
+    files are skipped, never failed. Always writes evidence to
+    .sdlc/.cache/validation.json (relative to the current directory).
+
+    \b
+    Exit codes:
+      0  all validated files passed
+      1  validation errors found
+      2  usage or I/O error (e.g. missing directory)
+    """
+    from a_sdlc.artifacts import validator as artifact_validator
+
+    target = directory or Path.cwd() / ".sdlc" / "artifacts"
+    if not target.is_dir():
+        console.print(f"[red]Artifacts directory not found: {target}[/red]")
+        sys.exit(2)
+
+    try:
+        results, skipped = artifact_validator.validate_directory(target)
+        evidence_path = Path.cwd() / ".sdlc" / ".cache" / "validation.json"
+        payload = artifact_validator.write_evidence(target, results, skipped, evidence_path)
+    except OSError as e:
+        console.print(f"[red]I/O error during validation: {e}[/red]")
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload["results"], indent=2))
+    else:
+        for result in results:
+            if result.passed:
+                console.print(f"  [green]OK[/green] {result.file}")
+            else:
+                console.print(f"  [red]X[/red] {result.file}")
+            for error in result.errors:
+                console.print(f"      [red]{error}[/red]")
+            for warning in result.warnings:
+                console.print(f"      [yellow]{warning}[/yellow]")
+        for name in skipped:
+            console.print(f"  [dim]- {name} (skipped)[/dim]")
+        if not results:
+            console.print("[yellow]No HTML artifacts found to validate.[/yellow]")
+        error_count = sum(len(r.errors) for r in results)
+        status = "[green]PASS[/green]" if payload["passed"] else "[red]FAIL[/red]"
+        console.print(
+            f"[bold]{status}[/bold] — {len(results)} file(s) checked, "
+            f"{error_count} error(s); evidence: {evidence_path}"
+        )
+
+    if not payload["passed"]:
+        sys.exit(1)
 
 
 # =============================================================================

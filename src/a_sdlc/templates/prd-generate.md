@@ -58,9 +58,19 @@ context = mcp__asdlc__get_context()
 If `context.artifacts.scan_status` is `"complete"` or `"partial"`:
 
 ```
-Read: .sdlc/artifacts/codebase-summary.md    → Tech stack, conventions
-Read: .sdlc/artifacts/architecture.md         → Components and patterns
+Read: .sdlc/artifacts/codebase-summary.html (fallback: codebase-summary.md)    → Tech stack, conventions
+Read: .sdlc/artifacts/architecture.html (fallback: architecture.md)            → Components and patterns
 ```
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 Use this context to:
 - Reference real component names in questions (e.g., "This will affect `AuthService` — what changes to the login flow?")

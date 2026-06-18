@@ -1,0 +1,22 @@
+{
+  "architecture.md": {
+    "bytes": 36085,
+    "sha256": "f7f915b9f59810c34fc7cb814d6b6230770be3f83786104292f04dd7770604af"
+  },
+  "codebase-summary.md": {
+    "bytes": 10175,
+    "sha256": "501acd8fb4c2f22ab1077fdcc3db1693abded6c7f1b747b2e2a067aac7707565"
+  },
+  "data-model.md": {
+    "bytes": 9576,
+    "sha256": "cad7f9a01408f4c0821666614f9685e80d5c22a275d50bf62b4e2f8e93835520"
+  },
+  "directory-structure.md": {
+    "bytes": 1661,
+    "sha256": "1b36d673d84220d7ddd40f86a7c3b89a7c16eb80fe9f6a9a680c4a9d6ff724d2"
+  },
+  "key-workflows.md": {
+    "bytes": 22424,
+    "sha256": "6cc5e5d49b38dcc57ce81bde802f8bf466fed2ad490a6c5b9c9bc0c7855ae13b"
+  }
+}

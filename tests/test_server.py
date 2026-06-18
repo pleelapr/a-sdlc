@@ -116,6 +116,111 @@ class TestGetContextArtifacts:
         assert "directory-structure" in result["artifacts"]["available"]
         assert "key-workflows" in result["artifacts"]["available"]
 
+    ARTIFACT_NAMES = [
+        "architecture",
+        "codebase-summary",
+        "data-model",
+        "directory-structure",
+        "key-workflows",
+    ]
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_detection_md_only(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """Legacy md-only project is detected as fully scanned."""
+        from a_sdlc.server import get_context
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_mocks(mock_db, str(mock_project_dir))
+
+        artifacts_dir = mock_project_dir / ".sdlc" / "artifacts"
+        artifacts_dir.mkdir(parents=True)
+        for name in self.ARTIFACT_NAMES:
+            (artifacts_dir / f"{name}.md").write_text(f"# {name}", encoding="utf-8")
+
+        result = get_context()
+
+        assert result["status"] == "ok"
+        assert result["artifacts"]["scan_status"] == "complete"
+        assert sorted(result["artifacts"]["available"]) == self.ARTIFACT_NAMES
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_detection_html_only(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """HTML-only project is detected as fully scanned."""
+        from a_sdlc.server import get_context
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_mocks(mock_db, str(mock_project_dir))
+
+        artifacts_dir = mock_project_dir / ".sdlc" / "artifacts"
+        artifacts_dir.mkdir(parents=True)
+        for name in self.ARTIFACT_NAMES:
+            (artifacts_dir / f"{name}.html").write_text(
+                f"<html><head><title>{name}</title></head></html>", encoding="utf-8"
+            )
+
+        result = get_context()
+
+        assert result["status"] == "ok"
+        assert result["artifacts"]["scan_status"] == "complete"
+        assert sorted(result["artifacts"]["available"]) == self.ARTIFACT_NAMES
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_detection_mixed(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """Mixed html/md project is detected; both-extension names count once."""
+        from a_sdlc.server import get_context
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_mocks(mock_db, str(mock_project_dir))
+
+        artifacts_dir = mock_project_dir / ".sdlc" / "artifacts"
+        artifacts_dir.mkdir(parents=True)
+        # Two html, two md, one with both extensions
+        (artifacts_dir / "architecture.html").write_text("<html></html>", encoding="utf-8")
+        (artifacts_dir / "codebase-summary.html").write_text("<html></html>", encoding="utf-8")
+        (artifacts_dir / "data-model.md").write_text("# Data Model", encoding="utf-8")
+        (artifacts_dir / "directory-structure.md").write_text("# Dirs", encoding="utf-8")
+        (artifacts_dir / "key-workflows.html").write_text("<html></html>", encoding="utf-8")
+        (artifacts_dir / "key-workflows.md").write_text("# Workflows", encoding="utf-8")
+        # Viewer shell must not affect detection
+        (artifacts_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+
+        result = get_context()
+
+        assert result["status"] == "ok"
+        assert result["artifacts"]["scan_status"] == "complete"
+        assert sorted(result["artifacts"]["available"]) == self.ARTIFACT_NAMES
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_detection_mixed_partial(self, mock_getcwd, mock_get_db, mock_project_dir):
+        """Mixed extensions with missing names still report 'partial'."""
+        from a_sdlc.server import get_context
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_mocks(mock_db, str(mock_project_dir))
+
+        artifacts_dir = mock_project_dir / ".sdlc" / "artifacts"
+        artifacts_dir.mkdir(parents=True)
+        (artifacts_dir / "architecture.html").write_text("<html></html>", encoding="utf-8")
+        (artifacts_dir / "data-model.md").write_text("# Data Model", encoding="utf-8")
+
+        result = get_context()
+
+        assert result["status"] == "ok"
+        assert result["artifacts"]["scan_status"] == "partial"
+        assert sorted(result["artifacts"]["available"]) == ["architecture", "data-model"]
+
 
 # =============================================================================
 # get_context — config.yaml auto-creation

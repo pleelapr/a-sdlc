@@ -18,7 +18,8 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,10 +50,27 @@ from a_sdlc.core.storage_config import StorageConfig
 # Schema version matching database.py
 SCHEMA_VERSION = 15
 
+_utcnow_lock = threading.Lock()
+_last_utcnow: datetime | None = None
+
 
 def _utcnow() -> datetime:
-    """Return the current UTC datetime."""
-    return datetime.now(timezone.utc)
+    """Return the current UTC datetime, strictly monotonic per process.
+
+    Wall-clock granularity can be coarse (notably on Windows), so two calls
+    made in quick succession may otherwise return identical values. That makes
+    ``ORDER BY last_accessed`` ambiguous and access/creation ordering
+    non-deterministic. Bumping each result to be strictly greater than the
+    previous one keeps timestamps wall-clock accurate while guaranteeing a
+    stable, correct ordering for rows written back-to-back.
+    """
+    global _last_utcnow
+    with _utcnow_lock:
+        now = datetime.now(timezone.utc)
+        if _last_utcnow is not None and now <= _last_utcnow:
+            now = _last_utcnow + timedelta(microseconds=1)
+        _last_utcnow = now
+        return now
 
 
 def _model_to_dict(obj: Any) -> dict[str, Any]:

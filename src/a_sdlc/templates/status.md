@@ -21,7 +21,7 @@ Run /sdlc:init to set up SDLC for this project.
 
 Read `.sdlc/.cache/checksums.json`:
 - Last scan timestamp
-- Artifact checksums
+- Artifact checksums (keyed on the `.html` filenames, e.g. `architecture.html`)
 - Source file checksums
 
 ### 3. Detect Changes
@@ -68,15 +68,15 @@ Read requirements to show:
 
 📁 Artifacts
 
-  ┌────────────────────────┬──────────┬─────────────────────┐
-  │ Artifact               │ Status   │ Last Updated        │
-  ├────────────────────────┼──────────┼─────────────────────┤
-  │ directory-structure.md │ ✅ Fresh  │ 2025-01-21 10:00   │
-  │ codebase-summary.md    │ ✅ Fresh  │ 2025-01-21 10:00   │
-  │ architecture.md        │ ⚠️ Stale  │ 2025-01-20 15:30   │
-  │ data-model.md          │ ⚠️ Stale  │ 2025-01-19 09:00   │
-  │ key-workflows.md       │ ✅ Fresh  │ 2025-01-21 10:00   │
-  └────────────────────────┴──────────┴─────────────────────┘
+  ┌──────────────────────────┬──────────┬─────────────────────┐
+  │ Artifact                 │ Status   │ Last Updated        │
+  ├──────────────────────────┼──────────┼─────────────────────┤
+  │ directory-structure.html │ ✅ Fresh  │ 2025-01-21 10:00   │
+  │ codebase-summary.html    │ ✅ Fresh  │ 2025-01-21 10:00   │
+  │ architecture.html        │ ⚠️ Stale  │ 2025-01-20 15:30   │
+  │ data-model.html          │ ⚠️ Stale  │ 2025-01-19 09:00   │
+  │ key-workflows.html       │ ✅ Fresh  │ 2025-01-21 10:00   │
+  └──────────────────────────┴──────────┴─────────────────────┘
 
   Changes detected:
     - src/auth/models.py (modified)
@@ -199,6 +199,9 @@ Recommendation: /sdlc:update
 
 ## Notes
 
+- The five scan artifacts are HTML files (`*.html`) in `.sdlc/artifacts/`; `code-quality.md` and `requirements.md` remain Markdown
+- Checksum mechanics are unchanged — only the artifact keys/filenames use the `.html` extension
+- If artifacts still exist only as `.md` files (pre-migration), report them with their `.md` names and recommend a full `/sdlc:scan`
 - Run status check frequently to stay aware of documentation drift
 - Stale artifacts should be updated before major development sessions
 - The `--brief` mode is useful for terminal prompts or status bars
