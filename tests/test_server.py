@@ -1911,6 +1911,28 @@ class TestInitProjectExistingContext:
 
         assert result["status"] == "exists"
         assert result["project"] == project
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_conflict_when_id_exists_without_marker(
+        self, mock_getcwd, mock_get_db, mock_project_dir
+    ):
+        """A folder-derived id that already exists but has no local marker must
+        NOT be silently linked (that would let an unrelated repo hijack it) —
+        init_project returns a conflict instead."""
+        from a_sdlc.server import init_project
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        # No marker in the directory, but a project with the derived id exists.
+        mock_db.get_project.return_value = _make_project(str(mock_project_dir))
+
+        result = init_project()
+
+        assert result["status"] == "conflict"
+        assert ".sdlc/project.json" in result["message"]
+        assert result["project"]["id"] == "test-project"
         assert "message" in result
 
 

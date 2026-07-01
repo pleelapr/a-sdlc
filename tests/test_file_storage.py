@@ -74,7 +74,7 @@ class TestPRDOperations:
             prd_id="feature-auth",
             project_id="test-project",
             title="Authentication Feature",
-            status="draft"
+            status="draft",
         )
         assert prd["id"] == "feature-auth"
         assert prd["title"] == "Authentication Feature"
@@ -88,7 +88,7 @@ class TestPRDOperations:
             prd_id="feature-auth",
             project_id="test-project",
             title="Auth Feature",
-            sprint_id="SPRINT-01"
+            sprint_id="SPRINT-01",
         )
         assert prd["sprint_id"] == "SPRINT-01"
 
@@ -145,7 +145,7 @@ class TestTaskOperations:
             task_id="TASK-001",
             project_id="test-project",
             title="Setup auth config",
-            priority="high"
+            priority="high",
         )
         assert task["id"] == "TASK-001"
         assert task["title"] == "Setup auth config"
@@ -217,7 +217,7 @@ class TestSprintOperations:
             sprint_id="SPRINT-01",
             project_id="test-project",
             title="Sprint 1",
-            goal="Complete auth feature"
+            goal="Complete auth feature",
         )
         assert sprint["id"] == "SPRINT-01"
         assert sprint["title"] == "Sprint 1"
@@ -306,7 +306,7 @@ class TestSyncMappingOperations:
             entity_type="sprint",
             local_id="SPRINT-01",
             external_system="linear",
-            external_id="abc123"
+            external_id="abc123",
         )
         assert mapping["entity_type"] == "sprint"
         assert mapping["local_id"] == "SPRINT-01"
@@ -360,7 +360,7 @@ class TestExternalConfigOperations:
         config = temp_storage.set_external_config(
             project_id="test-project",
             system="linear",
-            config={"api_key": "test-key", "team_id": "test-team"}
+            config={"api_key": "test-key", "team_id": "test-team"},
         )
         assert config["system"] == "linear"
         assert config["config"]["api_key"] == "test-key"
@@ -569,73 +569,42 @@ class TestProjectShortname:
     def test_create_project_with_explicit_shortname(self, temp_storage, tmp_path):
         """Test creating project with explicit shortname."""
         project = temp_storage.create_project(
-            project_id="my-project",
-            name="My Project",
-            shortname="MYPR"
+            project_id="my-project", name="My Project", shortname="MYPR"
         )
         assert project["shortname"] == "MYPR"
 
     def test_shortname_uniqueness(self, temp_storage, tmp_path):
         """Test that shortnames must be unique."""
-        temp_storage.create_project(
-            project_id="project-1",
-            name="Project 1",
-            shortname="PROJ"
-        )
+        temp_storage.create_project(project_id="project-1", name="Project 1", shortname="PROJ")
         # Second project with same shortname should fail
         with pytest.raises(ValueError, match="already in use"):
-            temp_storage.create_project(
-                project_id="project-2",
-                name="Project 2",
-                shortname="PROJ"
-            )
+            temp_storage.create_project(project_id="project-2", name="Project 2", shortname="PROJ")
 
     def test_shortname_validation_length(self, temp_storage, tmp_path):
         """Test that shortname must be exactly 4 characters."""
         # Too short
         with pytest.raises(ValueError, match="exactly 4 characters"):
-            temp_storage.create_project(
-                project_id="test",
-                name="Test",
-                shortname="ABC"
-            )
+            temp_storage.create_project(project_id="test", name="Test", shortname="ABC")
         # Too long
         with pytest.raises(ValueError, match="exactly 4 characters"):
-            temp_storage.create_project(
-                project_id="test",
-                name="Test",
-                shortname="ABCDE"
-            )
+            temp_storage.create_project(project_id="test", name="Test", shortname="ABCDE")
 
     def test_shortname_validation_characters(self, temp_storage, tmp_path):
         """Test that shortname must be uppercase letters only."""
         # Lowercase
         with pytest.raises(ValueError, match="uppercase letters"):
-            temp_storage.create_project(
-                project_id="test",
-                name="Test",
-                shortname="abcd"
-            )
+            temp_storage.create_project(project_id="test", name="Test", shortname="abcd")
         # Numbers
         with pytest.raises(ValueError, match="uppercase letters"):
-            temp_storage.create_project(
-                project_id="test",
-                name="Test",
-                shortname="AB12"
-            )
+            temp_storage.create_project(project_id="test", name="Test", shortname="AB12")
         # Special characters
         with pytest.raises(ValueError, match="uppercase letters"):
-            temp_storage.create_project(
-                project_id="test",
-                name="Test",
-                shortname="AB-C"
-            )
+            temp_storage.create_project(project_id="test", name="Test", shortname="AB-C")
 
     def test_task_id_uses_shortname(self, temp_storage, tmp_path):
         """Test that task IDs use shortname format."""
         temp_storage.create_project(
-            project_id="test-project",
-            name="Test Project",            shortname="TEST"
+            project_id="test-project", name="Test Project", shortname="TEST"
         )
         task_id = temp_storage.get_next_task_id("test-project")
         assert task_id == "TEST-T00001"
@@ -643,8 +612,7 @@ class TestProjectShortname:
     def test_sprint_id_uses_shortname(self, temp_storage, tmp_path):
         """Test that sprint IDs use shortname format."""
         temp_storage.create_project(
-            project_id="test-project",
-            name="Test Project",            shortname="TEST"
+            project_id="test-project", name="Test Project", shortname="TEST"
         )
         sprint_id = temp_storage.get_next_sprint_id("test-project")
         assert sprint_id == "TEST-S0001"
@@ -652,8 +620,7 @@ class TestProjectShortname:
     def test_prd_id_uses_shortname(self, temp_storage, tmp_path):
         """Test that PRD IDs use shortname format."""
         temp_storage.create_project(
-            project_id="test-project",
-            name="Test Project",            shortname="TEST"
+            project_id="test-project", name="Test Project", shortname="TEST"
         )
         prd_id = temp_storage.get_next_prd_id("test-project")
         assert prd_id == "TEST-P0001"
@@ -661,8 +628,7 @@ class TestProjectShortname:
     def test_get_project_by_shortname(self, temp_storage, tmp_path):
         """Test retrieving project by shortname."""
         temp_storage.create_project(
-            project_id="test-project",
-            name="Test Project",            shortname="TEST"
+            project_id="test-project", name="Test Project", shortname="TEST"
         )
         project = temp_storage.get_project_by_shortname("TEST")
         assert project is not None
@@ -870,9 +836,12 @@ class TestMigrationBackupAndRollback:
         _original_size = db_path.stat().st_size
 
         # Make _migrate_v5_to_v6 fail to simulate a migration error
-        with patch.object(
-            Database, "_migrate_v5_to_v6", side_effect=Exception("Simulated migration failure")
-        ), pytest.raises(RuntimeError, match="Migration from v5 failed"):
+        with (
+            patch.object(
+                Database, "_migrate_v5_to_v6", side_effect=Exception("Simulated migration failure")
+            ),
+            pytest.raises(RuntimeError, match="Migration from v5 failed"),
+        ):
             Database(db_path=db_path)
 
         # Verify database was restored from backup (should still be v5)
@@ -889,9 +858,12 @@ class TestMigrationBackupAndRollback:
 
         backup_path = db_path.with_suffix(".db.bak.v5")
 
-        with patch.object(
-            Database, "_migrate_v5_to_v6", side_effect=Exception("column already exists")
-        ), pytest.raises(RuntimeError, match=re.escape(str(backup_path))):
+        with (
+            patch.object(
+                Database, "_migrate_v5_to_v6", side_effect=Exception("column already exists")
+            ),
+            pytest.raises(RuntimeError, match=re.escape(str(backup_path))),
+        ):
             Database(db_path=db_path)
 
     def test_failed_migration_error_includes_original_error(self, tmp_path):
@@ -899,9 +871,12 @@ class TestMigrationBackupAndRollback:
         db_path = tmp_path / "data.db"
         self._create_v5_database(db_path)
 
-        with patch.object(
-            Database, "_migrate_v5_to_v6", side_effect=Exception("duplicate column name")
-        ), pytest.raises(RuntimeError, match="duplicate column name"):
+        with (
+            patch.object(
+                Database, "_migrate_v5_to_v6", side_effect=Exception("duplicate column name")
+            ),
+            pytest.raises(RuntimeError, match="duplicate column name"),
+        ):
             Database(db_path=db_path)
 
     def test_no_backup_when_version_matches(self, tmp_path):
@@ -1049,7 +1024,9 @@ class TestCompensatingTransactions:
     def test_create_prd_db_failure_cleans_up_file(self, storage):
         """If DB insert fails during create_prd, orphaned skeleton file is deleted."""
         with (
-            patch.object(storage._db, "create_prd", side_effect=sqlite3.IntegrityError("UNIQUE constraint")),
+            patch.object(
+                storage._db, "create_prd", side_effect=sqlite3.IntegrityError("UNIQUE constraint")
+            ),
             pytest.raises(sqlite3.IntegrityError),
         ):
             storage.create_prd(
@@ -1066,7 +1043,9 @@ class TestCompensatingTransactions:
     def test_create_task_db_failure_cleans_up_file(self, storage):
         """If DB insert fails during create_task, orphaned skeleton file is deleted."""
         with (
-            patch.object(storage._db, "create_task", side_effect=sqlite3.IntegrityError("UNIQUE constraint")),
+            patch.object(
+                storage._db, "create_task", side_effect=sqlite3.IntegrityError("UNIQUE constraint")
+            ),
             pytest.raises(sqlite3.IntegrityError),
         ):
             storage.create_task(
@@ -1086,7 +1065,11 @@ class TestCompensatingTransactions:
         storage.create_prd("PRD-001", "test-project", "Test PRD")
 
         with (
-            patch.object(storage._db, "create_design", side_effect=sqlite3.IntegrityError("UNIQUE constraint")),
+            patch.object(
+                storage._db,
+                "create_design",
+                side_effect=sqlite3.IntegrityError("UNIQUE constraint"),
+            ),
             pytest.raises(sqlite3.IntegrityError),
         ):
             storage.create_design(
@@ -1177,7 +1160,9 @@ class TestCompensatingTransactions:
         file_path = Path(prd["file_path"])
 
         # Make file deletion raise OSError
-        with patch.object(storage._content_mgr, "delete_prd", side_effect=OSError("Permission denied")):
+        with patch.object(
+            storage._content_mgr, "delete_prd", side_effect=OSError("Permission denied")
+        ):
             result = storage.delete_prd("PRD-FF")
 
         # Operation succeeds (DB is source of truth)
@@ -1193,7 +1178,9 @@ class TestCompensatingTransactions:
         task = storage.get_task("TASK-FF")
         file_path = Path(task["file_path"])
 
-        with patch.object(storage._content_mgr, "delete_task", side_effect=OSError("Permission denied")):
+        with patch.object(
+            storage._content_mgr, "delete_task", side_effect=OSError("Permission denied")
+        ):
             result = storage.delete_task("TASK-FF")
 
         assert result is True
@@ -1207,7 +1194,9 @@ class TestCompensatingTransactions:
         design = storage._db.get_design_by_prd("PRD-DFF")
         file_path = Path(design["file_path"])
 
-        with patch.object(storage._content_mgr, "delete_design", side_effect=OSError("Permission denied")):
+        with patch.object(
+            storage._content_mgr, "delete_design", side_effect=OSError("Permission denied")
+        ):
             result = storage.delete_design("PRD-DFF")
 
         assert result is True

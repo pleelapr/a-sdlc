@@ -195,14 +195,21 @@ class TestUpgrade:
         assert not missing, f"Missing indexes: {missing}"
 
     def test_alembic_version_at_head(self, migrated_db: Config) -> None:
-        """The alembic_version table should be at the latest revision."""
+        """The alembic_version table should be at the current head revision.
+
+        Derive the expected head from the Alembic script directory rather than
+        pinning a literal, so adding a future migration does not break this test.
+        """
+        from alembic.script import ScriptDirectory
+
         conn = _get_connection(migrated_db)
         cursor = conn.execute("SELECT version_num FROM alembic_version")
         row = cursor.fetchone()
         conn.close()
 
+        expected_head = ScriptDirectory.from_config(migrated_db).get_current_head()
         assert row is not None
-        assert row[0] == "0003"
+        assert row[0] == expected_head
 
 
 # ---------------------------------------------------------------------------

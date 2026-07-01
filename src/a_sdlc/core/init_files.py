@@ -345,13 +345,15 @@ def generate_project_marker(
     walking up to this file. Always rewritten so re-init on a fresh machine
     re-links the checkout to the existing project.
     """
-    from a_sdlc.core.project_marker import write_marker
+    from a_sdlc.core.project_marker import marker_path, write_marker
 
+    existed = marker_path(project_path).exists()
     path = write_marker(project_path, project_id, shortname, project_name)
+    status = "updated" if existed else "created"
     return {
-        "status": "created",
+        "status": status,
         "path": str(path),
-        "message": "Project marker (.sdlc/project.json) written.",
+        "message": f"Project marker (.sdlc/project.json) {status}.",
     }
 
 

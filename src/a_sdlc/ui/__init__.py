@@ -418,7 +418,9 @@ async def serve_artifact(project_id: str, name: str) -> HTMLResponse:
       anything else returns 404 (never 400, never echoing the path).
     - The resolved path must remain inside the project's ``.sdlc/artifacts``
       directory (``Path.resolve()`` + ``is_relative_to`` containment).
-    - Symlinks are refused outright.
+    - A symlinked artifact *file* is refused outright; a symlinked
+      ``.sdlc/artifacts`` *directory* is served only while it resolves inside
+      the project root (the containment check rejects one that escapes).
     - Responses carry explicit security headers (CSP sandbox is the backstop
       if upstream validation ever misses active content).
 

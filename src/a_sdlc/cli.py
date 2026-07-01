@@ -5203,17 +5203,26 @@ def init_project_cmd(name: str | None) -> None:
     project_id = folder_name.lower().replace(" ", "-").replace("_", "-")
     project_name = name or folder_name
 
-    # Re-link an existing project (same id) that this checkout has no marker for,
-    # otherwise create a new one. The database stores no path; identity lives in
-    # the local marker written by generate_init_files().
+    # A project with this folder-derived id already exists, but this directory
+    # has no .sdlc/project.json marker linking to it. Refuse to silently attach:
+    # an unrelated repo sharing a directory name would otherwise hijack it. The
+    # marker is meant to be committed, so restoring it is the normal recovery.
     existing_by_id = storage.get_project(project_id)
     if existing_by_id:
-        project = existing_by_id
-        project_name = existing_by_id["name"]
-        status_verb = "linked to existing"
-    else:
-        project = storage.create_project(project_id, project_name)
-        status_verb = "initialized"
+        console.print(
+            f"[red]A project with id '{project_id}' already exists "
+            f"({existing_by_id['shortname']}), but this directory has no "
+            f".sdlc/project.json marker.[/red]"
+        )
+        console.print(
+            "[dim]If this is that project, restore its committed marker: "
+            "git checkout .sdlc/project.json\n"
+            "If it's a different project, initialize it from a directory with a "
+            "distinct name.[/dim]"
+        )
+        return
+
+    project = storage.create_project(project_id, project_name)
 
     # Generate CLAUDE.md, lesson-learn.md, config.yaml, and the local marker
     from a_sdlc.core.init_files import generate_init_files
@@ -5234,7 +5243,7 @@ def init_project_cmd(name: str | None) -> None:
 
     console.print(
         Panel(
-            f"[green]Project '{project_name}' {status_verb}![/green]\n\n"
+            f"[green]Project '{project_name}' initialized![/green]\n\n"
             f"ID: {project['id']}\n"
             f"Shortname: {project['shortname']}\n\n"
             f"Generated files:\n{init_files_display}\n\n"

@@ -35,7 +35,14 @@ def write_marker(
     """Write ``.sdlc/project.json`` under *project_root*.
 
     Creates the ``.sdlc`` directory if needed and returns the marker path.
+
+    Raises:
+        ValueError: if *project_id* is empty or whitespace-only. ``read_marker``
+            rejects markers without a non-empty id, so writing one would appear
+            to succeed while cwd-based resolution silently fails.
     """
+    if not project_id or not project_id.strip():
+        raise ValueError("project_id must be a non-empty string")
     path = marker_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {"id": project_id}
@@ -74,7 +81,12 @@ def render_marker_content(
 
     Used by ``create_project()`` in remote deployments, where the server returns
     file specs for the client to write locally.
+
+    Raises:
+        ValueError: if *project_id* is empty or whitespace-only.
     """
+    if not project_id or not project_id.strip():
+        raise ValueError("project_id must be a non-empty string")
     payload: dict[str, Any] = {"id": project_id}
     if shortname is not None:
         payload["shortname"] = shortname

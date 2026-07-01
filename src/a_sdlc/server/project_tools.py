@@ -1,5 +1,6 @@
 """Project management MCP tools."""
 
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -46,13 +47,16 @@ def get_context() -> dict[str, Any]:
     )
 
     # Ensure .sdlc/config.yaml exists (auto-create with defaults if missing),
-    # but only when the repository is present on this host.
+    # but only when the repository is present on this host. get_context() is
+    # read-oriented, so treat this write as best-effort: never fail the whole
+    # call on a read-only/permission-denied filesystem.
     if project_root is not None:
         config_path = project_root / ".sdlc" / "config.yaml"
         if not config_path.exists():
             from a_sdlc.core.init_files import generate_config_yaml
 
-            generate_config_yaml(project_root)
+            with contextlib.suppress(OSError):
+                generate_config_yaml(project_root)
 
     tasks = db.list_tasks(project_id)
     sprints = db.list_sprints(project_id)
@@ -189,25 +193,24 @@ def init_project(
     project_id = _server._slugify(folder_name)
     project_name = name or folder_name
 
-    # Re-link an existing project (same id) that this checkout has no marker for
-    # — e.g. a fresh clone on another machine. Writes the marker, no new DB row.
+    # A project with this folder-derived id already exists, but this checkout
+    # has no .sdlc/project.json linking to it. Refuse to silently attach: an
+    # unrelated repository that merely shares a directory name would otherwise
+    # hijack the existing project. The marker is meant to be committed, so the
+    # normal recovery is to restore it rather than re-derive identity here.
     existing_by_id = db.get_project(project_id)
     if existing_by_id:
-        init_results = generate_init_files(
-            Path(cwd),
-            existing_by_id["name"],
-            project_id=project_id,
-            shortname=existing_by_id["shortname"],
-        )
-        _server._active_project_id = project_id
         return {
-            "status": "linked",
+            "status": "conflict",
             "message": (
-                f"Linked current directory to existing project "
-                f"'{existing_by_id['name']}' ({existing_by_id['shortname']})."
+                f"A project with id '{project_id}' already exists "
+                f"('{existing_by_id['name']}', {existing_by_id['shortname']}), but "
+                f"this directory has no .sdlc/project.json marker linking to it. "
+                f"If this is that project, restore its committed marker "
+                f"(git checkout .sdlc/project.json). If it is a different project, "
+                f"initialize it from a directory with a distinct name."
             ),
             "project": existing_by_id,
-            "init_files": init_results["results"],
         }
 
     # Validate shortname if provided
