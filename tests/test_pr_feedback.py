@@ -443,6 +443,38 @@ class TestGetPrFeedback:
         assert result["status"] == "error"
         assert "Not a git repo" in result["message"]
 
+    @patch("a_sdlc.server.github.load_global_github_config", return_value=None)
+    @patch("a_sdlc.server.github.detect_git_info")
+    @patch("a_sdlc.server.os.environ", {"GITHUB_TOKEN": "ghp_env"})
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_db_unavailable_falls_back_to_env_token(
+        self, mock_getcwd, mock_get_db, mock_detect, mock_load_global, mock_project_dir
+    ):
+        """An unreachable database during the per-project token lookup must not
+        crash the tool -- it falls through to the global config / GITHUB_TOKEN
+        tiers, which need no database. Regression for the psycopg2 connection
+        error that killed get_pr_feedback on deployments with an offline DB.
+        """
+        from a_sdlc.server import get_pr_feedback
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        _setup_project_mocks(mock_db, str(mock_project_dir))
+        # Simulate the database being unreachable when reading the project token.
+        mock_db.get_external_config.side_effect = Exception(
+            "connection to server at 'postgres' failed: Connection refused"
+        )
+
+        mock_detect.side_effect = RuntimeError("Not a git repo")
+
+        result = get_pr_feedback()
+        # Reaching git detection proves token resolution survived the DB failure
+        # (env-var tier used) instead of raising the connection error.
+        assert result["status"] == "error"
+        assert "Not a git repo" in result["message"]
+
     @patch("a_sdlc.server.github.GitHubClient")
     @patch("a_sdlc.server.github.detect_git_info")
     @patch("a_sdlc.server.get_db")
