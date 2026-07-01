@@ -18,25 +18,32 @@ def mock_project_dir():
         yield Path(tmpdir)
 
 
-def _make_project(path: str) -> dict:
-    """Create a minimal project dict."""
+def _make_project(path: str | None = None) -> dict:
+    """Create a minimal project dict (the DB no longer stores a path)."""
     return {
         "id": "test-project",
         "shortname": "TEST",
         "name": "Test Project",
-        "path": path,
     }
+
+
+def _write_marker(root, project_id: str = "test-project") -> None:
+    """Write the local .sdlc/project.json marker used for cwd-based resolution."""
+    from a_sdlc.core.project_marker import write_marker
+
+    write_marker(root, project_id, "TEST", "Test Project")
 
 
 def _setup_mocks(mock_db, project_path: str):
     """Configure common mock returns for get_context()."""
-    project = _make_project(project_path)
+    project = _make_project()
     mock_db.get_project.return_value = project
     mock_db.list_tasks.return_value = []
     mock_db.list_sprints.return_value = []
     mock_db.list_prds.return_value = []
-    mock_db.get_project_by_path.return_value = project
     mock_db.update_project_accessed.return_value = None
+    # get_context()/_get_current_project_id() resolve via the local marker.
+    _write_marker(project_path)
 
 
 class TestGetContextArtifacts:
@@ -265,9 +272,9 @@ class TestGetContextConfigAutoCreate:
         mock_get_db.return_value = mock_db
         _setup_mocks(mock_db, str(mock_project_dir))
 
-        # Create pre-existing config.yaml
+        # Create pre-existing config.yaml (.sdlc/ already exists from the marker)
         sdlc_dir = mock_project_dir / ".sdlc"
-        sdlc_dir.mkdir(parents=True)
+        sdlc_dir.mkdir(parents=True, exist_ok=True)
         config_path = sdlc_dir / "config.yaml"
         config_path.write_text("custom: true")
 
@@ -1823,12 +1830,13 @@ class TestInitProjectExistingContext:
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
-        mock_db.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+        mock_db.get_project.return_value = _make_project(str(mock_project_dir))
+        _write_marker(mock_project_dir)
 
         # Create all init files
         (mock_project_dir / "CLAUDE.md").write_text("# CLAUDE.md")
         sdlc_dir = mock_project_dir / ".sdlc"
-        sdlc_dir.mkdir()
+        sdlc_dir.mkdir(exist_ok=True)
         (sdlc_dir / "lesson-learn.md").write_text("# Lessons")
         (sdlc_dir / "config.yaml").write_text("testing: {}")
 
@@ -1849,14 +1857,17 @@ class TestInitProjectExistingContext:
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
-        mock_db.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+        mock_db.get_project.return_value = _make_project(str(mock_project_dir))
+        _write_marker(mock_project_dir)
 
         result = init_project()
 
         assert result["status"] == "exists"
         assert result["init_files"]["claude_md"] is False
         assert result["init_files"]["lesson_learn"] is False
-        assert result["init_files"]["sdlc_dir"] is False
+        # The marker lives in .sdlc/, so an initialized project always has it.
+        assert result["init_files"]["sdlc_dir"] is True
+        assert result["init_files"]["project_marker"] is True
         assert result["init_files"]["config_yaml"] is False
 
     @patch("a_sdlc.server.get_db")
@@ -1868,7 +1879,8 @@ class TestInitProjectExistingContext:
         mock_getcwd.return_value = str(mock_project_dir)
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
-        mock_db.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+        mock_db.get_project.return_value = _make_project(str(mock_project_dir))
+        _write_marker(mock_project_dir)
 
         # Only create CLAUDE.md
         (mock_project_dir / "CLAUDE.md").write_text("# CLAUDE.md")
@@ -1878,7 +1890,8 @@ class TestInitProjectExistingContext:
         assert result["status"] == "exists"
         assert result["init_files"]["claude_md"] is True
         assert result["init_files"]["lesson_learn"] is False
-        assert result["init_files"]["sdlc_dir"] is False
+        # The marker lives in .sdlc/, so an initialized project always has it.
+        assert result["init_files"]["sdlc_dir"] is True
         assert result["init_files"]["config_yaml"] is False
 
     @patch("a_sdlc.server.get_db")
@@ -1891,12 +1904,35 @@ class TestInitProjectExistingContext:
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         project = _make_project(str(mock_project_dir))
-        mock_db.get_project_by_path.return_value = project
+        mock_db.get_project.return_value = project
+        _write_marker(mock_project_dir)
 
         result = init_project()
 
         assert result["status"] == "exists"
         assert result["project"] == project
+
+    @patch("a_sdlc.server.get_db")
+    @patch("a_sdlc.server.os.getcwd")
+    def test_conflict_when_id_exists_without_marker(
+        self, mock_getcwd, mock_get_db, mock_project_dir
+    ):
+        """A folder-derived id that already exists but has no local marker must
+        NOT be silently linked (that would let an unrelated repo hijack it) —
+        init_project returns a conflict instead."""
+        from a_sdlc.server import init_project
+
+        mock_getcwd.return_value = str(mock_project_dir)
+        mock_db = MagicMock()
+        mock_get_db.return_value = mock_db
+        # No marker in the directory, but a project with the derived id exists.
+        mock_db.get_project.return_value = _make_project(str(mock_project_dir))
+
+        result = init_project()
+
+        assert result["status"] == "conflict"
+        assert ".sdlc/project.json" in result["message"]
+        assert result["project"]["id"] == "test-project"
         assert "message" in result
 
 
@@ -1917,13 +1953,11 @@ class TestCreateProject:
         db.validate_shortname.return_value = (True, "")
         db.is_shortname_available.return_value = True
         db.get_project.return_value = None
-        db.get_project_by_path.return_value = None
         db.generate_unique_shortname.return_value = "AUTO"
-        db.create_project.side_effect = lambda pid, name, path, shortname: {
+        db.create_project.side_effect = lambda pid, name, shortname: {
             "id": pid,
             "shortname": shortname,
             "name": name,
-            "path": path,
         }
         return db
 
@@ -1939,8 +1973,7 @@ class TestCreateProject:
         assert result["status"] == "created"
         assert result["project"]["id"] == "pcra"
         assert result["project"]["shortname"] == "PCRA"
-        assert result["project"]["path"] is None
-        db.create_project.assert_called_once_with("pcra", "Remote Project", None, "PCRA")
+        db.create_project.assert_called_once_with("pcra", "Remote Project", "PCRA")
         assert result["id_format_examples"]["task"] == "PCRA-T00001"
 
     @patch("a_sdlc.server.get_db")
@@ -1968,6 +2001,7 @@ class TestCreateProject:
         assert "CLAUDE.md" in paths
         assert ".sdlc/lesson-learn.md" in paths
         assert ".sdlc/config.yaml" in paths
+        assert ".sdlc/project.json" in paths
         assert "~/.a-sdlc/lesson-learn.md" in paths
         for f in init_files:
             assert f["content"]
@@ -1986,20 +2020,6 @@ class TestCreateProject:
         db.generate_unique_shortname.assert_called_once_with("Remote Project")
         assert result["project"]["shortname"] == "AUTO"
         assert result["project"]["id"] == "auto"
-
-    @patch("a_sdlc.server.get_db")
-    def test_records_path_when_provided(self, mock_get_db):
-        from a_sdlc.server import create_project
-
-        db = self._mock_db()
-        mock_get_db.return_value = db
-
-        result = create_project(name="Remote", shortname="PCRA", path="/home/me/repo")
-
-        assert result["project"]["path"] == "/home/me/repo"
-        db.create_project.assert_called_once_with(
-            "pcra", "Remote", "/home/me/repo", "PCRA"
-        )
 
     @patch("a_sdlc.server.get_db")
     def test_invalid_shortname(self, mock_get_db):
@@ -2039,23 +2059,6 @@ class TestCreateProject:
 
         assert result["status"] == "error"
         assert "already exists" in result["message"]
-
-    @patch("a_sdlc.server.get_db")
-    def test_path_collision(self, mock_get_db):
-        from a_sdlc.server import create_project
-
-        db = self._mock_db()
-        db.get_project_by_path.return_value = {
-            "id": "other",
-            "name": "Other",
-            "shortname": "OTHR",
-        }
-        mock_get_db.return_value = db
-
-        result = create_project(name="Remote", shortname="PCRA", path="/dup")
-
-        assert result["status"] == "error"
-        assert "already linked" in result["message"]
 
     @patch("a_sdlc.server.get_db")
     def test_integrity_error_maps_to_conflict(self, mock_get_db):

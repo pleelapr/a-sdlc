@@ -1,5 +1,6 @@
 """Project management MCP tools."""
 
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,6 @@ __all__ = [
     "init_project",
     "create_project",
     "switch_project",
-    "relocate_project",
 ]
 
 
@@ -37,13 +37,26 @@ def get_context() -> dict[str, Any]:
 
     project = db.get_project(project_id)
 
-    # Ensure .sdlc/config.yaml exists (auto-create with defaults if missing)
-    project_path = Path(project["path"])
-    config_path = project_path / ".sdlc" / "config.yaml"
-    if not config_path.exists():
-        from a_sdlc.core.init_files import generate_config_yaml
+    # Resolve the on-disk project root from the local marker (walked up from
+    # cwd). None in remote deployments where the repo is not mounted server-side.
+    from a_sdlc.core.project_marker import find_marker
 
-        generate_config_yaml(project_path)
+    marker = find_marker(os.getcwd())
+    project_root = (
+        Path(marker["root"]) if marker and marker.get("id") == project_id else None
+    )
+
+    # Ensure .sdlc/config.yaml exists (auto-create with defaults if missing),
+    # but only when the repository is present on this host. get_context() is
+    # read-oriented, so treat this write as best-effort: never fail the whole
+    # call on a read-only/permission-denied filesystem.
+    if project_root is not None:
+        config_path = project_root / ".sdlc" / "config.yaml"
+        if not config_path.exists():
+            from a_sdlc.core.init_files import generate_config_yaml
+
+            with contextlib.suppress(OSError):
+                generate_config_yaml(project_root)
 
     tasks = db.list_tasks(project_id)
     sprints = db.list_sprints(project_id)
@@ -65,9 +78,11 @@ def get_context() -> dict[str, Any]:
         "directory-structure",
         "key-workflows",
     ]
-    artifacts_dir = Path(project["path"]) / ".sdlc" / "artifacts"
     available_artifacts = []
-    if artifacts_dir.is_dir():
+    artifacts_dir = (
+        project_root / ".sdlc" / "artifacts" if project_root is not None else None
+    )
+    if artifacts_dir is not None and artifacts_dir.is_dir():
         for name in artifact_names:
             # Dual-extension transition (DD-7): .html is canonical, but
             # legacy .md artifacts still count as scanned.
@@ -90,7 +105,7 @@ def get_context() -> dict[str, Any]:
             "id": project["id"],
             "shortname": project["shortname"],
             "name": project["name"],
-            "path": project["path"],
+            "root": str(project_root) if project_root is not None else None,
         },
         "statistics": {
             "total_prds": len(prds),
@@ -122,7 +137,6 @@ def list_projects() -> list[dict[str, Any]]:
             "id": p["id"],
             "shortname": p["shortname"],
             "name": p["name"],
-            "path": p["path"],
             "last_accessed": p["last_accessed"],
         }
         for p in projects
@@ -149,31 +163,55 @@ def init_project(
     db = _server.get_db()
     cwd = os.getcwd()
 
-    # Check if already exists
-    existing = db.get_project_by_path(cwd)
-    if existing:
-        project_path = Path(cwd)
-        has_claude_md = (project_path / "CLAUDE.md").exists()
-        has_lesson_learn = (project_path / ".sdlc" / "lesson-learn.md").exists()
-        has_sdlc_dir = (project_path / ".sdlc").exists()
-        has_config_yaml = (project_path / ".sdlc" / "config.yaml").exists()
+    from a_sdlc.core.init_files import generate_init_files
+    from a_sdlc.core.project_marker import find_marker
 
+    def _init_files_status(project_path: Path) -> dict[str, bool]:
         return {
-            "status": "exists",
-            "message": f"Project already initialized: {existing['name']}",
-            "project": existing,
-            "init_files": {
-                "claude_md": has_claude_md,
-                "lesson_learn": has_lesson_learn,
-                "sdlc_dir": has_sdlc_dir,
-                "config_yaml": has_config_yaml,
-            },
+            "claude_md": (project_path / "CLAUDE.md").exists(),
+            "lesson_learn": (project_path / ".sdlc" / "lesson-learn.md").exists(),
+            "sdlc_dir": (project_path / ".sdlc").exists(),
+            "config_yaml": (project_path / ".sdlc" / "config.yaml").exists(),
+            "project_marker": (project_path / ".sdlc" / "project.json").exists(),
         }
 
-    # Generate project ID from folder name
+    # Already linked to a project via a local .sdlc/project.json marker?
+    marker = find_marker(cwd)
+    if marker:
+        existing = db.get_project(marker["id"])
+        if existing:
+            _server._active_project_id = existing["id"]
+            return {
+                "status": "exists",
+                "message": f"Project already initialized: {existing['name']}",
+                "project": existing,
+                "init_files": _init_files_status(Path(marker["root"])),
+            }
+
+    # Derive project ID from folder name
     folder_name = Path(cwd).name
     project_id = _server._slugify(folder_name)
     project_name = name or folder_name
+
+    # A project with this folder-derived id already exists, but this checkout
+    # has no .sdlc/project.json linking to it. Refuse to silently attach: an
+    # unrelated repository that merely shares a directory name would otherwise
+    # hijack the existing project. The marker is meant to be committed, so the
+    # normal recovery is to restore it rather than re-derive identity here.
+    existing_by_id = db.get_project(project_id)
+    if existing_by_id:
+        return {
+            "status": "conflict",
+            "message": (
+                f"A project with id '{project_id}' already exists "
+                f"('{existing_by_id['name']}', {existing_by_id['shortname']}), but "
+                f"this directory has no .sdlc/project.json marker linking to it. "
+                f"If this is that project, restore its committed marker "
+                f"(git checkout .sdlc/project.json). If it is a different project, "
+                f"initialize it from a directory with a distinct name."
+            ),
+            "project": existing_by_id,
+        }
 
     # Validate shortname if provided
     if shortname is not None:
@@ -193,17 +231,23 @@ def init_project(
         shortname = db.generate_unique_shortname(project_name)
 
     try:
-        project = db.create_project(project_id, project_name, cwd, shortname)
+        project = db.create_project(project_id, project_name, shortname)
     except ValueError as e:
         return {
             "status": "error",
             "message": str(e),
         }
 
-    # Generate CLAUDE.md, lesson-learn.md, and global lesson-learn.md
-    from a_sdlc.core.init_files import generate_init_files
+    # Generate CLAUDE.md, lesson-learn.md, config.yaml, and the local marker
+    init_results = generate_init_files(
+        Path(cwd),
+        project_name,
+        project_id=project_id,
+        shortname=shortname,
+    )
 
-    init_results = generate_init_files(Path(cwd), project_name)
+    # Make this the active project for subsequent tool calls.
+    _server._active_project_id = project_id
 
     return {
         "status": "created",
@@ -222,7 +266,6 @@ def init_project(
 def create_project(
     name: str,
     shortname: str | None = None,
-    path: str | None = None,
 ) -> dict[str, Any]:
     """Create a project without relying on the server's working directory.
 
@@ -230,7 +273,9 @@ def create_project(
     different host than the client (Docker, cloud). Project identity comes from
     the arguments rather than ``os.getcwd()``, so it works even when the server
     cwd is ``/``. Unlike ``init_project``, this writes NO files on the server;
-    the init file contents are returned for the client to create locally.
+    the init file contents are returned for the client to create locally. The
+    returned ``init_files`` include ``.sdlc/project.json`` -- the marker the
+    client writes so its checkout resolves back to this project.
 
     Args:
         name: Human-readable project name.
@@ -238,9 +283,6 @@ def create_project(
                   Must be exactly 4 uppercase letters (A-Z). Auto-generated
                   from ``name`` when omitted. The project id is derived from
                   the shortname, so it does not depend on any directory name.
-        path: Optional client-side path to record for reference. May be
-              omitted entirely in centralized deployments; content is keyed by
-              project id, not path.
 
     Returns:
         Created project details, id-format examples, and ``init_files`` -- a
@@ -274,20 +316,8 @@ def create_project(
             "message": f"Project id '{project_id}' already exists.",
         }
 
-    # Honor the unique-path constraint when a path is supplied.
-    if path is not None:
-        existing = db.get_project_by_path(path)
-        if existing:
-            return {
-                "status": "error",
-                "message": (
-                    f"Path '{path}' is already linked to project "
-                    f"'{existing['name']}' ({existing['shortname']})."
-                ),
-            }
-
     try:
-        project = db.create_project(project_id, name, path, shortname)
+        project = db.create_project(project_id, name, shortname)
     except ValueError as e:
         return {
             "status": "error",
@@ -295,14 +325,14 @@ def create_project(
         }
     except IntegrityError:
         # The pre-checks above are not atomic: a concurrent create_project
-        # call can pass them and still collide on the id/shortname/path
-        # unique constraints at commit time. Map that to a controlled
-        # conflict result instead of an unhandled internal error.
+        # call can pass them and still collide on the id/shortname unique
+        # constraints at commit time. Map that to a controlled conflict
+        # result instead of an unhandled internal error.
         return {
             "status": "error",
             "message": (
                 f"Project '{shortname}' conflicts with an existing project "
-                "(id, shortname, or path already in use)."
+                "(id or shortname already in use)."
             ),
         }
 
@@ -312,7 +342,7 @@ def create_project(
 
     from a_sdlc.core.init_files import render_init_files
 
-    init_files = render_init_files(name)
+    init_files = render_init_files(name, project_id=project_id, shortname=shortname)
 
     return {
         "status": "created",
@@ -363,60 +393,4 @@ def switch_project(project_id: str) -> dict[str, Any]:
         "status": "ok",
         "message": f"Switched to project: {project['name']}",
         "project": project,
-    }
-
-
-@_server.mcp.tool()
-def relocate_project(shortname: str) -> dict[str, Any]:
-    """Re-link an existing project to the current directory.
-
-    Use this when you've moved a repository to a new location and want to
-    reconnect it to its existing project data (PRDs, tasks, sprints).
-
-    Args:
-        shortname: The 4-character project shortname to relocate.
-
-    Returns:
-        Updated project details.
-    """
-    db = _server.get_db()
-    cwd = os.getcwd()
-
-    # Find project by shortname
-    project = db.get_project_by_shortname(shortname)
-    if not project:
-        return {
-            "status": "not_found",
-            "message": f"No project found with shortname '{shortname}'.",
-        }
-
-    # Check if current directory is already linked to a different project
-    existing = db.get_project_by_path(cwd)
-    if existing and existing["id"] != project["id"]:
-        return {
-            "status": "error",
-            "message": f"Current directory is already linked to project '{existing['name']}' ({existing['shortname']}).",
-        }
-
-    # Update the project path
-    try:
-        updated = db.update_project_path(project["id"], cwd)
-    except ValueError as e:
-        return {
-            "status": "error",
-            "message": str(e),
-        }
-
-    if not updated:
-        return {
-            "status": "error",
-            "message": "Failed to update project path.",
-        }
-
-    return {
-        "status": "relocated",
-        "message": f"Project '{project['name']}' ({shortname}) relocated to {cwd}",
-        "project": updated,
-        "old_path": project["path"],
-        "new_path": cwd,
     }

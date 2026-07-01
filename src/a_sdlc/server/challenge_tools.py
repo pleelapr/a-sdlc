@@ -117,9 +117,11 @@ def challenge_artifact(
 
         project_id = _server._get_current_project_id()
         if project_id:
-            project = db.get_project(project_id)
-            if project:
-                lesson_paths.append(Path(project["path"]) / ".sdlc" / "lesson-learn.md")
+            from a_sdlc.core.project_marker import find_root_for
+
+            root = find_root_for(project_id)
+            if root:
+                lesson_paths.append(root / ".sdlc" / "lesson-learn.md")
 
         # Use _server module's Path so @patch("a_sdlc.server.Path") works in tests
         lesson_paths.append(_server.Path.home() / ".a-sdlc" / "lesson-learn.md")

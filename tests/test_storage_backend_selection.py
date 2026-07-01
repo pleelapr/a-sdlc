@@ -259,7 +259,7 @@ class TestPublicApiPreservation:
         storage = HybridStorage(base_path=tmp_base)
 
         # Create project
-        project = storage.create_project("test-proj", "Test Project", "/tmp/test")
+        project = storage.create_project("test-proj", "Test Project")
         assert project is not None
         assert project["id"] == "test-proj"
 

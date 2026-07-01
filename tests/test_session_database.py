@@ -34,7 +34,7 @@ def db():
 @pytest.fixture
 def db_with_project(db: SessionDatabase):
     """SessionDatabase with a seeded project."""
-    db.create_project("proj-1", "My Project", "/tmp/proj1", shortname="MYPR")
+    db.create_project("proj-1", "My Project", shortname="MYPR")
     return db
 
 
@@ -90,7 +90,7 @@ class TestEngineInit:
 
     def test_tables_created(self, db: SessionDatabase):
         # Simple smoke test: we can create a project
-        result = db.create_project("p1", "P1", "/tmp/p1", shortname="PONE")
+        result = db.create_project("p1", "P1", shortname="PONE")
         assert result is not None
         assert result["id"] == "p1"
 
@@ -104,26 +104,25 @@ class TestProjects:
     """Tests for project CRUD operations."""
 
     def test_create_project(self, db: SessionDatabase):
-        p = db.create_project("proj-1", "My Project", "/tmp/proj", shortname="MYPR")
+        p = db.create_project("proj-1", "My Project", shortname="MYPR")
         assert p is not None
         assert p["id"] == "proj-1"
         assert p["shortname"] == "MYPR"
         assert p["name"] == "My Project"
-        assert p["path"] == "/tmp/proj"
 
     def test_create_project_auto_shortname(self, db: SessionDatabase):
-        p = db.create_project("p1", "Hello World", "/tmp/p1")
+        p = db.create_project("p1", "Hello World")
         assert p is not None
         assert len(p["shortname"]) == 4
 
     def test_create_project_invalid_shortname(self, db: SessionDatabase):
         with pytest.raises(ValueError, match="4 characters"):
-            db.create_project("p1", "Test", "/tmp/p1", shortname="AB")
+            db.create_project("p1", "Test", shortname="AB")
 
     def test_create_project_duplicate_shortname(self, db: SessionDatabase):
-        db.create_project("p1", "First", "/tmp/p1", shortname="ABCD")
+        db.create_project("p1", "First", shortname="ABCD")
         with pytest.raises(ValueError, match="already in use"):
-            db.create_project("p2", "Second", "/tmp/p2", shortname="ABCD")
+            db.create_project("p2", "Second", shortname="ABCD")
 
     def test_get_project(self, db_with_project: SessionDatabase):
         p = db_with_project.get_project("proj-1")
@@ -133,32 +132,16 @@ class TestProjects:
     def test_get_project_not_found(self, db: SessionDatabase):
         assert db.get_project("nonexistent") is None
 
-    def test_get_project_by_path(self, db_with_project: SessionDatabase):
-        p = db_with_project.get_project_by_path("/tmp/proj1")
-        assert p is not None
-        assert p["id"] == "proj-1"
-
     def test_get_project_by_shortname(self, db_with_project: SessionDatabase):
         p = db_with_project.get_project_by_shortname("MYPR")
         assert p is not None
         assert p["id"] == "proj-1"
 
     def test_list_projects(self, db: SessionDatabase):
-        db.create_project("p1", "P1", "/tmp/p1", shortname="AAAA")
-        db.create_project("p2", "P2", "/tmp/p2", shortname="BBBB")
+        db.create_project("p1", "P1", shortname="AAAA")
+        db.create_project("p2", "P2", shortname="BBBB")
         projects = db.list_projects()
         assert len(projects) == 2
-
-    def test_update_project_path(self, db_with_project: SessionDatabase):
-        result = db_with_project.update_project_path("proj-1", "/new/path")
-        assert result is not None
-        assert result["path"] == "/new/path"
-
-    def test_update_project_path_conflict(self, db: SessionDatabase):
-        db.create_project("p1", "P1", "/tmp/p1", shortname="AAAA")
-        db.create_project("p2", "P2", "/tmp/p2", shortname="BBBB")
-        with pytest.raises(ValueError, match="already used"):
-            db.update_project_path("p1", "/tmp/p2")
 
     def test_delete_project(self, db_with_project: SessionDatabase):
         assert db_with_project.delete_project("proj-1") is True
@@ -168,8 +151,8 @@ class TestProjects:
         assert db.delete_project("nope") is False
 
     def test_get_most_recent_project(self, db: SessionDatabase):
-        db.create_project("p1", "P1", "/tmp/p1", shortname="AAAA")
-        db.create_project("p2", "P2", "/tmp/p2", shortname="BBBB")
+        db.create_project("p1", "P1", shortname="AAAA")
+        db.create_project("p2", "P2", shortname="BBBB")
         p = db.get_most_recent_project()
         assert p is not None
         # The most recently created should be the most recently accessed

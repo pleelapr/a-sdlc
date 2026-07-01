@@ -200,7 +200,6 @@ class SessionDatabase:
         self,
         project_id: str,
         name: str,
-        path: str | None = None,
         shortname: str | None = None,
     ) -> dict[str, Any] | None:
         """Create a new project."""
@@ -218,7 +217,6 @@ class SessionDatabase:
             id=project_id,
             shortname=shortname,
             name=name,
-            path=path,
             created_at=now,
             last_accessed=now,
         )
@@ -232,12 +230,6 @@ class SessionDatabase:
             obj = session.get(Project, project_id)
             return _model_to_dict(obj) if obj else None
 
-    def get_project_by_path(self, path: str) -> dict[str, Any] | None:
-        """Get project by filesystem path."""
-        with self._session() as session:
-            obj = session.exec(select(Project).where(Project.path == path)).first()
-            return _model_to_dict(obj) if obj else None
-
     def get_project_by_shortname(self, shortname: str) -> dict[str, Any] | None:
         """Get project by shortname."""
         with self._session() as session:
@@ -245,24 +237,6 @@ class SessionDatabase:
                 select(Project).where(Project.shortname == shortname)
             ).first()
             return _model_to_dict(obj) if obj else None
-
-    def update_project_path(
-        self, project_id: str, new_path: str
-    ) -> dict[str, Any] | None:
-        """Update project filesystem path."""
-        with self._session() as session:
-            existing = session.exec(
-                select(Project).where(Project.path == new_path, Project.id != project_id)
-            ).first()
-            if existing:
-                raise ValueError(f"Path '{new_path}' is already used by another project")
-            obj = session.get(Project, project_id)
-            if not obj:
-                return None
-            obj.path = new_path
-            obj.last_accessed = _utcnow()
-            session.add(obj)
-        return self.get_project(project_id)
 
     def list_projects(self) -> list[dict[str, Any]]:
         """List all projects ordered by last accessed."""

@@ -129,11 +129,9 @@ class Database:
                 id TEXT PRIMARY KEY,
                 shortname TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
-                path TEXT NOT NULL UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX idx_projects_path ON projects(path);
             CREATE UNIQUE INDEX idx_projects_shortname ON projects(shortname);
 
             -- PRDs table (metadata + file path reference)
@@ -841,7 +839,6 @@ class Database:
         self,
         project_id: str,
         name: str,
-        path: str,
         shortname: str | None = None,
     ) -> dict[str, Any] | None:
         """Create a new project.
@@ -849,7 +846,6 @@ class Database:
         Args:
             project_id: Unique project identifier (slug)
             name: Display name
-            path: Filesystem path to project root
             shortname: 4-character uppercase project key (auto-generated if not provided)
 
         Returns:
@@ -872,9 +868,9 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
             conn.execute(
-                """INSERT INTO projects (id, shortname, name, path, created_at, last_accessed)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (project_id, shortname, name, path, now, now),
+                """INSERT INTO projects (id, shortname, name, created_at, last_accessed)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (project_id, shortname, name, now, now),
             )
         return self.get_project(project_id)
 
@@ -883,15 +879,6 @@ class Database:
         with self.connection() as conn:
             cursor = conn.execute(
                 "SELECT * FROM projects WHERE id = ?", (project_id,)
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    def get_project_by_path(self, path: str) -> dict[str, Any] | None:
-        """Get project by filesystem path."""
-        with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM projects WHERE path = ?", (path,)
             )
             row = cursor.fetchone()
             return dict(row) if row else None
@@ -911,38 +898,6 @@ class Database:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
-
-    def update_project_path(self, project_id: str, new_path: str) -> dict[str, Any] | None:
-        """Update project filesystem path (for relocating projects).
-
-        Args:
-            project_id: Project identifier.
-            new_path: New filesystem path.
-
-        Returns:
-            Updated project dict or None if not found.
-
-        Raises:
-            ValueError: If new_path is already used by another project.
-        """
-        # Check if path is already in use by another project
-        with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT id FROM projects WHERE path = ? AND id != ?",
-                (new_path, project_id)
-            )
-            if cursor.fetchone():
-                raise ValueError(f"Path '{new_path}' is already used by another project")
-
-            now = datetime.now(timezone.utc).isoformat()
-            cursor = conn.execute(
-                "UPDATE projects SET path = ?, last_accessed = ? WHERE id = ?",
-                (new_path, now, project_id)
-            )
-            if cursor.rowcount == 0:
-                return None
-
-        return self.get_project(project_id)
 
     def list_projects(self) -> list[dict[str, Any]]:
         """List all projects ordered by last accessed."""

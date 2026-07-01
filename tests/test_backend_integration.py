@@ -170,11 +170,9 @@ def seeded_storage(storage, tmp_path):
 
     Returns a dict with storage and entity references.
     """
-    project_path = str(tmp_path / "test-project")
     project = storage.create_project(
         project_id="integ-project",
         name="Integration Test Project",
-        path=project_path,
         shortname="INTG",
     )
     sprint = storage.create_sprint(
@@ -212,18 +210,16 @@ class TestProjectCRUD:
         project = storage.create_project(
             project_id="proj-create",
             name="Create Test",
-            path=str(tmp_path / "proj-create"),
             shortname="CRTE",
         )
         assert project["id"] == "proj-create"
         assert project["name"] == "Create Test"
         assert project["shortname"] == "CRTE"
-        assert project["path"] == str(tmp_path / "proj-create")
         assert project["created_at"] is not None
 
     def test_get_project(self, storage, tmp_path):
         """Retrieve a project by ID."""
-        storage.create_project("proj-get", "Get Test", str(tmp_path / "pg"), shortname="GETT")
+        storage.create_project("proj-get", "Get Test", shortname="GETT")
         result = storage.get_project("proj-get")
         assert result is not None
         assert result["id"] == "proj-get"
@@ -233,46 +229,30 @@ class TestProjectCRUD:
         """Get nonexistent project returns None."""
         assert storage.get_project("nonexistent") is None
 
-    def test_get_project_by_path(self, storage, tmp_path):
-        """Retrieve a project by filesystem path."""
-        path = str(tmp_path / "by-path")
-        storage.create_project("proj-bp", "By Path", path, shortname="BYPA")
-        result = storage.get_project_by_path(path)
-        assert result is not None
-        assert result["id"] == "proj-bp"
-
     def test_get_project_by_shortname(self, storage, tmp_path):
         """Retrieve a project by shortname."""
-        storage.create_project("proj-sn", "Short", str(tmp_path / "sn"), shortname="SHRT")
+        storage.create_project("proj-sn", "Short", shortname="SHRT")
         result = storage.get_project_by_shortname("SHRT")
         assert result is not None
         assert result["id"] == "proj-sn"
 
     def test_list_projects(self, storage, tmp_path):
         """List all projects."""
-        storage.create_project("proj-a", "A", str(tmp_path / "a"))
-        storage.create_project("proj-b", "B", str(tmp_path / "b"))
+        storage.create_project("proj-a", "A")
+        storage.create_project("proj-b", "B")
         projects = storage.list_projects()
         assert len(projects) == 2
 
     def test_delete_project(self, storage, tmp_path):
         """Delete a project and verify it is gone."""
-        storage.create_project("proj-del", "Delete", str(tmp_path / "del"))
+        storage.create_project("proj-del", "Delete")
         assert storage.delete_project("proj-del") is True
         assert storage.get_project("proj-del") is None
 
-    def test_update_project_path(self, storage, tmp_path):
-        """Update a project's filesystem path."""
-        storage.create_project("proj-relo", "Relo", str(tmp_path / "old"))
-        new_path = str(tmp_path / "new")
-        updated = storage.update_project_path("proj-relo", new_path)
-        assert updated is not None
-        assert updated["path"] == new_path
-
     def test_get_most_recent_project(self, storage, tmp_path):
         """Get the most recently accessed project."""
-        storage.create_project("proj-old", "Old", str(tmp_path / "old"))
-        storage.create_project("proj-new", "New", str(tmp_path / "new"))
+        storage.create_project("proj-old", "Old")
+        storage.create_project("proj-new", "New")
         storage.update_project_accessed("proj-new")
         result = storage.get_most_recent_project()
         assert result is not None
@@ -281,9 +261,9 @@ class TestProjectCRUD:
 
     def test_shortname_uniqueness(self, storage, tmp_path):
         """Duplicate shortnames raise ValueError."""
-        storage.create_project("proj-1", "P1", str(tmp_path / "p1"), shortname="DUPL")
+        storage.create_project("proj-1", "P1", shortname="DUPL")
         with pytest.raises(ValueError, match="already in use"):
-            storage.create_project("proj-2", "P2", str(tmp_path / "p2"), shortname="DUPL")
+            storage.create_project("proj-2", "P2", shortname="DUPL")
 
 
 # ===================================================================
@@ -1042,7 +1022,7 @@ class TestEdgeCases:
         """Handle Unicode content in all entity types."""
         storage = sqlite_storage
         storage.create_project(
-            "unicode-proj", "Unicode Project", str(tmp_path / "uni"), shortname="UNIC"
+            "unicode-proj", "Unicode Project", shortname="UNIC"
         )
 
         # PRD with Unicode
@@ -1079,7 +1059,7 @@ class TestEdgeCases:
         """Handle large markdown files without issues."""
         storage = sqlite_storage
         storage.create_project(
-            "large-proj", "Large Project", str(tmp_path / "large"), shortname="LRGE"
+            "large-proj", "Large Project", shortname="LRGE"
         )
         prd = storage.create_prd("LRGE-P0001", "large-proj", "Large PRD")
 
@@ -1099,7 +1079,7 @@ class TestEdgeCases:
         """Handle special characters in entity titles."""
         storage = sqlite_storage
         storage.create_project(
-            "special-proj", "Special Characters", str(tmp_path / "spec"), shortname="SPEC"
+            "special-proj", "Special Characters", shortname="SPEC"
         )
         prd = storage.create_prd(
             "SPEC-P0001", "special-proj",
@@ -1117,7 +1097,7 @@ class TestEdgeCases:
         """Sequential ID generation produces unique IDs."""
         storage = sqlite_storage
         storage.create_project(
-            "idgen-proj", "ID Gen", str(tmp_path / "idgen"), shortname="IDGN"
+            "idgen-proj", "ID Gen", shortname="IDGN"
         )
         ids = set()
         for _ in range(10):
@@ -1130,7 +1110,7 @@ class TestEdgeCases:
         """Consistency check on a clean project reports no issues."""
         storage = sqlite_storage
         storage.create_project(
-            "clean-proj", "Clean", str(tmp_path / "clean"), shortname="CLEN"
+            "clean-proj", "Clean", shortname="CLEN"
         )
         storage.create_prd("CLEN-P0001", "clean-proj", "PRD 1")
         storage.create_task("CLEN-T00001", "clean-proj", "Task 1")
@@ -1143,7 +1123,7 @@ class TestEdgeCases:
         """Consistency check detects orphaned content files."""
         storage = sqlite_storage
         storage.create_project(
-            "orphan-proj", "Orphan", str(tmp_path / "orphan"), shortname="ORPH"
+            "orphan-proj", "Orphan", shortname="ORPH"
         )
         # Create orphan file directly
         prd_dir = storage._content_mgr.base_path / "orphan-proj" / "prds"
@@ -1158,7 +1138,7 @@ class TestEdgeCases:
         """Consistency check detects phantom DB records without files."""
         storage = sqlite_storage
         storage.create_project(
-            "phantom-proj", "Phantom", str(tmp_path / "phantom"), shortname="PHAN"
+            "phantom-proj", "Phantom", shortname="PHAN"
         )
         storage.create_prd("PHAN-P0001", "phantom-proj", "Phantom PRD")
         # Delete file directly
@@ -1215,7 +1195,6 @@ class TestPerformanceBenchmarks:
             storage.create_project(
                 f"perf-{counter[0]}",
                 f"Perf Project {counter[0]}",
-                str(tmp_path / f"perf-{counter[0]}"),
                 shortname=sn,
             )
 
@@ -1228,7 +1207,7 @@ class TestPerformanceBenchmarks:
     def test_project_get_p95(self, sqlite_storage, tmp_path):
         """P95 latency for project retrieval < 100ms."""
         storage = sqlite_storage
-        storage.create_project("perf-get", "Perf", str(tmp_path / "perf-get"))
+        storage.create_project("perf-get", "Perf")
 
         latencies = self._measure_latencies(
             lambda: storage.get_project("perf-get"), self.ITERATIONS
@@ -1241,7 +1220,7 @@ class TestPerformanceBenchmarks:
     def test_prd_create_p95(self, sqlite_storage, tmp_path):
         """P95 latency for PRD creation < 100ms."""
         storage = sqlite_storage
-        storage.create_project("perf-prd", "Perf", str(tmp_path / "perf-prd"))
+        storage.create_project("perf-prd", "Perf")
         counter = [0]
 
         def create_prd():
@@ -1261,7 +1240,7 @@ class TestPerformanceBenchmarks:
     def test_task_create_p95(self, sqlite_storage, tmp_path):
         """P95 latency for task creation < 100ms."""
         storage = sqlite_storage
-        storage.create_project("perf-task", "Perf", str(tmp_path / "perf-task"))
+        storage.create_project("perf-task", "Perf")
         counter = [0]
 
         def create_task():
@@ -1281,7 +1260,7 @@ class TestPerformanceBenchmarks:
     def test_task_get_p95(self, sqlite_storage, tmp_path):
         """P95 latency for task retrieval < 100ms."""
         storage = sqlite_storage
-        storage.create_project("perf-tget", "Perf", str(tmp_path / "perf-tget"))
+        storage.create_project("perf-tget", "Perf")
         storage.create_task("PERF-T00001", "perf-tget", "Perf Task")
 
         latencies = self._measure_latencies(
@@ -1295,7 +1274,7 @@ class TestPerformanceBenchmarks:
     def test_list_tasks_p95(self, sqlite_storage, tmp_path):
         """P95 latency for listing tasks < 100ms."""
         storage = sqlite_storage
-        storage.create_project("perf-list", "Perf", str(tmp_path / "perf-list"))
+        storage.create_project("perf-list", "Perf")
         for i in range(20):
             storage.create_task(f"PL-T{i:05d}", "perf-list", f"Task {i}")
 
@@ -1320,7 +1299,7 @@ class TestStressTests:
         """Create 1000+ tasks and verify all are retrievable."""
         storage = sqlite_storage
         storage.create_project(
-            "stress-proj", "Stress", str(tmp_path / "stress"), shortname="STRS"
+            "stress-proj", "Stress", shortname="STRS"
         )
         count = 1000
         task_ids = []
@@ -1353,7 +1332,7 @@ class TestStressTests:
         """Create 100 PRDs and verify integrity."""
         storage = sqlite_storage
         storage.create_project(
-            "stress-prd", "Stress PRD", str(tmp_path / "stress-prd"), shortname="SPRD"
+            "stress-prd", "Stress PRD", shortname="SPRD"
         )
         count = 100
         prd_ids = []
@@ -1370,7 +1349,7 @@ class TestStressTests:
         """Interleave creates, updates, and deletes to verify integrity."""
         storage = sqlite_storage
         storage.create_project(
-            "mixed-proj", "Mixed", str(tmp_path / "mixed"), shortname="MIXD"
+            "mixed-proj", "Mixed", shortname="MIXD"
         )
         storage.create_sprint("MIXD-S0001", "mixed-proj", "Sprint 1")
         storage.create_prd("MIXD-P0001", "mixed-proj", "PRD 1", sprint_id="MIXD-S0001")
@@ -1412,7 +1391,7 @@ class TestStressTests:
         """Bulk write then multiple reads to verify data consistency."""
         storage = sqlite_storage
         storage.create_project(
-            "read-proj", "Read", str(tmp_path / "read"), shortname="READ"
+            "read-proj", "Read", shortname="READ"
         )
         count = 200
 
@@ -1449,7 +1428,7 @@ class TestMigrationRoundTrip:
         """
         storage = sqlite_storage
         storage.create_project(
-            "export-proj", "Export", str(tmp_path / "export"), shortname="EXPO"
+            "export-proj", "Export", shortname="EXPO"
         )
         storage.create_sprint("EXPO-S0001", "export-proj", "Sprint 1", goal="Export goal")
         storage.create_prd(
@@ -1487,7 +1466,7 @@ class TestMigrationRoundTrip:
         # 1. Create source data via HybridStorage (SQLite)
         source_storage = HybridStorage(base_path=tmp_path / "source")
         source_storage.create_project(
-            "rt-proj", "Round Trip", str(tmp_path / "rt"), shortname="RTRP"
+            "rt-proj", "Round Trip", shortname="RTRP"
         )
         source_storage.create_sprint(
             "RTRP-S0001", "rt-proj", "Sprint 1", goal="round trip"
@@ -1601,7 +1580,7 @@ class TestCrossEntityRelationships:
         """Task -> PRD -> Sprint relationship chain is correct."""
         storage = sqlite_storage
         storage.create_project(
-            "chain-proj", "Chain", str(tmp_path / "chain"), shortname="CHAN"
+            "chain-proj", "Chain", shortname="CHAN"
         )
         storage.create_sprint("CHAN-S0001", "chain-proj", "Sprint 1")
         storage.create_prd("CHAN-P0001", "chain-proj", "PRD 1", sprint_id="CHAN-S0001")
@@ -1615,7 +1594,7 @@ class TestCrossEntityRelationships:
         """Task sprint inheritance reflects PRD reassignment."""
         storage = sqlite_storage
         storage.create_project(
-            "inherit-proj", "Inherit", str(tmp_path / "inherit"), shortname="INHR"
+            "inherit-proj", "Inherit", shortname="INHR"
         )
         storage.create_sprint("INHR-S0001", "inherit-proj", "Sprint 1")
         storage.create_sprint("INHR-S0002", "inherit-proj", "Sprint 2")
@@ -1637,7 +1616,7 @@ class TestCrossEntityRelationships:
         """Deleting a project cleans up all associated entities."""
         storage = sqlite_storage
         storage.create_project(
-            "cascade-proj", "Cascade", str(tmp_path / "cascade"), shortname="CASC"
+            "cascade-proj", "Cascade", shortname="CASC"
         )
         storage.create_sprint("CASC-S0001", "cascade-proj", "Sprint 1")
         storage.create_prd("CASC-P0001", "cascade-proj", "PRD 1", sprint_id="CASC-S0001")
@@ -1655,7 +1634,7 @@ class TestCrossEntityRelationships:
         """Design documents have 1:1 relationship with PRDs."""
         storage = sqlite_storage
         storage.create_project(
-            "design-proj", "Design", str(tmp_path / "design"), shortname="DSGN"
+            "design-proj", "Design", shortname="DSGN"
         )
         storage.create_prd("DSGN-P0001", "design-proj", "PRD 1")
         storage.create_design("DSGN-P0001", "design-proj")
@@ -1668,7 +1647,7 @@ class TestCrossEntityRelationships:
         """list_tasks_by_sprint returns tasks via PRD join."""
         storage = sqlite_storage
         storage.create_project(
-            "sprint-task", "Sprint Task", str(tmp_path / "st"), shortname="SPRT"
+            "sprint-task", "Sprint Task", shortname="SPRT"
         )
         storage.create_sprint("SPRT-S0001", "sprint-task", "Sprint 1")
         storage.create_prd("SPRT-P0001", "sprint-task", "PRD 1", sprint_id="SPRT-S0001")
@@ -1687,7 +1666,7 @@ class TestCrossEntityRelationships:
         """A sprint can have multiple PRDs with their own tasks."""
         storage = sqlite_storage
         storage.create_project(
-            "multi-proj", "Multi", str(tmp_path / "multi"), shortname="MULT"
+            "multi-proj", "Multi", shortname="MULT"
         )
         storage.create_sprint("MULT-S0001", "multi-proj", "Sprint 1")
         storage.create_prd("MULT-P0001", "multi-proj", "PRD A", sprint_id="MULT-S0001")

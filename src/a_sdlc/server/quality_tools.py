@@ -163,15 +163,14 @@ def log_correction(
             "message": "Description must not be empty.",
         }
 
-    # Resolve project path: prefer DB project, fallback to cwd
+    # Resolve project root from the local marker (walked up from cwd), else cwd.
     project_path = None
     try:
-        db = _server.get_db()
-        project_id = _server._get_current_project_id()
-        if project_id:
-            project = db.get_project(project_id)
-            if project:
-                project_path = project["path"]
+        from a_sdlc.core.project_marker import find_marker
+
+        marker = find_marker(os.getcwd())
+        if marker:
+            project_path = marker["root"]
     except Exception:
         pass
 

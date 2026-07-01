@@ -35,9 +35,9 @@ def temp_storage():
 
 
 @pytest.fixture
-def storage_with_project(temp_storage, tmp_path):
+def storage_with_project(temp_storage):
     """Create storage with a test project."""
-    temp_storage.create_project("test-proj", "Test Project", str(tmp_path / "test"))
+    temp_storage.create_project("test-proj", "Test Project")
     return temp_storage
 
 

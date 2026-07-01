@@ -35,15 +35,22 @@ def get_pr_feedback(
     """
     from a_sdlc.server.github import GitHubClient, detect_git_info, load_global_github_config
 
-    db = _server.get_db()
-    project_id = _server._get_current_project_id()
-
-    # Resolve token: project config → global config → env var
+    # Resolve token: project config → global config → env var.
+    #
+    # The project-config tier reads a per-project token from the database, but
+    # this tool otherwise needs no database (it only talks to git + the GitHub
+    # API). Treat that tier as best-effort so an unreachable/offline database
+    # -- e.g. a remote deployment whose DB is down -- falls through to the
+    # global config file and GITHUB_TOKEN instead of crashing the whole tool.
     token = None
-    if project_id:
-        config = db.get_external_config(project_id, "github")
-        if config:
-            token = config["config"].get("token")
+    try:
+        project_id = _server._get_current_project_id()
+        if project_id:
+            config = _server.get_db().get_external_config(project_id, "github")
+            if config:
+                token = config["config"].get("token")
+    except Exception:
+        token = None  # DB unavailable — fall through to global config / env var
 
     if not token:
         global_cfg = load_global_github_config()

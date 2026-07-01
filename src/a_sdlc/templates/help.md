@@ -96,7 +96,6 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__init_project(name?)` - Initialize project
 - `mcp__asdlc__list_projects()` - List all projects
 - `mcp__asdlc__switch_project(project_id)` - Change project
-- `mcp__asdlc__relocate_project(shortname)` - Re-link project to current directory
 
 ### PRD Operations
 - `mcp__asdlc__list_prds()` - List PRDs

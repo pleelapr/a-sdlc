@@ -104,9 +104,9 @@ class TestInstantiation:
         assert obj.version == SCHEMA_VERSION
 
     def test_project(self):
-        obj = Project(id="p1", shortname="PROJ", name="My Project", path="/tmp/proj")
+        obj = Project(id="p1", shortname="PROJ", name="My Project")
         assert obj.shortname == "PROJ"
-        assert obj.path == "/tmp/proj"
+        assert obj.name == "My Project"
 
     def test_sprint(self):
         obj = Sprint(id="s1", project_id="p1", title="Sprint 1")
@@ -216,21 +216,15 @@ class TestValidation:
 
     def test_project_requires_id(self):
         with pytest.raises(ValidationError):
-            Project.model_validate({"shortname": "X", "name": "N", "path": "/p"})
+            Project.model_validate({"shortname": "X", "name": "N"})
 
     def test_project_requires_shortname(self):
         with pytest.raises(ValidationError):
-            Project.model_validate({"id": "p1", "name": "N", "path": "/p"})
+            Project.model_validate({"id": "p1", "name": "N"})
 
     def test_project_requires_name(self):
         with pytest.raises(ValidationError):
-            Project.model_validate({"id": "p1", "shortname": "X", "path": "/p"})
-
-    def test_project_path_is_optional(self):
-        # Remote/centralized deployments create projects without a
-        # server-side path; the column is nullable since migration 0002.
-        project = Project.model_validate({"id": "p1", "shortname": "X", "name": "N"})
-        assert project.path is None
+            Project.model_validate({"id": "p1", "shortname": "X"})
 
     def test_task_requires_title(self):
         with pytest.raises(ValidationError):
@@ -391,7 +385,7 @@ class TestDatetimeFields:
     def test_project_accepts_datetime(self):
         now = datetime(2025, 1, 1, 12, 0, 0)
         obj = Project(
-            id="p", shortname="X", name="N", path="/p",
+            id="p", shortname="X", name="N",
             created_at=now, last_accessed=now,
         )
         assert obj.created_at == now

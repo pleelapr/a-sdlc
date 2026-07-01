@@ -41,7 +41,7 @@ def source_db_a(tmp_path):
     db_path = tmp_path / "source_a" / "data.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(db_path=db_path)
-    db.create_project("proj-a", "Alpha Project", "/tmp/proj-a", shortname="TEST")
+    db.create_project("proj-a", "Alpha Project", shortname="TEST")
     db.create_sprint(
         sprint_id="TEST-S0001",
         project_id="proj-a",
@@ -70,7 +70,7 @@ def source_db_b(tmp_path):
     db_path = tmp_path / "source_b" / "data.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(db_path=db_path)
-    db.create_project("proj-b", "Beta Project", "/tmp/proj-b", shortname="BETA")
+    db.create_project("proj-b", "Beta Project", shortname="BETA")
     db.create_sprint(
         sprint_id="BETA-S0001",
         project_id="proj-b",
@@ -99,7 +99,7 @@ def source_db_collision(tmp_path):
     db_path = tmp_path / "source_collision" / "data.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db = Database(db_path=db_path)
-    db.create_project("proj-a", "Alpha Project", "/tmp/proj-a", shortname="TEST")
+    db.create_project("proj-a", "Alpha Project", shortname="TEST")
     db.create_sprint(
         sprint_id="TEST-S0001",
         project_id="proj-a",

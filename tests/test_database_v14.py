@@ -18,7 +18,7 @@ def temp_db():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         db = Database(db_path=db_path)
-        db.create_project("test-project", "Test Project", "/tmp/test")
+        db.create_project("test-project", "Test Project")
         db.create_prd(
             prd_id="TEST-P0001",
             project_id="test-project",
