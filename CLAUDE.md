@@ -91,7 +91,9 @@ alembic/
 
 `a-sdlc install` (via `installer.py`):
 1. Copies `src/a_sdlc/templates/*.md` → `~/.claude/commands/sdlc/`
-2. Configures `asdlc` MCP server in `~/.claude.json` with HTTP transport (flags: `--url`, `--force`, `--list`, `--target`)
+2. Configures `asdlc` MCP server in `~/.claude.json` with HTTP transport (flags: `--url`, `--auth-token`, `--force`, `--list`, `--target`)
+
+`--force` refreshes templates/personas but preserves a previously configured MCP `url` and `Authorization` header unless `--url`/`--auth-token` are explicitly passed again.
 
 ### Plugin System
 

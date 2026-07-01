@@ -706,3 +706,135 @@ class TestFreshInstallDefaults:
         assert result.exit_code == 0
         settings = json.loads(settings_path.read_text())
         assert settings["mcpServers"]["asdlc"]["type"] == "http"
+
+
+# =============================================================================
+# Force Reinstall: Preserve Existing URL and Auth
+# =============================================================================
+
+
+class TestForcePreservesExistingConfig:
+    """force=True keeps a previously configured URL/auth unless overridden."""
+
+    CUSTOM_URL = "https://asdlc.example.com/mcp"
+    CUSTOM_HEADERS = {"Authorization": "Bearer old-secret"}
+
+    def _make_target(self, tmp_path: Path, name: str = "test"):
+        from a_sdlc.cli_targets import CLITarget
+
+        return CLITarget(
+            name=name,
+            display_name="Test",
+            home_dir=tmp_path,
+            mcp_config_path=tmp_path / "claude.json",
+            settings_path=tmp_path / "settings.json",
+            commands_dir=tmp_path / "commands" / "sdlc",
+            agents_dir=tmp_path / "agents",
+            context_file="CLAUDE.md",
+        )
+
+    def _write_existing(self, tmp_path: Path) -> Path:
+        settings_path = tmp_path / "claude.json"
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "asdlc": {
+                            "type": "http",
+                            "url": self.CUSTOM_URL,
+                            "headers": self.CUSTOM_HEADERS,
+                        }
+                    }
+                }
+            )
+        )
+        return settings_path
+
+    def test_force_preserves_url_and_headers(self, tmp_path: Path) -> None:
+        """force=True without url/auth_token keeps the existing config."""
+        from a_sdlc.installer import configure_mcp_server
+
+        settings_path = self._write_existing(tmp_path)
+        result = configure_mcp_server(force=True, target=self._make_target(tmp_path))
+
+        assert result["status"] == "configured"
+        config = json.loads(settings_path.read_text())["mcpServers"]["asdlc"]
+        assert config["url"] == self.CUSTOM_URL
+        assert config["headers"] == self.CUSTOM_HEADERS
+
+    def test_force_explicit_url_overrides_but_keeps_headers(self, tmp_path: Path) -> None:
+        """Explicit url replaces the endpoint; existing auth header survives."""
+        from a_sdlc.installer import configure_mcp_server
+
+        settings_path = self._write_existing(tmp_path)
+        result = configure_mcp_server(
+            force=True,
+            target=self._make_target(tmp_path),
+            url="http://new-host:9999/mcp",
+        )
+
+        assert result["status"] == "configured"
+        config = json.loads(settings_path.read_text())["mcpServers"]["asdlc"]
+        assert config["url"] == "http://new-host:9999/mcp"
+        assert config["headers"] == self.CUSTOM_HEADERS
+
+    def test_force_explicit_token_overrides_but_keeps_url(self, tmp_path: Path) -> None:
+        """Explicit auth_token replaces the header; existing URL survives."""
+        from a_sdlc.installer import configure_mcp_server
+
+        settings_path = self._write_existing(tmp_path)
+        result = configure_mcp_server(
+            force=True,
+            target=self._make_target(tmp_path),
+            auth_token="new-secret",
+        )
+
+        assert result["status"] == "configured"
+        config = json.loads(settings_path.read_text())["mcpServers"]["asdlc"]
+        assert config["url"] == self.CUSTOM_URL
+        assert config["headers"] == {"Authorization": "Bearer new-secret"}
+
+    def test_force_without_existing_writes_defaults(self, tmp_path: Path) -> None:
+        """force=True with no prior config falls back to localhost defaults."""
+        from a_sdlc.installer import configure_mcp_server
+
+        target = self._make_target(tmp_path)
+        result = configure_mcp_server(force=True, target=target)
+
+        assert result["status"] == "configured"
+        config = json.loads((tmp_path / "claude.json").read_text())["mcpServers"]["asdlc"]
+        assert config["url"] == "http://localhost:8765/mcp"
+        assert "headers" not in config
+
+    def test_preserved_headers_skip_claude_cli_path(self, tmp_path: Path) -> None:
+        """Preserved auth headers never pass through ``claude mcp add-json``."""
+        from a_sdlc.installer import configure_mcp_server
+
+        settings_path = self._write_existing(tmp_path)
+        target = self._make_target(tmp_path, name="claude")
+
+        with patch("a_sdlc.installer._configure_via_cli") as mock_cli:
+            result = configure_mcp_server(force=True, target=target)
+
+        mock_cli.assert_not_called()
+        assert result["status"] == "configured"
+        config = json.loads(settings_path.read_text())["mcpServers"]["asdlc"]
+        assert config["headers"] == self.CUSTOM_HEADERS
+
+    def test_install_force_cli_preserves_token(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """End-to-end: `a-sdlc install --force` keeps the configured URL/token."""
+        settings_path = self._write_existing(tmp_path)
+        target = self._make_target(tmp_path, name="claude")
+
+        with (
+            patch("a_sdlc.cli.resolve_targets", return_value=[target]),
+            patch("a_sdlc.installer._configure_via_cli", return_value=False),
+        ):
+            result = runner.invoke(main, ["install", "--force"])
+
+        assert result.exit_code == 0
+        config = json.loads(settings_path.read_text())["mcpServers"]["asdlc"]
+        assert config["url"] == self.CUSTOM_URL
+        assert config["headers"] == self.CUSTOM_HEADERS

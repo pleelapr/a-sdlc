@@ -96,6 +96,24 @@ def _build_mcp_config(
     return config
 
 
+def _load_existing_mcp_config(settings_path: Path) -> dict[str, Any] | None:
+    """Read the current ``asdlc`` MCP entry from settings, if any.
+
+    Returns None when the file is missing, unreadable, or has no valid
+    ``asdlc`` entry.
+    """
+    try:
+        if settings_path.exists():
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            existing = settings.get("mcpServers", {}).get("asdlc")
+            if isinstance(existing, dict):
+                return existing
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def _configure_via_cli(
     config: dict[str, Any],
     scope: str = "user",
@@ -133,7 +151,9 @@ def configure_mcp_server(
     CLI is not installed.
 
     Args:
-        force: If True, overwrite existing configuration.
+        force: If True, overwrite existing configuration. A previously
+            configured ``url`` and ``headers`` (auth) are preserved unless
+            explicitly overridden via the ``url``/``auth_token`` arguments.
         target: CLI target to configure for. Defaults to Claude Code.
         port: Port for HTTP transport (default 8765).
         url: Explicit MCP server URL (overrides port). For Docker/cloud instances.
@@ -144,30 +164,34 @@ def configure_mcp_server(
     """
     effective_target = target or CLAUDE_TARGET
     settings_path = effective_target.mcp_config_path
-    mcp_config = _build_mcp_config(port=port, url=url, auth_token=auth_token)
+    existing = _load_existing_mcp_config(settings_path)
 
     # --- Check if already configured (skip when force=True) ----------
-    if not force:
-        try:
-            if settings_path.exists():
-                with open(settings_path, encoding="utf-8") as f:
-                    settings = json.load(f)
-                if "asdlc" in settings.get("mcpServers", {}):
-                    return {
-                        "status": "exists",
-                        "message": "asdlc MCP server already configured",
-                        "config": settings["mcpServers"]["asdlc"],
-                    }
-        except (json.JSONDecodeError, OSError):
-            pass  # Proceed to configure
+    if not force and existing is not None:
+        return {
+            "status": "exists",
+            "message": "asdlc MCP server already configured",
+            "config": existing,
+        }
+
+    mcp_config = _build_mcp_config(port=port, url=url, auth_token=auth_token)
+
+    # Preserve a previously configured endpoint and auth header on
+    # reinstall (force=True) unless the caller explicitly overrides them.
+    if existing is not None:
+        if url is None and existing.get("url"):
+            mcp_config["url"] = existing["url"]
+        if auth_token is None and isinstance(existing.get("headers"), dict):
+            mcp_config["headers"] = existing["headers"]
 
     # --- Preferred path: use ``claude mcp add-json`` for Claude targets ---
-    # Skip CLI path when auth_token is set to avoid leaking the secret in
-    # process arguments (visible via ``ps aux``).  Fall through to the
-    # direct file-write path instead.
+    # Skip CLI path when the config carries auth headers (explicit or
+    # preserved) to avoid leaking the secret in process arguments
+    # (visible via ``ps aux``).  Fall through to the direct file-write
+    # path instead.
     if (
         effective_target.name == "claude"
-        and not auth_token
+        and "headers" not in mcp_config
         and _configure_via_cli(mcp_config)
     ):
         return {
