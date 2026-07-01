@@ -200,7 +200,6 @@ class HybridStorage:
         self,
         project_id: str,
         name: str,
-        path: str,
         shortname: str | None = None,
     ) -> dict[str, Any]:
         """Create a new project.
@@ -208,26 +207,35 @@ class HybridStorage:
         Args:
             project_id: Unique project identifier (slug)
             name: Display name
-            path: Filesystem path to project root
             shortname: 4-character uppercase project key (auto-generated if not provided)
         """
-        return self._db.create_project(project_id, name, path, shortname)
+        return self._db.create_project(project_id, name, shortname)
 
     def get_project(self, project_id: str) -> dict[str, Any] | None:
         """Get project by ID."""
         return self._db.get_project(project_id)
 
-    def get_project_by_path(self, path: str) -> dict[str, Any] | None:
-        """Get project by filesystem path."""
-        return self._db.get_project_by_path(path)
-
     def get_project_by_shortname(self, shortname: str) -> dict[str, Any] | None:
         """Get project by shortname."""
         return self._db.get_project_by_shortname(shortname)
 
-    def update_project_path(self, project_id: str, new_path: str) -> dict[str, Any] | None:
-        """Update project filesystem path (for relocating projects)."""
-        return self._db.update_project_path(project_id, new_path)
+    def resolve_project_by_cwd(
+        self, start: "Path | str | None" = None
+    ) -> dict[str, Any] | None:
+        """Resolve the project for a working directory via its local marker.
+
+        Walks up from *start* (default cwd) to the nearest ``.sdlc/project.json``
+        (see :mod:`a_sdlc.core.project_marker`) and returns that project, or
+        ``None`` when no marker is found or the referenced project is unknown.
+        Replaces the removed path-based lookup so the database stores no
+        device-specific paths.
+        """
+        from a_sdlc.core.project_marker import find_marker
+
+        marker = find_marker(start)
+        if not marker:
+            return None
+        return self._db.get_project(marker["id"])
 
     def list_projects(self) -> list[dict[str, Any]]:
         """List all projects."""

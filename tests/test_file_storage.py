@@ -35,41 +35,30 @@ class TestProjectOperations:
 
     def test_create_project(self, temp_storage, tmp_path):
         """Test creating a new project."""
-        project_path = str(tmp_path / "test")
         project = temp_storage.create_project(
             project_id="test-project",
             name="Test Project",
-            path=project_path
         )
         assert project["id"] == "test-project"
         assert project["name"] == "Test Project"
-        assert project["path"] == project_path
 
     def test_get_project(self, temp_storage, tmp_path):
         """Test retrieving a project."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         project = temp_storage.get_project("test-project")
-        assert project is not None
-        assert project["id"] == "test-project"
-
-    def test_get_project_by_path(self, temp_storage, tmp_path):
-        """Test retrieving a project by path."""
-        project_path = str(tmp_path / "test")
-        temp_storage.create_project("test-project", "Test Project", project_path)
-        project = temp_storage.get_project_by_path(project_path)
         assert project is not None
         assert project["id"] == "test-project"
 
     def test_list_projects(self, temp_storage, tmp_path):
         """Test listing projects."""
-        temp_storage.create_project("project-1", "Project 1", str(tmp_path / "p1"))
-        temp_storage.create_project("project-2", "Project 2", str(tmp_path / "p2"))
+        temp_storage.create_project("project-1", "Project 1")
+        temp_storage.create_project("project-2", "Project 2")
         projects = temp_storage.list_projects()
         assert len(projects) == 2
 
     def test_delete_project(self, temp_storage, tmp_path):
         """Test deleting a project."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         result = temp_storage.delete_project("test-project")
         assert result is True
         assert temp_storage.get_project("test-project") is None
@@ -80,7 +69,7 @@ class TestPRDOperations:
 
     def test_create_prd(self, temp_storage, tmp_path):
         """Test creating a PRD."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         prd = temp_storage.create_prd(
             prd_id="feature-auth",
             project_id="test-project",
@@ -93,7 +82,7 @@ class TestPRDOperations:
 
     def test_create_prd_with_sprint(self, temp_storage, tmp_path):
         """Test creating a PRD with sprint assignment."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         prd = temp_storage.create_prd(
             prd_id="feature-auth",
@@ -105,7 +94,7 @@ class TestPRDOperations:
 
     def test_get_prd(self, temp_storage, tmp_path):
         """Test retrieving a PRD."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_prd("feature-auth", "test-project", "Auth Feature")
         prd = temp_storage.get_prd("feature-auth")
         assert prd is not None
@@ -113,7 +102,7 @@ class TestPRDOperations:
 
     def test_list_prds(self, temp_storage, tmp_path):
         """Test listing PRDs."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_prd("prd-1", "test-project", "PRD 1")
         temp_storage.create_prd("prd-2", "test-project", "PRD 2")
         prds = temp_storage.list_prds("test-project")
@@ -121,7 +110,7 @@ class TestPRDOperations:
 
     def test_list_prds_by_sprint(self, temp_storage, tmp_path):
         """Test filtering PRDs by sprint."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         temp_storage.create_prd("prd-1", "test-project", "PRD 1", sprint_id="SPRINT-01")
         temp_storage.create_prd("prd-2", "test-project", "PRD 2")  # No sprint
@@ -131,7 +120,7 @@ class TestPRDOperations:
 
     def test_update_prd(self, temp_storage, tmp_path):
         """Test updating a PRD."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_prd("feature-auth", "test-project", "Auth Feature")
         updated = temp_storage.update_prd("feature-auth", status="ready")
         assert updated is not None
@@ -139,7 +128,7 @@ class TestPRDOperations:
 
     def test_delete_prd(self, temp_storage, tmp_path):
         """Test deleting a PRD."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_prd("feature-auth", "test-project", "Auth Feature")
         result = temp_storage.delete_prd("feature-auth")
         assert result is True
@@ -151,7 +140,7 @@ class TestTaskOperations:
 
     def test_create_task(self, temp_storage, tmp_path):
         """Test creating a task."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         task = temp_storage.create_task(
             task_id="TASK-001",
             project_id="test-project",
@@ -165,7 +154,7 @@ class TestTaskOperations:
 
     def test_get_task(self, temp_storage, tmp_path):
         """Test retrieving a task."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_task("TASK-001", "test-project", "Test Task")
         task = temp_storage.get_task("TASK-001")
         assert task is not None
@@ -173,7 +162,7 @@ class TestTaskOperations:
 
     def test_list_tasks(self, temp_storage, tmp_path):
         """Test listing tasks."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_task("TASK-001", "test-project", "Task 1")
         temp_storage.create_task("TASK-002", "test-project", "Task 2")
         tasks = temp_storage.list_tasks("test-project")
@@ -181,7 +170,7 @@ class TestTaskOperations:
 
     def test_list_tasks_by_status(self, temp_storage, tmp_path):
         """Test filtering tasks by status."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_task("TASK-001", "test-project", "Task 1", status="pending")
         temp_storage.create_task("TASK-002", "test-project", "Task 2", status="completed")
         tasks = temp_storage.list_tasks("test-project", status="pending")
@@ -190,7 +179,7 @@ class TestTaskOperations:
 
     def test_update_task(self, temp_storage, tmp_path):
         """Test updating a task."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_task("TASK-001", "test-project", "Test Task")
         updated = temp_storage.update_task("TASK-001", status="in_progress")
         assert updated is not None
@@ -198,14 +187,14 @@ class TestTaskOperations:
 
     def test_update_task_to_completed_sets_completed_at(self, temp_storage, tmp_path):
         """Test that completing a task sets completed_at."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_task("TASK-001", "test-project", "Test Task")
         updated = temp_storage.update_task("TASK-001", status="completed")
         assert updated["completed_at"] is not None
 
     def test_delete_task(self, temp_storage, tmp_path):
         """Test deleting a task."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_task("TASK-001", "test-project", "Test Task")
         result = temp_storage.delete_task("TASK-001")
         assert result is True
@@ -213,7 +202,7 @@ class TestTaskOperations:
 
     def test_get_next_task_id(self, temp_storage, tmp_path):
         """Test task ID generation uses shortname format."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"), shortname="TEST")
+        temp_storage.create_project("test-project", "Test Project", shortname="TEST")
         next_id = temp_storage.get_next_task_id("test-project")
         assert next_id == "TEST-T00001"
 
@@ -223,7 +212,7 @@ class TestSprintOperations:
 
     def test_create_sprint(self, temp_storage, tmp_path):
         """Test creating a sprint."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         sprint = temp_storage.create_sprint(
             sprint_id="SPRINT-01",
             project_id="test-project",
@@ -237,7 +226,7 @@ class TestSprintOperations:
 
     def test_get_sprint(self, temp_storage, tmp_path):
         """Test retrieving a sprint."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         sprint = temp_storage.get_sprint("SPRINT-01")
         assert sprint is not None
@@ -245,7 +234,7 @@ class TestSprintOperations:
 
     def test_get_sprint_with_prd_count(self, temp_storage, tmp_path):
         """Test that get_sprint includes PRD count."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         temp_storage.create_prd("prd-1", "test-project", "PRD 1", sprint_id="SPRINT-01")
         sprint = temp_storage.get_sprint("SPRINT-01")
@@ -253,7 +242,7 @@ class TestSprintOperations:
 
     def test_list_sprints(self, temp_storage, tmp_path):
         """Test listing sprints."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         temp_storage.create_sprint("SPRINT-02", "test-project", "Sprint 2")
         sprints = temp_storage.list_sprints("test-project")
@@ -261,7 +250,7 @@ class TestSprintOperations:
 
     def test_update_sprint_to_active(self, temp_storage, tmp_path):
         """Test that activating a sprint sets started_at."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         updated = temp_storage.update_sprint("SPRINT-01", status="active")
         assert updated["status"] == "active"
@@ -269,7 +258,7 @@ class TestSprintOperations:
 
     def test_update_sprint_to_completed(self, temp_storage, tmp_path):
         """Test that completing a sprint sets completed_at."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         updated = temp_storage.update_sprint("SPRINT-01", status="completed")
         assert updated["status"] == "completed"
@@ -277,7 +266,7 @@ class TestSprintOperations:
 
     def test_delete_sprint_unlinks_prds(self, temp_storage, tmp_path):
         """Test that deleting a sprint unlinks its PRDs."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         temp_storage.create_prd("prd-1", "test-project", "PRD 1", sprint_id="SPRINT-01")
         temp_storage.delete_sprint("SPRINT-01")
@@ -286,7 +275,7 @@ class TestSprintOperations:
 
     def test_get_sprint_prds(self, temp_storage, tmp_path):
         """Test getting PRDs for a sprint."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         temp_storage.create_prd("prd-1", "test-project", "PRD 1", sprint_id="SPRINT-01")
         temp_storage.create_prd("prd-2", "test-project", "PRD 2", sprint_id="SPRINT-01")
@@ -295,7 +284,7 @@ class TestSprintOperations:
 
     def test_assign_prd_to_sprint(self, temp_storage, tmp_path):
         """Test assigning a PRD to a sprint."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.create_sprint("SPRINT-01", "test-project", "Sprint 1")
         temp_storage.create_prd("prd-1", "test-project", "PRD 1")
         updated = temp_storage.assign_prd_to_sprint("prd-1", "SPRINT-01")
@@ -303,7 +292,7 @@ class TestSprintOperations:
 
     def test_get_next_sprint_id(self, temp_storage, tmp_path):
         """Test sprint ID generation uses shortname format."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"), shortname="TEST")
+        temp_storage.create_project("test-project", "Test Project", shortname="TEST")
         next_id = temp_storage.get_next_sprint_id("test-project")
         assert next_id == "TEST-S0001"
 
@@ -367,7 +356,7 @@ class TestExternalConfigOperations:
 
     def test_set_external_config(self, temp_storage, tmp_path):
         """Test setting external configuration."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         config = temp_storage.set_external_config(
             project_id="test-project",
             system="linear",
@@ -378,7 +367,7 @@ class TestExternalConfigOperations:
 
     def test_get_external_config(self, temp_storage, tmp_path):
         """Test retrieving external configuration."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.set_external_config("test-project", "linear", {"api_key": "test-key"})
         config = temp_storage.get_external_config("test-project", "linear")
         assert config is not None
@@ -386,7 +375,7 @@ class TestExternalConfigOperations:
 
     def test_list_external_configs(self, temp_storage, tmp_path):
         """Test listing external configurations."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.set_external_config("test-project", "linear", {"api_key": "linear-key"})
         temp_storage.set_external_config("test-project", "jira", {"api_key": "jira-key"})
         configs = temp_storage.list_external_configs("test-project")
@@ -394,7 +383,7 @@ class TestExternalConfigOperations:
 
     def test_delete_external_config(self, temp_storage, tmp_path):
         """Test deleting external configuration."""
-        temp_storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        temp_storage.create_project("test-project", "Test Project")
         temp_storage.set_external_config("test-project", "linear", {"api_key": "test-key"})
         result = temp_storage.delete_external_config("test-project", "linear")
         assert result is True
@@ -571,7 +560,6 @@ class TestProjectShortname:
         project = temp_storage.create_project(
             project_id="my-project",
             name="My Awesome Project",
-            path=str(tmp_path / "my-project")
         )
         assert project["shortname"] is not None
         assert len(project["shortname"]) == 4
@@ -583,7 +571,6 @@ class TestProjectShortname:
         project = temp_storage.create_project(
             project_id="my-project",
             name="My Project",
-            path=str(tmp_path / "my-project"),
             shortname="MYPR"
         )
         assert project["shortname"] == "MYPR"
@@ -593,7 +580,6 @@ class TestProjectShortname:
         temp_storage.create_project(
             project_id="project-1",
             name="Project 1",
-            path=str(tmp_path / "p1"),
             shortname="PROJ"
         )
         # Second project with same shortname should fail
@@ -601,19 +587,16 @@ class TestProjectShortname:
             temp_storage.create_project(
                 project_id="project-2",
                 name="Project 2",
-                path=str(tmp_path / "p2"),
                 shortname="PROJ"
             )
 
     def test_shortname_validation_length(self, temp_storage, tmp_path):
         """Test that shortname must be exactly 4 characters."""
-        test_path = str(tmp_path / "test")
         # Too short
         with pytest.raises(ValueError, match="exactly 4 characters"):
             temp_storage.create_project(
                 project_id="test",
                 name="Test",
-                path=test_path,
                 shortname="ABC"
             )
         # Too long
@@ -621,19 +604,16 @@ class TestProjectShortname:
             temp_storage.create_project(
                 project_id="test",
                 name="Test",
-                path=test_path,
                 shortname="ABCDE"
             )
 
     def test_shortname_validation_characters(self, temp_storage, tmp_path):
         """Test that shortname must be uppercase letters only."""
-        test_path = str(tmp_path / "test")
         # Lowercase
         with pytest.raises(ValueError, match="uppercase letters"):
             temp_storage.create_project(
                 project_id="test",
                 name="Test",
-                path=test_path,
                 shortname="abcd"
             )
         # Numbers
@@ -641,7 +621,6 @@ class TestProjectShortname:
             temp_storage.create_project(
                 project_id="test",
                 name="Test",
-                path=test_path,
                 shortname="AB12"
             )
         # Special characters
@@ -649,7 +628,6 @@ class TestProjectShortname:
             temp_storage.create_project(
                 project_id="test",
                 name="Test",
-                path=test_path,
                 shortname="AB-C"
             )
 
@@ -657,9 +635,7 @@ class TestProjectShortname:
         """Test that task IDs use shortname format."""
         temp_storage.create_project(
             project_id="test-project",
-            name="Test Project",
-            path=str(tmp_path / "test"),
-            shortname="TEST"
+            name="Test Project",            shortname="TEST"
         )
         task_id = temp_storage.get_next_task_id("test-project")
         assert task_id == "TEST-T00001"
@@ -668,9 +644,7 @@ class TestProjectShortname:
         """Test that sprint IDs use shortname format."""
         temp_storage.create_project(
             project_id="test-project",
-            name="Test Project",
-            path=str(tmp_path / "test"),
-            shortname="TEST"
+            name="Test Project",            shortname="TEST"
         )
         sprint_id = temp_storage.get_next_sprint_id("test-project")
         assert sprint_id == "TEST-S0001"
@@ -679,9 +653,7 @@ class TestProjectShortname:
         """Test that PRD IDs use shortname format."""
         temp_storage.create_project(
             project_id="test-project",
-            name="Test Project",
-            path=str(tmp_path / "test"),
-            shortname="TEST"
+            name="Test Project",            shortname="TEST"
         )
         prd_id = temp_storage.get_next_prd_id("test-project")
         assert prd_id == "TEST-P0001"
@@ -690,39 +662,18 @@ class TestProjectShortname:
         """Test retrieving project by shortname."""
         temp_storage.create_project(
             project_id="test-project",
-            name="Test Project",
-            path=str(tmp_path / "test"),
-            shortname="TEST"
+            name="Test Project",            shortname="TEST"
         )
         project = temp_storage.get_project_by_shortname("TEST")
         assert project is not None
         assert project["id"] == "test-project"
         assert project["shortname"] == "TEST"
 
-    def test_relocate_project(self, temp_storage, tmp_path):
-        """Test updating project path (relocate)."""
-        old_path = str(tmp_path / "old-path")
-        new_path = str(tmp_path / "new-path")
-        temp_storage.create_project(
-            project_id="test-project",
-            name="Test Project",
-            path=old_path,
-            shortname="TEST"
-        )
-        updated = temp_storage.update_project_path("test-project", new_path)
-        assert updated is not None
-        assert updated["path"] == new_path
-
-        # Verify the change persisted
-        project = temp_storage.get_project("test-project")
-        assert project["path"] == new_path
-
     def test_shortname_auto_generation_consonants(self, temp_storage, tmp_path):
         """Test that auto-generated shortname prefers consonants."""
         project = temp_storage.create_project(
             project_id="frontend",
             name="Frontend Application",
-            path=str(tmp_path / "frontend")
         )
         # "Frontend Application" -> consonants "FRNTNDPPLCTN" -> "FRNT"
         # The exact result depends on the algorithm, but it should be valid
@@ -736,7 +687,6 @@ class TestProjectShortname:
             project = temp_storage.create_project(
                 project_id=f"project-{i}",
                 name="Project",  # Same name to test uniqueness
-                path=str(tmp_path / f"p{i}")
             )
             projects.append(project)
 
@@ -996,7 +946,7 @@ class TestHybridStorageDesign:
 
         storage = HybridStorage(base_path=tmp_path)
         # Create project and PRD for testing
-        storage.create_project("test-project", "Test Project", str(tmp_path / "test"))
+        storage.create_project("test-project", "Test Project")
         storage.create_prd(
             prd_id="TEST-P0001",
             project_id="test-project",
@@ -1091,7 +1041,7 @@ class TestCompensatingTransactions:
         from a_sdlc.storage import HybridStorage
 
         storage = HybridStorage(base_path=tmp_path)
-        storage.create_project("test-project", "Test Project", str(tmp_path / "proj"))
+        storage.create_project("test-project", "Test Project")
         return storage
 
     # --- Create compensating transactions ---
@@ -1312,7 +1262,7 @@ class TestConsistencyCheck:
         from a_sdlc.storage import HybridStorage
 
         storage = HybridStorage(base_path=tmp_path)
-        storage.create_project("test-project", "Test Project", str(tmp_path / "proj"))
+        storage.create_project("test-project", "Test Project")
         return storage
 
     # --- consistency_check tests ---

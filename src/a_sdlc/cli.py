@@ -3671,7 +3671,7 @@ def prd_split(prd_id: str, granularity: str, sync: bool, format: str) -> None:
 
     pm = get_plugin_manager()
     storage = init_storage()
-    project = storage.get_project_by_path(str(Path.cwd()))
+    project = storage.resolve_project_by_cwd()
 
     saved_ids = []
     if project:
@@ -3868,7 +3868,7 @@ def tasks_list(status: str | None, sprint: str | None) -> None:
 
     # Get current project
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4158,7 +4158,7 @@ def connect_linear(api_key: str, team_id: str, default_project: str | None) -> N
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4220,7 +4220,7 @@ def connect_jira(url: str, email: str, api_token: str, project_key: str, issue_t
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4290,7 +4290,7 @@ def connect_confluence(
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4366,7 +4366,7 @@ def connect_github(token: str, save_global: bool) -> None:
 
         storage = init_storage()
         cwd = str(Path.cwd())
-        project = storage.get_project_by_path(cwd)
+        project = storage.resolve_project_by_cwd(cwd)
 
         if not project:
             console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4429,7 +4429,7 @@ def disconnect(system: str, yes: bool, remove_global: bool) -> None:
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4465,7 +4465,7 @@ def integrations() -> None:
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4606,7 +4606,7 @@ def jira_pull(active: bool, sprint_id: str | None, board_id: str | None, dry_run
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4745,7 +4745,7 @@ def jira_push(sprint_id: str, dry_run: bool, force: bool) -> None:
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4807,7 +4807,7 @@ def jira_status(sprint_id: str | None) -> None:
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -4921,7 +4921,7 @@ def linear_pull(active: bool, cycle_id: str | None, team_id: str | None, dry_run
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -5041,7 +5041,7 @@ def linear_push(sprint_id: str, dry_run: bool, force: bool) -> None:
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -5103,7 +5103,7 @@ def linear_status(sprint_id: str | None) -> None:
 
     storage = init_storage()
     cwd = str(Path.cwd())
-    project = storage.get_project_by_path(cwd)
+    project = storage.resolve_project_by_cwd(cwd)
 
     if not project:
         console.print("[yellow]No project found for current directory.[/yellow]")
@@ -5191,8 +5191,8 @@ def init_project_cmd(name: str | None) -> None:
     storage = init_storage()
     cwd = str(Path.cwd())
 
-    # Check if already exists
-    existing = storage.get_project_by_path(cwd)
+    # Already linked to a project via the local .sdlc/project.json marker?
+    existing = storage.resolve_project_by_cwd(cwd)
     if existing:
         console.print(f"[yellow]Project already initialized: {existing['name']}[/yellow]")
         console.print(f"[dim]ID: {existing['id']}[/dim]")
@@ -5203,12 +5203,27 @@ def init_project_cmd(name: str | None) -> None:
     project_id = folder_name.lower().replace(" ", "-").replace("_", "-")
     project_name = name or folder_name
 
-    project = storage.create_project(project_id, project_name, cwd)
+    # Re-link an existing project (same id) that this checkout has no marker for,
+    # otherwise create a new one. The database stores no path; identity lives in
+    # the local marker written by generate_init_files().
+    existing_by_id = storage.get_project(project_id)
+    if existing_by_id:
+        project = existing_by_id
+        project_name = existing_by_id["name"]
+        status_verb = "linked to existing"
+    else:
+        project = storage.create_project(project_id, project_name)
+        status_verb = "initialized"
 
-    # Generate CLAUDE.md, lesson-learn.md, and global lesson-learn.md
+    # Generate CLAUDE.md, lesson-learn.md, config.yaml, and the local marker
     from a_sdlc.core.init_files import generate_init_files
 
-    init_results = generate_init_files(Path(cwd), project_name)
+    init_results = generate_init_files(
+        Path(cwd),
+        project_name,
+        project_id=project["id"],
+        shortname=project["shortname"],
+    )
     init_files_status = []
     for result in init_results["results"]:
         status_icon = (
@@ -5219,9 +5234,9 @@ def init_project_cmd(name: str | None) -> None:
 
     console.print(
         Panel(
-            f"[green]Project '{project_name}' initialized![/green]\n\n"
+            f"[green]Project '{project_name}' {status_verb}![/green]\n\n"
             f"ID: {project['id']}\n"
-            f"Path: {project['path']}\n\n"
+            f"Shortname: {project['shortname']}\n\n"
             f"Generated files:\n{init_files_display}\n\n"
             "Next steps:\n"
             "  [cyan]/sdlc:scan[/cyan]     - Generate documentation artifacts\n"
@@ -5247,7 +5262,7 @@ def project_list() -> None:
     table = Table(title="Projects")
     table.add_column("Shortname", style="cyan")
     table.add_column("Name")
-    table.add_column("Path", style="dim")
+    table.add_column("ID", style="dim")
     table.add_column("PRDs", justify="right")
     table.add_column("Tasks", justify="right")
     table.add_column("Sprints", justify="right")
@@ -5257,7 +5272,7 @@ def project_list() -> None:
         table.add_row(
             p["shortname"],
             p["name"],
-            p.get("path", ""),
+            p.get("id", ""),
             str(p.get("total_prds", 0)),
             str(p.get("total_tasks", 0)),
             str(p.get("total_sprints", 0)),

@@ -509,11 +509,13 @@ def _get_current_project_id() -> str | None:
     """Resolve the current project context.
 
     Resolution order:
-    1. In-memory active project (set by ``switch_project()``)
-    2. Auto-detect from working directory (``os.getcwd()``)
+    1. In-memory active project (set by ``switch_project()``/``create_project()``)
+    2. Auto-detect from the local ``.sdlc/project.json`` marker, walked up from
+       the working directory (``os.getcwd()``)
 
-    This ensures Docker/cloud environments where cwd is ``/`` can still
-    resolve project context after a ``switch_project()`` call.
+    Docker/cloud deployments (cwd is ``/`` and the repo is not mounted) resolve
+    via step 1; local deployments running inside a repo resolve via step 2. The
+    database stores no filesystem path, so there is no path-based lookup.
     """
     global _active_project_id
 
@@ -527,13 +529,16 @@ def _get_current_project_id() -> str | None:
         # Stale reference — clear it
         _active_project_id = None
 
-    # 2. Auto-detect from working directory
-    cwd = os.getcwd()
-    db = get_db()
-    project = db.get_project_by_path(cwd)
-    if project:
-        db.update_project_accessed(project["id"])
-        return project["id"]
+    # 2. Auto-detect from the local project marker
+    from a_sdlc.core.project_marker import find_marker
+
+    marker = find_marker(os.getcwd())
+    if marker:
+        db = get_db()
+        project = db.get_project(marker["id"])
+        if project:
+            db.update_project_accessed(project["id"])
+            return project["id"]
     return None
 
 

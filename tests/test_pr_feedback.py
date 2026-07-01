@@ -27,19 +27,26 @@ def tmp_config_dir():
         yield Path(tmpdir)
 
 
-def _make_project(path: str) -> dict:
+def _make_project() -> dict:
     return {
         "id": "test-project",
         "shortname": "TEST",
         "name": "Test Project",
-        "path": path,
     }
 
 
 def _setup_project_mocks(mock_db, project_path: str):
-    """Configure mocks so _get_current_project_id() returns 'test-project'."""
-    project = _make_project(project_path)
-    mock_db.get_project_by_path.return_value = project
+    """Configure mocks so _get_current_project_id() returns 'test-project'.
+
+    Project resolution now walks up from the working directory to the local
+    ``.sdlc/project.json`` marker (there is no path column in the database), so
+    write a marker into the project dir and stub ``get_project`` by id.
+    """
+    from a_sdlc.core.project_marker import write_marker
+
+    project = _make_project()
+    write_marker(project_path, "test-project", shortname="TEST", name="Test Project")
+    mock_db.get_project.return_value = project
     mock_db.update_project_accessed.return_value = None
     return project
 
@@ -304,7 +311,7 @@ class TestConfigureGitHub:
         mock_getcwd.return_value = "/nonexistent"
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
-        mock_db.get_project_by_path.return_value = None
+        mock_db.get_project.return_value = None
 
         mock_instance = MagicMock()
         mock_instance.validate_token.return_value = {"login": "octocat", "name": "Octo"}
@@ -893,7 +900,7 @@ class TestConnectGitHubCLI:
         mock_gh_client.return_value = mock_instance
 
         mock_storage = MagicMock()
-        mock_storage.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+        mock_storage.resolve_project_by_cwd.return_value = _make_project()
 
         runner = CliRunner()
         with patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
@@ -935,7 +942,7 @@ class TestConnectGitHubCLI:
         mock_gh_client_cls.return_value = mock_instance
 
         mock_storage = MagicMock()
-        mock_storage.get_project_by_path.return_value = None
+        mock_storage.resolve_project_by_cwd.return_value = None
 
         runner = CliRunner()
         with patch("a_sdlc.server.github.GitHubClient", mock_gh_client_cls), \
@@ -957,7 +964,7 @@ class TestDisconnectGitHubCLI:
         from a_sdlc.cli import main
 
         mock_storage = MagicMock()
-        mock_storage.get_project_by_path.return_value = _make_project(str(mock_project_dir))
+        mock_storage.resolve_project_by_cwd.return_value = _make_project()
         mock_storage.get_external_config.return_value = {"config": {"token": "ghp_old"}}
 
         runner = CliRunner()

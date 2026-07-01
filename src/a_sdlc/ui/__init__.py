@@ -422,19 +422,26 @@ async def serve_artifact(project_id: str, name: str) -> HTMLResponse:
     - Responses carry explicit security headers (CSP sandbox is the backstop
       if upstream validation ever misses active content).
 
-    Known limitation: the server needs filesystem access to the project path.
-    Containerized deployments without the repository mounted return 404 for
-    every artifact.
+    Known limitation: the server needs filesystem access to the project. The
+    project root is resolved from the local ``.sdlc/project.json`` marker
+    (walked up from the server's cwd). Containerized deployments without the
+    repository mounted find no marker and return 404 for every artifact.
     """
     if not _ARTIFACT_NAME_RE.fullmatch(name):
         return _artifact_not_found()
 
     storage = get_storage()
     project = storage.get_project(project_id)
-    if not project or not project.get("path"):
+    if not project:
         return _artifact_not_found()
 
-    project_root = Path(project["path"]).resolve()
+    from a_sdlc.core.project_marker import find_root_for
+
+    marker_root = find_root_for(project_id)
+    if marker_root is None:
+        return _artifact_not_found()
+
+    project_root = marker_root.resolve()
     artifacts_dir = (project_root / ".sdlc" / "artifacts").resolve()
 
     # Reject a symlinked .sdlc/artifacts that escapes the project tree:

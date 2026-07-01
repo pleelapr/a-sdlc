@@ -17,7 +17,7 @@ def temp_db():
         db_path = Path(tmpdir) / "test.db"
         db = Database(db_path=db_path)
         # Create a project, PRD, and task for testing
-        db.create_project("test-project", "Test Project", "/tmp/test")
+        db.create_project("test-project", "Test Project")
         db.create_prd(
             prd_id="TEST-P0001",
             project_id="test-project",

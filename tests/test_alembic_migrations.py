@@ -115,8 +115,7 @@ EXPECTED_TABLES = {
 
 # All indexes from the v15 schema (named ones)
 EXPECTED_INDEXES = {
-    # projects
-    "idx_projects_path",
+    # projects (idx_projects_path dropped in migration 0003)
     "idx_projects_shortname",
     # sprints
     "idx_sprints_project",
@@ -203,7 +202,7 @@ class TestUpgrade:
         conn.close()
 
         assert row is not None
-        assert row[0] == "0002"
+        assert row[0] == "0003"
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +218,7 @@ class TestTableColumns:
         [
             (
                 "projects",
-                ["id", "shortname", "name", "path", "created_at", "last_accessed"],
+                ["id", "shortname", "name", "created_at", "last_accessed"],
             ),
             (
                 "prds",
@@ -454,8 +453,8 @@ class TestDataInsertion:
 
         # Insert project
         conn.execute(
-            "INSERT INTO projects (id, shortname, name, path) "
-            "VALUES ('proj-1', 'TEST', 'Test Project', '/tmp/test')"
+            "INSERT INTO projects (id, shortname, name) "
+            "VALUES ('proj-1', 'TEST', 'Test Project')"
         )
 
         # Insert sprint

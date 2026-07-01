@@ -59,7 +59,7 @@ def source_db(tmp_path):
     db = Database(db_path=db_path)
 
     # Create sample data
-    db.create_project("proj-001", "Test Project", "/tmp/proj-test")
+    db.create_project("proj-001", "Test Project")
     db.create_sprint(
         sprint_id="TEST-S0001",
         project_id="proj-001",
@@ -185,7 +185,6 @@ class TestRowToModel:
             "id": "proj-001",
             "shortname": "TEST",
             "name": "My Project",
-            "path": "/tmp/proj",
             "created_at": "2024-01-01 00:00:00",
             "last_accessed": "2024-01-01 00:00:00",
         }
@@ -457,7 +456,7 @@ class TestDataImport:
         db_path.parent.mkdir(parents=True)
         db = Database(db_path=db_path)
         # Just create a project with no other data
-        db.create_project("proj-minimal", "Minimal Project", "/tmp/minimal")
+        db.create_project("proj-minimal", "Minimal Project")
 
         importer = DataImporter(
             source_url=f"sqlite:///{db_path}",

@@ -332,16 +332,42 @@ def ensure_global_lesson_learn() -> dict[str, str]:
     }
 
 
+def generate_project_marker(
+    project_path: Path,
+    project_id: str,
+    shortname: str | None = None,
+    project_name: str | None = None,
+) -> dict[str, str]:
+    """Write ``.sdlc/project.json`` linking this directory to its project.
+
+    This local marker replaces the removed ``projects.path`` column: the
+    database stores no filesystem path, and a checkout resolves its project by
+    walking up to this file. Always rewritten so re-init on a fresh machine
+    re-links the checkout to the existing project.
+    """
+    from a_sdlc.core.project_marker import write_marker
+
+    path = write_marker(project_path, project_id, shortname, project_name)
+    return {
+        "status": "created",
+        "path": str(path),
+        "message": "Project marker (.sdlc/project.json) written.",
+    }
+
+
 def generate_init_files(
     project_path: Path,
     project_name: str,
     overwrite: bool = False,
     targets: list[CLITarget] | None = None,
+    project_id: str | None = None,
+    shortname: str | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     """Generate all init files for a project.
 
     Orchestrates generation of context files (CLAUDE.md, GEMINI.md),
-    project lesson-learn.md, config.yaml, and global lesson-learn.md.
+    project lesson-learn.md, config.yaml, the local project marker, and the
+    global lesson-learn.md.
 
     Args:
         project_path: Path to the project root directory.
@@ -349,6 +375,10 @@ def generate_init_files(
         overwrite: If False, skip files that already exist.
         targets: CLI targets to generate context files for.
             If None, auto-detects installed CLIs (falls back to Claude).
+        project_id: Project id to record in ``.sdlc/project.json``. When
+            omitted, the marker is not written (the caller resolves identity
+            some other way).
+        shortname: Project shortname to record in the marker.
 
     Returns:
         Dict with 'results' list containing status of each file.
@@ -366,6 +396,10 @@ def generate_init_files(
 
     results.append(generate_lesson_learn(project_path, overwrite))
     results.append(generate_config_yaml(project_path, overwrite))
+    if project_id is not None:
+        results.append(
+            generate_project_marker(project_path, project_id, shortname, project_name)
+        )
     results.append(ensure_global_lesson_learn())
 
     return {"results": results}
@@ -374,6 +408,8 @@ def generate_init_files(
 def render_init_files(
     project_name: str,
     targets: list[CLITarget] | None = None,
+    project_id: str | None = None,
+    shortname: str | None = None,
 ) -> list[dict[str, str]]:
     """Render init file contents without writing anything to disk.
 
@@ -386,6 +422,9 @@ def render_init_files(
         project_name: Human-readable project name.
         targets: CLI targets to render context files for. Defaults to Claude
             only, since the server cannot detect the client's installed CLIs.
+        project_id: Project id to embed in the ``.sdlc/project.json`` marker
+            spec. When omitted, no marker spec is emitted.
+        shortname: Project shortname to embed in the marker spec.
 
     Returns:
         A list of file specs, each a dict with:
@@ -425,6 +464,18 @@ def render_init_files(
         "content": _load_template("config.template.yaml"),
         "description": "Project configuration",
     })
+    if project_id is not None:
+        from a_sdlc.core.project_marker import render_marker_content
+
+        files.append({
+            "path": ".sdlc/project.json",
+            "scope": "project",
+            "content": render_marker_content(project_id, shortname, project_name),
+            "description": (
+                "Local project marker linking this checkout to its a-sdlc "
+                "project (required for cwd-based resolution)"
+            ),
+        })
     files.append({
         "path": "~/.a-sdlc/lesson-learn.md",
         "scope": "global",

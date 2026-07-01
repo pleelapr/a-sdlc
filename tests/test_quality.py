@@ -51,7 +51,7 @@ def temp_db():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         db = Database(db_path=db_path)
-        db.create_project("test-project", "Test Project", "/tmp/test")
+        db.create_project("test-project", "Test Project")
         db.create_prd(
             prd_id="TEST-P0001",
             project_id="test-project",
@@ -3316,12 +3316,13 @@ class TestChallengeArtifactMCP:
         assert "FR-001 [behavioral]" in prompt
         assert "NFR-001 [structural]" in prompt
 
+    @patch("a_sdlc.core.project_marker.find_root_for")
     @patch("a_sdlc.server._get_current_project_id", return_value="test-project")
     @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
     def test_includes_lesson_learn_when_file_exists(
-        self, mock_get_db, mock_get_cm, mock_get_storage, mock_pid
+        self, mock_get_db, mock_get_cm, mock_get_storage, mock_pid, mock_find_root
     ):
         """challenge_artifact should include lesson-learn content when files exist."""
         import tempfile
@@ -3334,6 +3335,10 @@ class TestChallengeArtifactMCP:
             lesson_file.write_text(
                 "# Lessons\n- Always validate inputs", encoding="utf-8"
             )
+
+            # The project root is resolved via the local marker, not a DB path
+            # column, so point find_root_for() at the temp project dir.
+            mock_find_root.return_value = Path(tmpdir)
 
             # Create global lesson file under fake home/.a-sdlc/
             fake_home = Path(tmpdir) / "fakehome"

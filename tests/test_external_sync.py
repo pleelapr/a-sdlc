@@ -47,7 +47,7 @@ class TestPRDSprintRelationship:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         # Create a sprint
         sprint_id = storage.get_next_sprint_id(project_id)
@@ -70,7 +70,7 @@ class TestPRDSprintRelationship:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         # Create sprint
         sprint_id = storage.get_next_sprint_id(project_id)
@@ -96,7 +96,7 @@ class TestPRDSprintRelationship:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         # Create sprint and PRD
         sprint_id = storage.get_next_sprint_id(project_id)
@@ -113,7 +113,7 @@ class TestPRDSprintRelationship:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         sprint_id = storage.get_next_sprint_id(project_id)
         storage.create_sprint(sprint_id, project_id, "Test Sprint")
@@ -135,7 +135,7 @@ class TestTaskPRDRelationship:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         # Create sprint and PRD
         sprint_id = storage.get_next_sprint_id(project_id)
@@ -160,7 +160,7 @@ class TestExternalConfig:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         # Set config
         config_data = {"api_key": "test-key", "team_id": "test-team"}
@@ -177,7 +177,7 @@ class TestExternalConfig:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         storage.set_external_config(project_id, "linear", {"key": "linear"})
         storage.set_external_config(project_id, "jira", {"key": "jira"})
@@ -191,7 +191,7 @@ class TestExternalConfig:
 
         storage = FileStorage(base_path=temp_storage)
         project_id = "test-project"
-        storage.create_project(project_id, "Test Project", "/tmp/test")
+        storage.create_project(project_id, "Test Project")
 
         storage.set_external_config(project_id, "linear", {"key": "test"})
         result = storage.delete_external_config(project_id, "linear")
@@ -308,7 +308,7 @@ class TestExternalSyncService:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
         db.create_sprint("SPRINT-01", project_id, "Sprint 1")
         db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
 
@@ -331,7 +331,7 @@ class TestExternalSyncService:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
         db.create_sprint("SPRINT-01", project_id, "Sprint 1")
         db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
 
@@ -363,7 +363,7 @@ class TestDuplicateSprintDetection:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
         db.create_sprint("SPRINT-01", project_id, "Sprint 1")
         db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
 
@@ -388,7 +388,7 @@ class TestDuplicateSprintDetection:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         service = ExternalSyncService(db, content_mgr)
         result = service._check_existing_sprint_mapping(project_id, "linear", "cycle-new")
@@ -405,7 +405,7 @@ class TestDuplicateSprintDetection:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         # Create a mapping without a corresponding sprint (orphaned)
         db.create_sync_mapping("sprint", "SPRINT-DELETED", "linear", "cycle-orphan")
@@ -430,7 +430,7 @@ class TestDuplicateSprintDetection:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
         db.create_sprint("SPRINT-01", project_id, "Existing Sprint")
         db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
 
@@ -455,7 +455,7 @@ class TestDuplicateSprintDetection:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
         db.create_sprint("SPRINT-02", project_id, "Existing Jira Sprint")
         db.set_external_config(project_id, "jira", {
             "base_url": "https://test.atlassian.net",
@@ -485,7 +485,7 @@ class TestDuplicateSprintDetection:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
         db.create_sprint("SPRINT-01", project_id, "Existing Sprint")
         db.set_external_config(project_id, "linear", {"api_key": "test", "team_id": "test"})
 
@@ -511,7 +511,7 @@ class TestDeleteSyncMappingCleanup:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         # Create a PRD
         prd_id = db.get_next_prd_id(project_id)
@@ -556,7 +556,7 @@ class TestDeleteSyncMappingCleanup:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         # Create a task
         task_id = db.get_next_task_id(project_id)
@@ -601,7 +601,7 @@ class TestDeleteSyncMappingCleanup:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         # Create a sprint
         sprint_id = db.get_next_sprint_id(project_id)
@@ -637,7 +637,7 @@ class TestDeleteSyncMappingCleanup:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         # Create a PRD without sync mappings
         prd_id = db.get_next_prd_id(project_id)
@@ -670,7 +670,7 @@ class TestDeleteSyncMappingCleanup:
         content_mgr = ContentManager(base_path=temp_storage / "content")
 
         project_id = "test-project"
-        db.create_project(project_id, "Test Project", "/tmp/test")
+        db.create_project(project_id, "Test Project")
 
         # Create a task without sync mappings
         task_id = db.get_next_task_id(project_id)

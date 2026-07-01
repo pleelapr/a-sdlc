@@ -212,6 +212,7 @@ There are no built-in defaults for `database_url`. The `A_SDLC_DATABASE_URL` env
 2. **Never reference `.sdlc/sprints/mappings.json`** -- Mappings are in the database
 3. **Use MCP tools for metadata and content** -- See Content Editing Pattern below
 4. **Artifacts stay in `.sdlc/`** -- Generated docs belong with the project
+5. **No filesystem path is stored in the DB** -- A checkout links to its project via the local `.sdlc/project.json` marker (`core/project_marker.py`). Project context is resolved by walking up from cwd to that marker, so the same project works across machines/containers against one central database. Commit `.sdlc/project.json` so identity travels with the repo; `a-sdlc init` regenerates it if missing.
 
 ## Content Editing Pattern
 
@@ -260,7 +261,7 @@ Sprint -> PRD -> Task
 ### Database Schema
 
 ```sql
-projects (id, shortname UNIQUE, name, path UNIQUE nullable, created_at, last_accessed)
+projects (id, shortname UNIQUE, name, created_at, last_accessed)  -- no filesystem path; a checkout links to its project via .sdlc/project.json
 prds (id, project_id FK, sprint_id FK nullable, title, file_path, status[draft|approved|split|completed], version)
 tasks (id, project_id FK, prd_id FK, title, file_path, status[pending|in_progress|blocked|completed], priority[low|medium|high|critical], component)
 sprints (id, project_id FK, title, goal, status[planned|active|completed], external_id)
@@ -286,9 +287,8 @@ Content editing pattern: `create_*()` returns `file_path` -> agent writes conten
 ### Context Tools
 - `get_context()` -- Current project + statistics
 - `list_projects()` -- All projects
-- `init_project(name?, shortname?)` -- Initialize project for the server's current directory (local deployments)
-- `create_project(name, shortname?, path?)` -- Create a project independent of the server's cwd (remote/centralized deployments). Writes no files on the server; returns `init_files` specs (path, scope, content) for the client to create locally. Sets the new project as the active context.
-- `relocate_project(shortname)` -- Re-link project to current directory
+- `init_project(name?, shortname?)` -- Initialize project for the server's current directory (local deployments); writes the `.sdlc/project.json` marker. Re-links (no new row) when a project with the derived id already exists.
+- `create_project(name, shortname?)` -- Create a project independent of the server's cwd (remote/centralized deployments). Writes no files on the server; returns `init_files` specs (path, scope, content) -- including `.sdlc/project.json` -- for the client to create locally. Sets the new project as the active context.
 - `switch_project(project_id)` -- Switch project context
 
 ### PRD Tools
