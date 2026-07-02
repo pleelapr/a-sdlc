@@ -2054,9 +2054,10 @@ def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
                 if current is None:
                     schema_status, schema_detail = (
                         "fail",
-                        "Schema exists but is not stamped with an Alembic revision. "
-                        "Fix: run a-sdlc db migrate (auto-stamps), or "
-                        "a-sdlc db stamp -r <revision>",
+                        "Database is not stamped with an Alembic revision "
+                        "(fresh/unmigrated, or a schema created outside Alembic). "
+                        "Fix: run a-sdlc db migrate (auto-stamps an existing "
+                        "schema), or a-sdlc db stamp -r <revision>",
                     )
                 elif current == head:
                     schema_status, schema_detail = (

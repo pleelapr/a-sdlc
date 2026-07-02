@@ -125,7 +125,8 @@ python_version = "3.10"
 ignore_missing_imports = true
 # Alembic migration scripts are generated op-DSL; their correctness is verified
 # by running them (tests/test_alembic_migrations.py), not by static typing.
-exclude = ['(^|/)migrations/versions/']
+# Single regex string (not a list) for unambiguous support across mypy versions.
+exclude = '(^|/)migrations/versions/'
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

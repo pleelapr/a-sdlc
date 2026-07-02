@@ -34,6 +34,23 @@ class MigrationSetupError(RuntimeError):
     """
 
 
+def _create_engine(database_url: str):
+    """Create a short-lived engine with the project's Postgres fail-fast settings.
+
+    Mirrors ``a_sdlc.core.engine.get_engine``: for PostgreSQL, apply
+    ``connect_timeout=10`` and ``pool_pre_ping=True`` so status/migration calls
+    (including ``a-sdlc doctor``) fail in seconds on an unreachable host instead
+    of blocking for minutes on the OS TCP timeout.
+    """
+    from sqlalchemy import create_engine
+
+    kwargs: dict[str, Any] = {}
+    if database_url.startswith(("postgresql://", "postgresql+")):
+        kwargs["pool_pre_ping"] = True
+        kwargs["connect_args"] = {"connect_timeout": 10}
+    return create_engine(database_url, **kwargs)
+
+
 def build_alembic_config(database_url: str | None = None) -> Config:
     """Build an ini-less Alembic ``Config`` for the packaged migrations.
 
@@ -117,13 +134,12 @@ def get_revision_info(database_url: str) -> dict[str, Any]:
     """
     from alembic.runtime.migration import MigrationContext
     from alembic.script import ScriptDirectory
-    from sqlalchemy import create_engine
 
     script = ScriptDirectory.from_config(build_alembic_config(database_url))
     heads = script.get_heads()
     head = heads[0] if heads else None
 
-    engine = create_engine(database_url)
+    engine = _create_engine(database_url)
     try:
         with engine.connect() as conn:
             current = MigrationContext.configure(conn).get_current_revision()
@@ -146,12 +162,12 @@ def run_upgrade_head(database_url: str, *, logger: Any) -> None:
     Raises on any failure so callers (server startup) can refuse to serve
     traffic against an unmigrated or half-migrated schema.
     """
-    from alembic import command as alembic_command
     from alembic.runtime.migration import MigrationContext
-    from sqlalchemy import create_engine
+
+    from alembic import command as alembic_command
 
     cfg = build_alembic_config(database_url)
-    engine = create_engine(database_url)
+    engine = _create_engine(database_url)
     try:
         with engine.connect() as conn:
             current = MigrationContext.configure(conn).get_current_revision()
