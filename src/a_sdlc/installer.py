@@ -9,16 +9,20 @@ Handles:
 - Prerequisite checking for setup wizard
 """
 
+import contextlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 from a_sdlc import __version__
 from a_sdlc.cli_targets import CLAUDE_TARGET, CLITarget
+from a_sdlc.core.content import get_data_dir
 from a_sdlc.transpiler import transpile_all
 
 # Default port for HTTP transport (matches server default)
@@ -96,6 +100,78 @@ def _build_mcp_config(
     return config
 
 
+def _registration_path() -> Path:
+    """Path to a-sdlc's own record of registered MCP client configs."""
+    return get_data_dir() / "mcp-registration.json"
+
+
+def get_registered_mcp_config(target_name: str) -> dict[str, Any] | None:
+    """Read the MCP config a-sdlc last registered for a CLI target.
+
+    This is a-sdlc's own record, independent of the client's settings file.
+    Returns None when no record exists or the file is unreadable.
+    """
+    try:
+        with open(_registration_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        entry = data.get("targets", {}).get(target_name, {}).get("config")
+        if isinstance(entry, dict):
+            return entry
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def _save_registered_mcp_config(target_name: str, config: dict[str, Any]) -> None:
+    """Persist the MCP config a-sdlc registered for a CLI target.
+
+    Claude Code holds ``~/.claude.json`` in memory while running and rewrites
+    the whole file when it saves state, which can silently drop entries
+    written by external tools. This record makes the registration recoverable
+    (``a-sdlc install`` restores it) and detectable (``a-sdlc doctor`` flags
+    the loss). Best-effort: a failure to write the record never fails the
+    install itself.
+    """
+    reg_path = _registration_path()
+    try:
+        try:
+            with open(reg_path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            data = {}
+        data.setdefault("targets", {})[target_name] = {
+            "config": config,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        reg_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(reg_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        with contextlib.suppress(OSError):
+            os.chmod(reg_path, 0o600)  # may contain an auth header
+    except OSError:
+        pass
+
+
+def _load_existing_mcp_config(settings_path: Path) -> dict[str, Any] | None:
+    """Read the current ``asdlc`` MCP entry from settings, if any.
+
+    Returns None when the file is missing, unreadable, or has no valid
+    ``asdlc`` entry.
+    """
+    try:
+        if settings_path.exists():
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            existing = settings.get("mcpServers", {}).get("asdlc")
+            if isinstance(existing, dict):
+                return existing
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def _configure_via_cli(
     config: dict[str, Any],
     scope: str = "user",
@@ -132,8 +208,14 @@ def configure_mcp_server(
     falling back to direct file editing for non-Claude targets or when the
     CLI is not installed.
 
+    Every successful configuration is also recorded in a-sdlc's own
+    registration file (see ``_save_registered_mcp_config``), so the config
+    can be restored if the client's settings file loses the entry.
+
     Args:
-        force: If True, overwrite existing configuration.
+        force: If True, overwrite existing configuration. A previously
+            configured ``url`` and ``headers`` (auth) are preserved unless
+            explicitly overridden via the ``url``/``auth_token`` arguments.
         target: CLI target to configure for. Defaults to Claude Code.
         port: Port for HTTP transport (default 8765).
         url: Explicit MCP server URL (overrides port). For Docker/cloud instances.
@@ -144,32 +226,41 @@ def configure_mcp_server(
     """
     effective_target = target or CLAUDE_TARGET
     settings_path = effective_target.mcp_config_path
-    mcp_config = _build_mcp_config(port=port, url=url, auth_token=auth_token)
+    existing = _load_existing_mcp_config(settings_path)
 
     # --- Check if already configured (skip when force=True) ----------
-    if not force:
-        try:
-            if settings_path.exists():
-                with open(settings_path, encoding="utf-8") as f:
-                    settings = json.load(f)
-                if "asdlc" in settings.get("mcpServers", {}):
-                    return {
-                        "status": "exists",
-                        "message": "asdlc MCP server already configured",
-                        "config": settings["mcpServers"]["asdlc"],
-                    }
-        except (json.JSONDecodeError, OSError):
-            pass  # Proceed to configure
+    if not force and existing is not None:
+        return {
+            "status": "exists",
+            "message": "asdlc MCP server already configured",
+            "config": existing,
+        }
+
+    mcp_config = _build_mcp_config(port=port, url=url, auth_token=auth_token)
+
+    # Preserve a previously configured endpoint and auth header unless the
+    # caller explicitly overrides them. The client's own settings file wins;
+    # a-sdlc's registration record covers the case where the client dropped
+    # the entry entirely (e.g. Claude Code rewriting ~/.claude.json from
+    # in-memory state that predates the install).
+    source = existing if existing is not None else get_registered_mcp_config(effective_target.name)
+    if source is not None:
+        if url is None and source.get("url"):
+            mcp_config["url"] = source["url"]
+        if auth_token is None and isinstance(source.get("headers"), dict):
+            mcp_config["headers"] = source["headers"]
 
     # --- Preferred path: use ``claude mcp add-json`` for Claude targets ---
-    # Skip CLI path when auth_token is set to avoid leaking the secret in
-    # process arguments (visible via ``ps aux``).  Fall through to the
-    # direct file-write path instead.
+    # Skip CLI path when the config carries auth headers (explicit or
+    # preserved) to avoid leaking the secret in process arguments
+    # (visible via ``ps aux``).  Fall through to the direct file-write
+    # path instead.
     if (
         effective_target.name == "claude"
-        and not auth_token
+        and "headers" not in mcp_config
         and _configure_via_cli(mcp_config)
     ):
+        _save_registered_mcp_config(effective_target.name, mcp_config)
         return {
             "status": "configured",
             "message": "asdlc MCP server configured via claude CLI",
@@ -196,11 +287,20 @@ def configure_mcp_server(
     with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
 
+    _save_registered_mcp_config(effective_target.name, mcp_config)
+
     return {
         "status": "configured",
         "message": f"asdlc MCP server configured in {settings_path}",
         "settings_path": str(settings_path),
         "transport": "http",
+        "note": (
+            f"{settings_path} was edited directly. If {effective_target.display_name} "
+            "was running, it may overwrite this entry when it saves its own state. "
+            "Verify the 'asdlc' server appears after restarting it; if the entry is "
+            "lost, re-run 'a-sdlc install' — the saved URL and auth are restored "
+            "automatically."
+        ),
     }
 
 
@@ -219,6 +319,9 @@ class Installer:
         """
         self.target = target or CLAUDE_TARGET
         self.target_dir = target_dir or self.target.commands_dir
+        # Result of the last configure_mcp_server call made by install(),
+        # so callers can surface its message/note to the user.
+        self.mcp_result: dict[str, Any] | None = None
 
     def install(
         self,
@@ -279,7 +382,7 @@ class Installer:
 
         # Configure MCP server
         if configure_mcp:
-            configure_mcp_server(
+            self.mcp_result = configure_mcp_server(
                 force=force, target=self.target, port=port, url=url,
                 auth_token=auth_token,
             )

@@ -1678,6 +1678,85 @@ class TestCLITargetIntegration:
             assert "CLI Targets" in result.output
 
 
+class TestDoctorMcpRegistration:
+    """Doctor detects a lost or drifted MCP entry via the registration record."""
+
+    def _make_target(self, tmp_path: Path) -> CLITarget:
+        return CLITarget(
+            name="claude",
+            display_name="Claude Code",
+            home_dir=tmp_path,
+            mcp_config_path=tmp_path / "claude.json",
+            settings_path=tmp_path / "settings.json",
+            commands_dir=tmp_path / "commands" / "sdlc",
+            agents_dir=tmp_path / "agents",
+            context_file="CLAUDE.md",
+        )
+
+    def _invoke_doctor(self, runner: CliRunner, target: CLITarget, registered):
+        with (
+            patch("a_sdlc.cli.detect_targets", return_value=[target]),
+            patch("a_sdlc.cli.get_registered_mcp_config", return_value=registered),
+            patch("a_sdlc.cli.Installer") as mock_installer_cls,
+            patch("a_sdlc.cli.get_plugin_manager") as mock_pm,
+            patch(
+                "a_sdlc.cli.get_claude_settings_path",
+                return_value=target.mcp_config_path,
+            ),
+            patch("a_sdlc.playwright_setup.verify_setup", return_value={"ready": False}),
+        ):
+            mock_inst = mock_installer_cls.return_value
+            mock_inst.check_template_version.return_value = (True, "0.7.0", "0.7.0")
+            mock_inst.list_installed_personas.return_value = []
+            mock_pm.return_value.list_plugins.return_value = []
+            return runner.invoke(main, ["doctor"])
+
+    def test_missing_entry_with_record_reports_loss(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Entry gone but registration record exists -> flagged as overwritten."""
+        target = self._make_target(tmp_path)
+        (tmp_path / "claude.json").write_text(json.dumps({"mcpServers": {}}))
+
+        result = self._invoke_doctor(
+            runner, target, {"type": "http", "url": "https://x/mcp"}
+        )
+
+        assert "overwritten" in result.output
+
+    def test_drifted_entry_reports_difference(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Entry differs from the registration record -> drift warning."""
+        target = self._make_target(tmp_path)
+        (tmp_path / "claude.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "asdlc": {"type": "http", "url": "http://localhost:8765/mcp"}
+                    }
+                }
+            )
+        )
+
+        result = self._invoke_doctor(
+            runner, target, {"type": "http", "url": "https://x/mcp"}
+        )
+
+        assert "differs" in result.output
+
+    def test_matching_entry_passes(self, runner: CliRunner, tmp_path: Path) -> None:
+        """Entry matching the registration record -> no loss or drift flags."""
+        target = self._make_target(tmp_path)
+        entry = {"type": "http", "url": "https://x/mcp"}
+        (tmp_path / "claude.json").write_text(json.dumps({"mcpServers": {"asdlc": entry}}))
+
+        result = self._invoke_doctor(runner, target, entry)
+
+        assert "overwritten" not in result.output
+        assert "differs" not in result.output
+
+
 class TestQualityCommands:
     """Tests for the quality command group."""
 

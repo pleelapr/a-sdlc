@@ -36,6 +36,7 @@ from a_sdlc.installer import (
     check_uv_available,
     configure_mcp_server,
     get_claude_settings_path,
+    get_registered_mcp_config,
 )
 from a_sdlc.mcp_setup import (
     setup_serena,
@@ -197,6 +198,7 @@ def install(
         all_installed = []
         all_personas = []
         target_names = []
+        mcp_notes = []
         for t in targets:
             installer = Installer(target_dir=target_dir, target=t)
             installed = installer.install(force=force, url=url, auth_token=auth_token)
@@ -204,6 +206,8 @@ def install(
             personas = installer.list_installed_personas()
             all_personas.extend(personas)
             target_names.append(t.display_name)
+            if installer.mcp_result and installer.mcp_result.get("note"):
+                mcp_notes.append(installer.mcp_result["note"])
 
         # Configure Agent Teams env var (Claude only)
         agent_teams_status = ""
@@ -247,6 +251,9 @@ def install(
                 border_style="green",
             )
         )
+
+        for note in dict.fromkeys(mcp_notes):
+            console.print(f"[yellow]Note:[/yellow] {note}")
 
         if with_playwright:
             _setup_playwright_mcp(force=force)
@@ -450,8 +457,10 @@ def setup(upgrade: bool):
             sys.exit(1)
 
         try:
-            configure_mcp_server(force=True)
+            mcp_result = configure_mcp_server(force=True)
             console.print("  [green]PASS[/green] MCP config refreshed")
+            if mcp_result.get("note"):
+                console.print(f"  [yellow]Note:[/yellow] {mcp_result['note']}")
         except Exception as e:
             console.print(f"  [red]FAIL[/red] MCP config update failed: {e}")
             sys.exit(1)
@@ -1569,22 +1578,55 @@ def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
 
     # Per-target MCP config checks
     for t in detected:
+        has_mcp = False
+        current_entry = None
         try:
             if t.mcp_config_path.exists():
                 with open(t.mcp_config_path, encoding="utf-8") as f:
                     target_settings = json.load(f)
+                entry = target_settings.get("mcpServers", {}).get("asdlc")
                 has_mcp = "asdlc" in target_settings.get("mcpServers", {})
-            else:
-                has_mcp = False
+                if isinstance(entry, dict):
+                    current_entry = entry
         except (json.JSONDecodeError, OSError):
             has_mcp = False
+        registered = get_registered_mcp_config(t.name)
+        if has_mcp:
+            drifted = (
+                registered is not None
+                and current_entry is not None
+                and (
+                    current_entry.get("url") != registered.get("url")
+                    or current_entry.get("headers") != registered.get("headers")
+                )
+            )
+            if drifted:
+                status = "warn"
+                detail = (
+                    f"asdlc entry in {t.mcp_config_path} differs from a-sdlc's last "
+                    "registration (URL or auth changed outside a-sdlc). Ignore if "
+                    "intentional; otherwise re-run a-sdlc install --force with your "
+                    "--url/--auth-token"
+                )
+            else:
+                status = "pass"
+                detail = f"asdlc configured in {t.mcp_config_path}"
+        elif registered is not None:
+            status = "fail"
+            detail = (
+                f"asdlc entry missing from {t.mcp_config_path} but was previously "
+                f"registered — likely overwritten by {t.display_name} saving its own "
+                f"state. Fix: run a-sdlc install --target {t.name} (saved URL/auth "
+                "restored automatically)"
+            )
+        else:
+            status = "warn"
+            detail = f"Not found. Fix: run a-sdlc install --target {t.name}"
         checks.append(
             {
                 "name": f"{t.display_name} MCP",
-                "status": "pass" if has_mcp else "warn",
-                "detail": f"asdlc configured in {t.mcp_config_path}"
-                if has_mcp
-                else f"Not found. Fix: run a-sdlc install --target {t.name}",
+                "status": status,
+                "detail": detail,
             }
         )
 
