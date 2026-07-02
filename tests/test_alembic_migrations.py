@@ -16,11 +16,12 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from alembic import command
 from alembic.config import Config
 from sqlmodel import SQLModel
 
 import a_sdlc.core.models  # noqa: F401  -- populate SQLModel.metadata
-from alembic import command
+from a_sdlc.core.alembic_config import build_alembic_config
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -31,15 +32,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 @pytest.fixture
 def alembic_cfg(tmp_path: Path) -> Config:
-    """Create an Alembic Config pointing at a temporary SQLite database."""
+    """Create an Alembic Config pointing at a temporary SQLite database.
+
+    Uses the production ``build_alembic_config`` so these tests exercise the
+    packaged migration layout (a_sdlc/migrations) on every CI run.
+    """
     db_path = tmp_path / "test_migration.db"
     url = f"sqlite:///{db_path}"
-
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", url)
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-
-    return cfg
+    return build_alembic_config(url)
 
 
 @pytest.fixture
@@ -84,10 +84,7 @@ def _get_columns(conn: sqlite3.Connection, table: str) -> list[str]:
 def _get_foreign_keys(conn: sqlite3.Connection, table: str) -> list[dict]:
     """Get foreign key info for a table."""
     cursor = conn.execute(f"PRAGMA foreign_key_list({table})")
-    return [
-        {"table": row[2], "from": row[3], "to": row[4]}
-        for row in cursor.fetchall()
-    ]
+    return [{"table": row[2], "from": row[3], "to": row[4]} for row in cursor.fetchall()]
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +404,6 @@ class TestUniqueConstraints:
         conn.close()
 
 
-
 # ---------------------------------------------------------------------------
 # Tests: metadata alignment
 # ---------------------------------------------------------------------------
@@ -460,8 +456,7 @@ class TestDataInsertion:
 
         # Insert project
         conn.execute(
-            "INSERT INTO projects (id, shortname, name) "
-            "VALUES ('proj-1', 'TEST', 'Test Project')"
+            "INSERT INTO projects (id, shortname, name) VALUES ('proj-1', 'TEST', 'Test Project')"
         )
 
         # Insert sprint
@@ -500,7 +495,6 @@ class TestDataInsertion:
         assert row[3] == "Sprint 1"
 
         conn.close()
-
 
 
 # ---------------------------------------------------------------------------

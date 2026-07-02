@@ -38,6 +38,12 @@ COPY src/ src/
 # --system avoids creating a virtual environment inside the container.
 RUN uv pip install --system --no-cache ".[all]"
 
+# Build-time tripwire: fail the build if the Alembic migrations did not ship
+# inside the installed package. Startup auto-migration depends on these files
+# being importable from a_sdlc/migrations; a silent omission would otherwise
+# only surface as a schema drift at runtime.
+RUN python -c "from a_sdlc.core.alembic_config import MIGRATIONS_DIR; assert (MIGRATIONS_DIR / 'versions' / '0001_baseline_v15.py').is_file(), f'packaged migrations missing: {MIGRATIONS_DIR}'; print(f'migrations OK: {MIGRATIONS_DIR}')"
+
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime — slim image with only the installed package
 # ---------------------------------------------------------------------------

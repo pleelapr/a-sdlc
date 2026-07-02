@@ -100,9 +100,7 @@ class BearerAuthMiddleware:
                 if not hmac.compare_digest(auth, self._expected):
                     from starlette.responses import JSONResponse
 
-                    response = JSONResponse(
-                        {"error": "Unauthorized"}, status_code=401
-                    )
+                    response = JSONResponse({"error": "Unauthorized"}, status_code=401)
                     await response(scope, receive, send)
                     return
         await self.app(scope, receive, send)
@@ -189,12 +187,15 @@ def _init_storage_backend() -> None:
     # connection fails and the server crash-loops.
     _wait_for_database(config)
 
+    # Apply schema migrations BEFORE initializing storage. Alembic -- not the
+    # ORM's create_all -- owns the schema; running it first means create_all
+    # inside init_storage becomes a checkfirst no-op instead of racing Alembic.
+    _run_auto_migration(config)
+
     # Initialize the global storage singleton with the loaded config
     from a_sdlc.storage import init_storage
 
     storage = init_storage(config=config)
-
-    _run_auto_migration(config)
 
     _logger.info("Using s3 content backend (bucket=%s)", config.s3_bucket)
     _migrate_local_content_to_s3(storage)
@@ -231,9 +232,7 @@ def _wait_for_database(config, *, max_wait: float = 90.0) -> None:
             if time.monotonic() >= deadline:
                 _logger.error("Database not reachable after %.0fs; giving up", max_wait)
                 raise
-            _logger.warning(
-                "Database not ready (attempt %d); retrying in %.0fs", attempt, delay
-            )
+            _logger.warning("Database not ready (attempt %d); retrying in %.0fs", attempt, delay)
             time.sleep(delay)
             delay = min(delay * 2, 10.0)
 
@@ -262,38 +261,38 @@ def _mask_url(url: str) -> str:
 
 
 def _run_auto_migration(config) -> None:
-    """Run Alembic auto-migration when PostgreSQL is configured.
+    """Apply Alembic migrations at server startup.
 
-    Executes ``alembic upgrade head`` to apply any pending migrations.
-    Failures are logged but do not prevent server startup.
+    Runs ``alembic upgrade head`` against the packaged migrations (stamping a
+    pre-Alembic schema first if needed). FATAL on failure: the server must not
+    serve traffic against an unmigrated or half-migrated schema, so any error
+    propagates and crashes startup rather than being silently swallowed.
+
+    Set ``A_SDLC_AUTO_MIGRATE=0`` to skip (emergency ops only; then run
+    ``a-sdlc db migrate`` manually).
 
     Args:
         config: ``StorageConfig`` instance with the database URL.
     """
+    if os.environ.get("A_SDLC_AUTO_MIGRATE", "1").strip().lower() in {
+        "0",
+        "false",
+        "no",
+    }:
+        _logger.warning(
+            "auto_migration_skipped (A_SDLC_AUTO_MIGRATE=0); run 'a-sdlc db migrate' manually"
+        )
+        return
+
+    from a_sdlc.core.alembic_config import run_upgrade_head
+
     try:
-        from alembic.config import Config as AlembicConfig
-
-        from alembic import command as alembic_command
-
-        # Locate alembic.ini relative to the package root
-        package_root = Path(__file__).resolve().parent.parent.parent
-        alembic_ini = package_root / "alembic.ini"
-        if not alembic_ini.exists():
-            _logger.debug(
-                "alembic.ini not found at %s; skipping auto-migration", alembic_ini
-            )
-            return
-
-        alembic_cfg = AlembicConfig(str(alembic_ini))
-        alembic_cfg.set_main_option("sqlalchemy.url", config.database_url)
-
-        _logger.info("Running auto-migration (alembic upgrade head)")
-        alembic_command.upgrade(alembic_cfg, "head")
-        _logger.info("Auto-migration completed successfully")
-    except ImportError:
-        _logger.debug("Alembic not installed; skipping auto-migration")
+        run_upgrade_head(config.database_url, logger=_logger)
     except Exception:
-        _logger.exception("Auto-migration failed; server will start with existing schema")
+        _logger.exception(
+            "Database migration failed; refusing to start against an unmigrated schema"
+        )
+        raise
 
 
 _data_access: MCPDataAccess | None = None
@@ -327,8 +326,9 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record as a single JSON line."""
         entry: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc)
-            .isoformat(timespec="milliseconds"),
+            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(
+                timespec="milliseconds"
+            ),
             "level": record.levelname,
             "event": record.getMessage(),
         }
@@ -455,6 +455,7 @@ def get_db():
 # In-memory sprint quality waivers: sprint_id -> {reason, waived_at, sprint_id}
 # Waivers persist for the lifetime of the MCP server process (FR-037).
 _sprint_waivers: dict[str, dict[str, Any]] = {}
+
 
 def _build_transport_security() -> TransportSecuritySettings:
     """Configure MCP DNS-rebinding (Host header) validation.
@@ -651,6 +652,7 @@ def _auto_parse_requirements(db: Any, prd_id: str, content: str) -> None:
 # =============================================================================
 # Server Lifecycle
 # =============================================================================
+
 
 class PortConflictError(Exception):
     """Raised when a required port is already in use by another process."""
@@ -861,9 +863,7 @@ def run_server(
     # Configure file logging
     log_dir = Path.home() / ".a-sdlc"
     log_dir.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(
-        log_dir / "server.log", maxBytes=1_000_000, backupCount=3
-    )
+    handler = RotatingFileHandler(log_dir / "server.log", maxBytes=1_000_000, backupCount=3)
     handler.setFormatter(JsonFormatter())
     _logger.addHandler(handler)
     _logger.setLevel(logging.INFO)
@@ -886,9 +886,7 @@ def run_server(
     except PortConflictError as exc:
         _mcp_remove_pid()
         _logger.error("Port conflict: %s", exc)
-        raise SystemExit(
-            f"Error: {exc}"
-        ) from exc
+        raise SystemExit(f"Error: {exc}") from exc
 
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
@@ -902,9 +900,7 @@ def run_server(
 
         from a_sdlc.ui import create_app
     except ImportError as exc:
-        _logger.error(
-            "UI dependencies not installed, cannot run combined server: %s", exc
-        )
+        _logger.error("UI dependencies not installed, cannot run combined server: %s", exc)
         raise SystemExit(1) from exc
 
     ui_app = create_app()
