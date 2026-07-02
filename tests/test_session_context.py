@@ -74,6 +74,18 @@ class TestSessionProjectStore:
         store.set("a", "p1")
         assert store.get("a") == "p1"
 
+    def test_count_reaps_expired(self):
+        """count() must not report TTL-expired idle bindings as active
+        (health metric accuracy)."""
+        clock = {"t": 1000.0}
+        with patch("a_sdlc.server.session_context.time.monotonic", side_effect=lambda: clock["t"]):
+            store = SessionProjectStore(ttl_seconds=10.0)
+            store.set("a", "p1")
+            store.set("b", "p2")
+            assert store.count() == 2
+            clock["t"] = 1020.0  # both idle past TTL
+            assert store.count() == 0  # expired entries reaped, not counted
+
 
 # ---------------------------------------------------------------------------
 # _current_session_id
@@ -186,6 +198,8 @@ class TestSetActiveProject:
 
 
 class TestResolutionFailClosed:
+    # Resolution uses db.touch_project(pid) -> project dict | None (get + touch
+    # in one call), so these mocks stub touch_project.
     def test_session_request_never_reads_process_global(self, tmp_path):
         """The core isolation guarantee: a session request must not inherit the
         process-global binding (which a test or another code path may have set).
@@ -194,7 +208,7 @@ class TestResolutionFailClosed:
 
         server._active_project_id = "other-session-project"
         db = MagicMock()
-        db.get_project.return_value = {"id": "other-session-project"}
+        db.touch_project.return_value = {"id": "other-session-project"}
         with (
             patch.object(server, "_current_session_id", return_value="sess-1"),
             patch.object(server, "get_db", return_value=db),
@@ -209,7 +223,7 @@ class TestResolutionFailClosed:
         server._session_projects.reset()
         server._session_projects.set("sess-1", "proj-a")
         db = MagicMock()
-        db.get_project.return_value = {"id": "proj-a"}
+        db.touch_project.return_value = {"id": "proj-a"}
         with (
             patch.object(server, "_current_session_id", return_value="sess-1"),
             patch.object(server, "get_db", return_value=db),
@@ -225,7 +239,7 @@ class TestResolutionFailClosed:
         server._session_projects.reset()
         server._session_projects.set("sess-1", "proj-a")
         db = MagicMock()
-        db.get_project.return_value = {"id": "proj-a"}
+        db.touch_project.return_value = {"id": "proj-a"}
         with (
             patch.object(server, "_current_session_id", return_value="sess-1"),
             patch.object(server, "get_db", return_value=db),
@@ -241,11 +255,11 @@ class TestResolutionFailClosed:
         server._session_projects.reset()
         server._session_projects.set("sess-1", "gone")
 
-        def get_project(pid):
+        def touch_project(pid):
             return None if pid == "gone" else {"id": pid}
 
         db = MagicMock()
-        db.get_project.side_effect = get_project
+        db.touch_project.side_effect = touch_project
         with (
             patch.object(server, "_current_session_id", return_value="sess-1"),
             patch.object(server, "get_db", return_value=db),
@@ -260,7 +274,7 @@ class TestResolutionFailClosed:
 
         server._active_project_id = "proj-global"
         db = MagicMock()
-        db.get_project.return_value = {"id": "proj-global"}
+        db.touch_project.return_value = {"id": "proj-global"}
         with (
             patch.object(server, "_current_session_id", return_value=None),
             patch.object(server, "get_db", return_value=db),

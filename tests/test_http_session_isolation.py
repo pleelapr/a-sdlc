@@ -94,13 +94,20 @@ def _mock_db():
         return None
 
     db.get_project.side_effect = get_project
+    # Resolution goes through touch_project (get + last_accessed touch in one).
+    db.touch_project.side_effect = get_project
     db.list_tasks.return_value = []
     db.list_sprints.return_value = []
     db.list_prds.return_value = []
-    db.list_projects.return_value = [
-        {"id": "proj-a", "shortname": "AAAA", "name": "proj-a"},
-        {"id": "proj-b", "shortname": "BBBB", "name": "proj-b"},
-    ]
+
+    def list_projects(limit=None):
+        rows = [
+            {"id": "proj-a", "shortname": "AAAA", "name": "proj-a"},
+            {"id": "proj-b", "shortname": "BBBB", "name": "proj-b"},
+        ]
+        return rows[:limit] if limit is not None else rows
+
+    db.list_projects.side_effect = list_projects
     db.update_project_accessed.return_value = None
     return db
 

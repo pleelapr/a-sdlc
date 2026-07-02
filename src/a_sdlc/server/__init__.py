@@ -626,13 +626,14 @@ def _get_current_project_id() -> str | None:
     """
     global _active_project_id
 
+    # touch_project() returns the project (refreshing last_accessed) if it
+    # exists, else None -- a single data-access call for the get-then-touch
+    # resolution pattern.
     sid = _current_session_id()
     if sid:
         pid = _session_projects.get(sid)
         if pid is not None:
-            db = get_db()
-            if db.get_project(pid):
-                db.update_project_accessed(pid)
+            if get_db().touch_project(pid):
                 return pid
             # Bound project was deleted — drop the stale binding and fall
             # through to the marker walk (a local server run inside a repo).
@@ -641,10 +642,7 @@ def _get_current_project_id() -> str | None:
         # No session id: consult the process-global (fail-closed above ensures
         # session requests skip this branch entirely).
         if _active_project_id is not None:
-            db = get_db()
-            project = db.get_project(_active_project_id)
-            if project:
-                db.update_project_accessed(_active_project_id)
+            if get_db().touch_project(_active_project_id):
                 return _active_project_id
             # Stale reference — clear it
             _active_project_id = None
@@ -653,12 +651,8 @@ def _get_current_project_id() -> str | None:
     from a_sdlc.core.project_marker import find_marker
 
     marker = find_marker(os.getcwd())
-    if marker:
-        db = get_db()
-        project = db.get_project(marker["id"])
-        if project:
-            db.update_project_accessed(project["id"])
-            return project["id"]
+    if marker and get_db().touch_project(marker["id"]):
+        return marker["id"]
     return None
 
 

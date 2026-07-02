@@ -40,7 +40,7 @@ def get_context() -> dict[str, Any]:
             ],
             "known_projects": [
                 {"id": p["id"], "shortname": p["shortname"], "name": p["name"]}
-                for p in db.list_projects()[:20]
+                for p in db.list_projects(limit=20)
             ],
         }
 

@@ -465,10 +465,7 @@ class Database:
                 project_name, existing_shortnames, conn
             )
             existing_shortnames.add(shortname)
-            conn.execute(
-                "UPDATE projects SET shortname = ? WHERE id = ?",
-                (shortname, project_id)
-            )
+            conn.execute("UPDATE projects SET shortname = ? WHERE id = ?", (shortname, project_id))
 
         # Add unique constraint
         conn.execute("CREATE UNIQUE INDEX idx_projects_shortname ON projects(shortname)")
@@ -727,7 +724,7 @@ class Database:
             return False, "Shortname cannot be empty"
         if len(shortname) != 4:
             return False, "Shortname must be exactly 4 characters"
-        if not re.match(r'^[A-Z]{4}$', shortname):
+        if not re.match(r"^[A-Z]{4}$", shortname):
             return False, "Shortname must contain only uppercase letters (A-Z)"
         return True, ""
 
@@ -742,10 +739,10 @@ class Database:
             4-character uppercase shortname candidate.
         """
         # Remove non-alpha, uppercase
-        clean = re.sub(r'[^a-zA-Z]', '', name).upper()
+        clean = re.sub(r"[^a-zA-Z]", "", name).upper()
 
         # Try consonants first (more memorable)
-        consonants = re.sub(r'[AEIOU]', '', clean)
+        consonants = re.sub(r"[AEIOU]", "", clean)
         if len(consonants) >= 4:
             return consonants[:4]
 
@@ -754,7 +751,7 @@ class Database:
             return clean[:4]
 
         # Pad with X if too short
-        return (clean + 'XXXX')[:4]
+        return (clean + "XXXX")[:4]
 
     def _generate_unique_shortname_internal(
         self,
@@ -776,31 +773,26 @@ class Database:
 
         # Try the base candidate first
         if base not in existing:
-            cursor = conn.execute(
-                "SELECT 1 FROM projects WHERE shortname = ?", (base,)
-            )
+            cursor = conn.execute("SELECT 1 FROM projects WHERE shortname = ?", (base,))
             if not cursor.fetchone():
                 return base
 
         # Try adding numeric suffix (A, B, C... then 1, 2, 3...)
-        for suffix in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+        for suffix in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
             candidate = base[:3] + suffix
             if candidate not in existing:
-                cursor = conn.execute(
-                    "SELECT 1 FROM projects WHERE shortname = ?", (candidate,)
-                )
+                cursor = conn.execute("SELECT 1 FROM projects WHERE shortname = ?", (candidate,))
                 if not cursor.fetchone():
                     return candidate
 
         # Fallback: random-ish suffix
         import random
+
         while True:
-            suffix = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=1))
+            suffix = "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=1))
             candidate = base[:3] + suffix
             if candidate not in existing:
-                cursor = conn.execute(
-                    "SELECT 1 FROM projects WHERE shortname = ?", (candidate,)
-                )
+                cursor = conn.execute("SELECT 1 FROM projects WHERE shortname = ?", (candidate,))
                 if not cursor.fetchone():
                     return candidate
 
@@ -826,9 +818,7 @@ class Database:
             True if available, False if already in use.
         """
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT 1 FROM projects WHERE shortname = ?", (shortname,)
-            )
+            cursor = conn.execute("SELECT 1 FROM projects WHERE shortname = ?", (shortname,))
             return cursor.fetchone() is None
 
     # =========================================================================
@@ -877,9 +867,7 @@ class Database:
     def get_project(self, project_id: str) -> dict[str, Any] | None:
         """Get project by ID."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM projects WHERE id = ?", (project_id,)
-            )
+            cursor = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -893,18 +881,24 @@ class Database:
             Project dict if found, None otherwise.
         """
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM projects WHERE shortname = ?", (shortname,)
-            )
+            cursor = conn.execute("SELECT * FROM projects WHERE shortname = ?", (shortname,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def list_projects(self) -> list[dict[str, Any]]:
-        """List all projects ordered by last accessed."""
+    def list_projects(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """List projects ordered by last accessed (most recent first).
+
+        Args:
+            limit: Optional cap on rows returned, applied in SQL so callers that
+                only need the first N do not materialize the whole table.
+        """
+        sql = "SELECT * FROM projects ORDER BY last_accessed DESC"
+        params: tuple[Any, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM projects ORDER BY last_accessed DESC"
-            )
+            cursor = conn.execute(sql, params)
             return [dict(row) for row in cursor.fetchall()]
 
     def get_all_projects_with_stats(self) -> list[dict[str, Any]]:
@@ -977,12 +971,29 @@ class Database:
                 (now, project_id),
             )
 
+    def touch_project(self, project_id: str) -> dict[str, Any] | None:
+        """Return the project (if it exists) and refresh its last_accessed.
+
+        Encapsulates the get-then-touch pattern used during project-context
+        resolution so callers issue a single data-access call. Returns the
+        project dict, or ``None`` if no such project exists.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connection() as conn:
+            cursor = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE projects SET last_accessed = ? WHERE id = ?",
+                (now, project_id),
+            )
+            return dict(row)
+
     def delete_project(self, project_id: str) -> bool:
         """Delete a project and all associated data."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM projects WHERE id = ?", (project_id,)
-            )
+            cursor = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             return cursor.rowcount > 0
 
     # =========================================================================
@@ -1147,8 +1158,16 @@ class Database:
                     status, priority, component, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    task_id, project_id, prd_id, title, file_path,
-                    status, priority, component, now, now,
+                    task_id,
+                    project_id,
+                    prd_id,
+                    title,
+                    file_path,
+                    status,
+                    priority,
+                    component,
+                    now,
+                    now,
                 ),
             )
         return self.get_task(task_id)
@@ -1332,9 +1351,7 @@ class Database:
         - task_counts: Status breakdown of all tasks (derived via PRDs)
         """
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM sprints WHERE id = ?", (sprint_id,)
-            )
+            cursor = conn.execute("SELECT * FROM sprints WHERE id = ?", (sprint_id,))
             row = cursor.fetchone()
             if not row:
                 return None
@@ -1397,9 +1414,7 @@ class Database:
     def delete_sprint(self, sprint_id: str) -> bool:
         """Delete a sprint (PRDs are unlinked, not deleted)."""
         with self.connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM sprints WHERE id = ?", (sprint_id,)
-            )
+            cursor = conn.execute("DELETE FROM sprints WHERE id = ?", (sprint_id,))
             return cursor.rowcount > 0
 
     def get_sprint_prds(self, sprint_id: str) -> list[dict[str, Any]]:
@@ -1644,9 +1659,7 @@ class Database:
             Worktree dict if found, None otherwise.
         """
         with self.connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM worktrees WHERE id = ?", (worktree_id,)
-            )
+            cursor = conn.execute("SELECT * FROM worktrees WHERE id = ?", (worktree_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -1742,9 +1755,7 @@ class Database:
             True if deleted, False if not found.
         """
         with self.connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM worktrees WHERE id = ?", (worktree_id,)
-            )
+            cursor = conn.execute("DELETE FROM worktrees WHERE id = ?", (worktree_id,))
             return cursor.rowcount > 0
 
     # =========================================================================
@@ -1787,10 +1798,7 @@ class Database:
                 f"Must be one of {self.VALID_REVIEWER_TYPES}"
             )
         if verdict not in self.VALID_VERDICTS:
-            raise ValueError(
-                f"Invalid verdict: {verdict!r}. "
-                f"Must be one of {self.VALID_VERDICTS}"
-            )
+            raise ValueError(f"Invalid verdict: {verdict!r}. Must be one of {self.VALID_VERDICTS}")
 
         now = datetime.now(timezone.utc).isoformat()
         with self.connection() as conn:
@@ -1799,13 +1807,19 @@ class Database:
                    (task_id, project_id, round, reviewer_type, verdict,
                     findings, test_output, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (task_id, project_id, round_num, reviewer_type, verdict,
-                 findings, test_output, now),
+                (
+                    task_id,
+                    project_id,
+                    round_num,
+                    reviewer_type,
+                    verdict,
+                    findings,
+                    test_output,
+                    now,
+                ),
             )
             review_id = cursor.lastrowid
-            row = conn.execute(
-                "SELECT * FROM reviews WHERE id = ?", (review_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
             return dict(row)
 
     def get_reviews_for_task(self, task_id: str) -> list[dict[str, Any]]:
@@ -1940,9 +1954,7 @@ class Database:
             )
         return self.get_sync_mapping(entity_type, local_id, external_system)
 
-    def delete_sync_mapping(
-        self, entity_type: str, local_id: str, external_system: str
-    ) -> bool:
+    def delete_sync_mapping(self, entity_type: str, local_id: str, external_system: str) -> bool:
         """Delete a sync mapping."""
         with self.connection() as conn:
             cursor = conn.execute(
@@ -2084,13 +2096,19 @@ class Database:
                    (project_id, agent_id, run_id, action_type,
                     target_entity, outcome, details, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (project_id, agent_id, run_id, action_type,
-                 target_entity, outcome, details_str, now),
+                (
+                    project_id,
+                    agent_id,
+                    run_id,
+                    action_type,
+                    target_entity,
+                    outcome,
+                    details_str,
+                    now,
+                ),
             )
             log_id = cursor.lastrowid
-            row = conn.execute(
-                "SELECT * FROM audit_log WHERE id = ?", (log_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM audit_log WHERE id = ?", (log_id,)).fetchone()
             return dict(row)
 
     def get_audit_log(
@@ -2168,9 +2186,7 @@ class Database:
                 """,
                 (id, prd_id, req_type, req_number, summary, depth),
             )
-            row = conn.execute(
-                "SELECT * FROM requirements WHERE id = ?", (id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM requirements WHERE id = ?", (id,)).fetchone()
             return dict(row)
 
     def get_requirement(self, requirement_id: str) -> dict[str, Any] | None:
@@ -2188,9 +2204,7 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
-    def get_requirements(
-        self, prd_id: str, req_type: str | None = None
-    ) -> list[dict[str, Any]]:
+    def get_requirements(self, prd_id: str, req_type: str | None = None) -> list[dict[str, Any]]:
         """Get all requirements for a PRD, optionally filtered by type.
 
         Args:
@@ -2220,9 +2234,7 @@ class Database:
             Number of rows deleted.
         """
         with self.connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM requirements WHERE prd_id = ?", (prd_id,)
-            )
+            cursor = conn.execute("DELETE FROM requirements WHERE prd_id = ?", (prd_id,))
             return cursor.rowcount
 
     # =========================================================================
@@ -2576,9 +2588,7 @@ class Database:
             ).fetchone()
             return dict(row) if row else None
 
-    def get_challenge_rounds(
-        self, artifact_type: str, artifact_id: str
-    ) -> list[dict[str, Any]]:
+    def get_challenge_rounds(self, artifact_type: str, artifact_id: str) -> list[dict[str, Any]]:
         """Get all challenge rounds for an artifact, ordered by round number.
 
         JSON fields (objections, responses) are parsed back into Python objects.
@@ -2611,9 +2621,7 @@ class Database:
             results.append(d)
         return results
 
-    def get_challenge_status(
-        self, artifact_type: str, artifact_id: str
-    ) -> dict[str, Any]:
+    def get_challenge_status(self, artifact_type: str, artifact_id: str) -> dict[str, Any]:
         """Get summary status of challenge rounds for an artifact.
 
         Args:

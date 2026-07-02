@@ -176,9 +176,7 @@ class SessionDatabase:
                 return base
             for suffix in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789":
                 candidate = base[:3] + suffix
-                if not session.exec(
-                    select(Project).where(Project.shortname == candidate)
-                ).first():
+                if not session.exec(select(Project).where(Project.shortname == candidate)).first():
                     return candidate
         return base  # fallback
 
@@ -186,10 +184,7 @@ class SessionDatabase:
         """Check if a shortname is available."""
         with self._session() as session:
             return (
-                session.exec(
-                    select(Project).where(Project.shortname == shortname)
-                ).first()
-                is None
+                session.exec(select(Project).where(Project.shortname == shortname)).first() is None
             )
 
     # ==================================================================
@@ -233,17 +228,21 @@ class SessionDatabase:
     def get_project_by_shortname(self, shortname: str) -> dict[str, Any] | None:
         """Get project by shortname."""
         with self._session() as session:
-            obj = session.exec(
-                select(Project).where(Project.shortname == shortname)
-            ).first()
+            obj = session.exec(select(Project).where(Project.shortname == shortname)).first()
             return _model_to_dict(obj) if obj else None
 
-    def list_projects(self) -> list[dict[str, Any]]:
-        """List all projects ordered by last accessed."""
+    def list_projects(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """List projects ordered by last accessed (most recent first).
+
+        Args:
+            limit: Optional cap on rows returned, applied in SQL so callers that
+                only need the first N do not materialize the whole table.
+        """
         with self._session() as session:
-            results = session.exec(
-                select(Project).order_by(Project.last_accessed.desc())  # type: ignore[union-attr]
-            ).all()
+            stmt = select(Project).order_by(Project.last_accessed.desc())  # type: ignore[union-attr]
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            results = session.exec(stmt).all()
             return [_model_to_dict(r) for r in results]
 
     def get_all_projects_with_stats(self) -> list[dict[str, Any]]:
@@ -313,6 +312,23 @@ class SessionDatabase:
             if obj:
                 obj.last_accessed = _utcnow()
                 session.add(obj)
+
+    def touch_project(self, project_id: str) -> dict[str, Any] | None:
+        """Return the project (if it exists) and refresh its last_accessed.
+
+        Encapsulates the get-then-touch pattern used during project-context
+        resolution so callers issue a single data-access call instead of a
+        separate lookup and update. Returns the project dict, or ``None`` if no
+        such project exists.
+        """
+        with self._session() as session:
+            obj = session.get(Project, project_id)
+            if obj is None:
+                return None
+            obj.last_accessed = _utcnow()
+            session.add(obj)
+            session.flush()
+            return _model_to_dict(obj)
 
     def delete_project(self, project_id: str) -> bool:
         """Delete a project and all associated data."""
@@ -704,15 +720,11 @@ class SessionDatabase:
         """Get all PRDs assigned to a sprint."""
         with self._session() as session:
             results = session.exec(
-                select(Prd)
-                .where(Prd.sprint_id == sprint_id)
-                .order_by(Prd.updated_at.desc())  # type: ignore[union-attr]
+                select(Prd).where(Prd.sprint_id == sprint_id).order_by(Prd.updated_at.desc())  # type: ignore[union-attr]
             ).all()
             return [_model_to_dict(r) for r in results]
 
-    def assign_prd_to_sprint(
-        self, prd_id: str, sprint_id: str | None
-    ) -> dict[str, Any] | None:
+    def assign_prd_to_sprint(self, prd_id: str, sprint_id: str | None) -> dict[str, Any] | None:
         """Assign a PRD to a sprint (or unassign by passing None)."""
         return self.update_prd(prd_id, sprint_id=sprint_id)
 
@@ -913,9 +925,7 @@ class SessionDatabase:
             session.add(obj)
         return self.get_sync_mapping(entity_type, local_id, external_system)
 
-    def delete_sync_mapping(
-        self, entity_type: str, local_id: str, external_system: str
-    ) -> bool:
+    def delete_sync_mapping(self, entity_type: str, local_id: str, external_system: str) -> bool:
         """Delete a sync mapping."""
         with self._session() as session:
             obj = session.exec(
@@ -934,9 +944,7 @@ class SessionDatabase:
     # External Config Operations
     # ==================================================================
 
-    def get_external_config(
-        self, project_id: str, system: str
-    ) -> dict[str, Any] | None:
+    def get_external_config(self, project_id: str, system: str) -> dict[str, Any] | None:
         """Get external system configuration for a project."""
         with self._session() as session:
             obj = session.exec(
@@ -1032,10 +1040,7 @@ class SessionDatabase:
                 f"Must be one of {self.VALID_REVIEWER_TYPES}"
             )
         if verdict not in self.VALID_VERDICTS:
-            raise ValueError(
-                f"Invalid verdict: {verdict!r}. "
-                f"Must be one of {self.VALID_VERDICTS}"
-            )
+            raise ValueError(f"Invalid verdict: {verdict!r}. Must be one of {self.VALID_VERDICTS}")
         now = _utcnow()
         review = Review(
             task_id=task_id,
@@ -1206,18 +1211,14 @@ class SessionDatabase:
             stmt = stmt.order_by(Worktree.created_at.desc())  # type: ignore[union-attr]
             return [_model_to_dict(r) for r in session.exec(stmt).all()]
 
-    def update_worktree(
-        self, worktree_id: str, **kwargs: Any
-    ) -> dict[str, Any] | None:
+    def update_worktree(self, worktree_id: str, **kwargs: Any) -> dict[str, Any] | None:
         """Update worktree fields."""
         if not kwargs:
             return self.get_worktree(worktree_id)
         allowed_fields = {"status", "cleaned_at", "pr_url", "path", "branch_name", "sprint_id"}
         invalid_keys = set(kwargs.keys()) - allowed_fields
         if invalid_keys:
-            raise ValueError(
-                f"Invalid worktree fields: {invalid_keys}. Allowed: {allowed_fields}"
-            )
+            raise ValueError(f"Invalid worktree fields: {invalid_keys}. Allowed: {allowed_fields}")
         new_status = kwargs.get("status")
         if new_status and new_status in ("completed", "abandoned"):
             kwargs.setdefault("cleaned_at", _utcnow())
@@ -1283,9 +1284,7 @@ class SessionDatabase:
             obj = session.get(Requirement, requirement_id)
             return _model_to_dict(obj) if obj else None
 
-    def get_requirements(
-        self, prd_id: str, req_type: str | None = None
-    ) -> list[dict[str, Any]]:
+    def get_requirements(self, prd_id: str, req_type: str | None = None) -> list[dict[str, Any]]:
         """Get all requirements for a PRD, optionally filtered by type."""
         with self._session() as session:
             stmt = select(Requirement).where(Requirement.prd_id == prd_id)
@@ -1324,8 +1323,9 @@ class SessionDatabase:
     def get_task_requirements(self, task_id: str) -> list[dict[str, Any]]:
         """Get all requirements linked to a task, with verification status."""
         with self._session() as session:
-            rows = session.execute(
-                text("""
+            rows = (
+                session.execute(
+                    text("""
                     SELECT r.*, rl.created_at as linked_at,
                            CASE WHEN av.id IS NOT NULL THEN 1 ELSE 0 END as verified,
                            av.verified_by, av.evidence_type, av.evidence, av.verified_at
@@ -1336,62 +1336,82 @@ class SessionDatabase:
                     WHERE rl.task_id = :task_id
                     ORDER BY r.req_number
                 """),
-                {"task_id": task_id},
-            ).mappings().all()
+                    {"task_id": task_id},
+                )
+                .mappings()
+                .all()
+            )
             return [dict(r) for r in rows]
 
     def get_requirement_tasks(self, requirement_id: str) -> list[dict[str, Any]]:
         """Get all tasks linked to a requirement."""
         with self._session() as session:
-            rows = session.execute(
-                text("""
+            rows = (
+                session.execute(
+                    text("""
                     SELECT t.* FROM requirement_links rl
                     INNER JOIN tasks t ON rl.task_id = t.id
                     WHERE rl.requirement_id = :req_id
                     ORDER BY t.id
                 """),
-                {"req_id": requirement_id},
-            ).mappings().all()
+                    {"req_id": requirement_id},
+                )
+                .mappings()
+                .all()
+            )
             return [dict(r) for r in rows]
 
     def get_orphaned_requirements(self, prd_id: str) -> list[dict[str, Any]]:
         """Get requirements with zero linked tasks."""
         with self._session() as session:
-            rows = session.execute(
-                text("""
+            rows = (
+                session.execute(
+                    text("""
                     SELECT r.* FROM requirements r
                     LEFT JOIN requirement_links rl ON r.id = rl.requirement_id
                     WHERE r.prd_id = :prd_id AND rl.requirement_id IS NULL
                     ORDER BY r.req_number
                 """),
-                {"prd_id": prd_id},
-            ).mappings().all()
+                    {"prd_id": prd_id},
+                )
+                .mappings()
+                .all()
+            )
             return [dict(r) for r in rows]
 
     def get_coverage_stats(self, prd_id: str) -> dict[str, Any]:
         """Compute requirement coverage statistics for a PRD."""
         with self._session() as session:
-            total_row = session.execute(
-                text("SELECT COUNT(*) as cnt FROM requirements WHERE prd_id = :prd_id"),
-                {"prd_id": prd_id},
-            ).mappings().first()
+            total_row = (
+                session.execute(
+                    text("SELECT COUNT(*) as cnt FROM requirements WHERE prd_id = :prd_id"),
+                    {"prd_id": prd_id},
+                )
+                .mappings()
+                .first()
+            )
             total = total_row["cnt"] if total_row else 0
 
-            linked_row = session.execute(
-                text("""
+            linked_row = (
+                session.execute(
+                    text("""
                     SELECT COUNT(DISTINCT r.id) as cnt
                     FROM requirements r
                     INNER JOIN requirement_links rl ON r.id = rl.requirement_id
                     WHERE r.prd_id = :prd_id
                 """),
-                {"prd_id": prd_id},
-            ).mappings().first()
+                    {"prd_id": prd_id},
+                )
+                .mappings()
+                .first()
+            )
             linked = linked_row["cnt"] if linked_row else 0
 
             orphaned = total - linked
 
-            type_rows = session.execute(
-                text("""
+            type_rows = (
+                session.execute(
+                    text("""
                     SELECT r.req_type,
                            COUNT(*) as total,
                            COUNT(rl.requirement_id) as linked
@@ -1402,8 +1422,11 @@ class SessionDatabase:
                     WHERE r.prd_id = :prd_id
                     GROUP BY r.req_type
                 """),
-                {"prd_id": prd_id},
-            ).mappings().all()
+                    {"prd_id": prd_id},
+                )
+                .mappings()
+                .all()
+            )
 
             by_type = {
                 row["req_type"]: {"total": row["total"], "linked": row["linked"]}
@@ -1472,8 +1495,9 @@ class SessionDatabase:
     def get_unverified_acs(self, task_id: str) -> list[dict[str, Any]]:
         """Get AC requirements linked to a task but not yet verified."""
         with self._session() as session:
-            rows = session.execute(
-                text("""
+            rows = (
+                session.execute(
+                    text("""
                     SELECT r.* FROM requirement_links rl
                     INNER JOIN requirements r ON rl.requirement_id = r.id
                     LEFT JOIN ac_verifications av
@@ -1481,8 +1505,11 @@ class SessionDatabase:
                     WHERE rl.task_id = :task_id AND av.id IS NULL
                     ORDER BY r.req_number
                 """),
-                {"task_id": task_id},
-            ).mappings().all()
+                    {"task_id": task_id},
+                )
+                .mappings()
+                .all()
+            )
             return [dict(r) for r in rows]
 
     # ==================================================================
@@ -1540,9 +1567,7 @@ class SessionDatabase:
             session.refresh(record)
             return _model_to_dict(record)
 
-    def get_challenge_rounds(
-        self, artifact_type: str, artifact_id: str
-    ) -> list[dict[str, Any]]:
+    def get_challenge_rounds(self, artifact_type: str, artifact_id: str) -> list[dict[str, Any]]:
         """Get all challenge rounds for an artifact, ordered by round number."""
         with self._session() as session:
             stmt = (
@@ -1564,17 +1589,17 @@ class SessionDatabase:
                 results.append(d)
             return results
 
-    def get_challenge_status(
-        self, artifact_type: str, artifact_id: str
-    ) -> dict[str, Any]:
+    def get_challenge_status(self, artifact_type: str, artifact_id: str) -> dict[str, Any]:
         """Get summary status of challenge rounds for an artifact."""
         with self._session() as session:
-            stmt = select(
-                ChallengeRecord.status, func.count().label("cnt")
-            ).where(
-                ChallengeRecord.artifact_type == artifact_type,
-                ChallengeRecord.artifact_id == artifact_id,
-            ).group_by(ChallengeRecord.status)
+            stmt = (
+                select(ChallengeRecord.status, func.count().label("cnt"))
+                .where(
+                    ChallengeRecord.artifact_type == artifact_type,
+                    ChallengeRecord.artifact_id == artifact_id,
+                )
+                .group_by(ChallengeRecord.status)
+            )
             rows = session.exec(stmt).all()
 
             total = sum(r[1] for r in rows)

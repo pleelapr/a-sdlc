@@ -80,8 +80,17 @@ class SessionProjectStore:
             self._entries.pop(session_id, None)
 
     def count(self) -> int:
-        """Number of live bindings (for the /health snapshot)."""
+        """Number of live (non-expired) bindings, for the /health snapshot.
+
+        Reaps TTL-expired entries first so ``active_sessions`` reflects live
+        bindings rather than idle ones that happen not to have been read/written
+        yet (TTL is otherwise only enforced lazily on get/set).
+        """
+        now = time.monotonic()
         with self._lock:
+            expired = [sid for sid, e in self._entries.items() if now - e.last_used > self._ttl]
+            for sid in expired:
+                del self._entries[sid]
             return len(self._entries)
 
     def reset(self) -> None:

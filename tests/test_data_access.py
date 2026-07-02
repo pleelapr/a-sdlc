@@ -195,6 +195,7 @@ class TestAllowlistCompleteness:
         "link_task_requirement",
         "record_ac_verification",
         "set_external_config",
+        "touch_project",
         "update_prd",
         "update_project_accessed",
         "update_sprint",
