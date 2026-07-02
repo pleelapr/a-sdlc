@@ -11,12 +11,12 @@ from __future__ import annotations
 import logging
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlmodel import SQLModel, create_engine
 
 import a_sdlc.core.models  # noqa: F401  -- populate SQLModel.metadata
 from a_sdlc.core.storage_config import load_storage_config
+from alembic import context
 
 # Alembic Config object -- provides access to alembic.ini values
 config = context.config
