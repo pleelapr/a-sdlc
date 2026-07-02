@@ -988,7 +988,11 @@ class Database:
                 "UPDATE projects SET last_accessed = ? WHERE id = ?",
                 (now, project_id),
             )
-            return dict(row)
+            # Return the post-update row (reflect the new last_accessed), matching
+            # the SessionDatabase implementation and this method's docstring.
+            result = dict(row)
+            result["last_accessed"] = now
+            return result
 
     def delete_project(self, project_id: str) -> bool:
         """Delete a project and all associated data."""

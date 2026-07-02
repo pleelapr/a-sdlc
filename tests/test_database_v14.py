@@ -203,3 +203,25 @@ class TestMigrationPreservesData:
             with db2.connection() as conn:
                 row = conn.execute("SELECT version FROM schema_version").fetchone()
                 assert row["version"] == SCHEMA_VERSION
+
+
+class TestTouchProjectAndListLimit:
+    """Regression tests for Database.touch_project + list_projects(limit)."""
+
+    def test_touch_project_returns_post_update_row(self, temp_db):
+        """The returned dict must reflect the updated last_accessed (not the
+        pre-update value), matching what is persisted and the SessionDatabase."""
+        touched = temp_db.touch_project("test-project")
+        assert touched is not None
+        assert touched["id"] == "test-project"
+        persisted = temp_db.get_project("test-project")
+        assert touched["last_accessed"] == persisted["last_accessed"]
+
+    def test_touch_project_missing_returns_none(self, temp_db):
+        assert temp_db.touch_project("nope") is None
+
+    def test_list_projects_limit(self, temp_db):
+        temp_db.create_project("p2", "P2", shortname="BBBB")
+        temp_db.create_project("p3", "P3", shortname="CCCC")
+        assert len(temp_db.list_projects(limit=2)) == 2
+        assert len(temp_db.list_projects()) == 3  # default: all rows
