@@ -116,6 +116,43 @@ class TestCurrentSessionId:
         with patch.object(server.mcp, "get_context", return_value=_ctx_with_header("sess-xyz")):
             assert server._current_session_id() == "sess-xyz"
 
+    def test_stateless_mode_ignores_client_header(self):
+        """In stateless mode the SDK does not strip an incoming mcp-session-id;
+        we must ignore it so the escape hatch stays truly process-global."""
+        import a_sdlc.server as server
+
+        with (
+            patch.object(server, "_STATELESS", True),
+            patch.object(server.mcp, "get_context", return_value=_ctx_with_header("client-forged")),
+        ):
+            assert server._current_session_id() is None
+
+
+class TestEnvNum:
+    def test_absent_uses_default(self, monkeypatch):
+        import a_sdlc.server as server
+
+        monkeypatch.delenv("A_SDLC_MAX_SESSIONS", raising=False)
+        assert server._env_num("A_SDLC_MAX_SESSIONS", 1024, int) == 1024
+
+    def test_blank_uses_default(self, monkeypatch):
+        import a_sdlc.server as server
+
+        monkeypatch.setenv("A_SDLC_MAX_SESSIONS", "")
+        assert server._env_num("A_SDLC_MAX_SESSIONS", 1024, int) == 1024
+
+    def test_invalid_uses_default(self, monkeypatch):
+        import a_sdlc.server as server
+
+        monkeypatch.setenv("A_SDLC_SESSION_TTL", "not-a-number")
+        assert server._env_num("A_SDLC_SESSION_TTL", 86400.0, float) == 86400.0
+
+    def test_valid_is_parsed(self, monkeypatch):
+        import a_sdlc.server as server
+
+        monkeypatch.setenv("A_SDLC_MAX_SESSIONS", "2048")
+        assert server._env_num("A_SDLC_MAX_SESSIONS", 1024, int) == 2048
+
 
 # ---------------------------------------------------------------------------
 # set_active_project

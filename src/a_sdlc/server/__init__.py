@@ -100,9 +100,7 @@ class BearerAuthMiddleware:
                 if not hmac.compare_digest(auth, self._expected):
                     from starlette.responses import JSONResponse
 
-                    response = JSONResponse(
-                        {"error": "Unauthorized"}, status_code=401
-                    )
+                    response = JSONResponse({"error": "Unauthorized"}, status_code=401)
                     await response(scope, receive, send)
                     return
         await self.app(scope, receive, send)
@@ -231,9 +229,7 @@ def _wait_for_database(config, *, max_wait: float = 90.0) -> None:
             if time.monotonic() >= deadline:
                 _logger.error("Database not reachable after %.0fs; giving up", max_wait)
                 raise
-            _logger.warning(
-                "Database not ready (attempt %d); retrying in %.0fs", attempt, delay
-            )
+            _logger.warning("Database not ready (attempt %d); retrying in %.0fs", attempt, delay)
             time.sleep(delay)
             delay = min(delay * 2, 10.0)
 
@@ -279,9 +275,7 @@ def _run_auto_migration(config) -> None:
         package_root = Path(__file__).resolve().parent.parent.parent
         alembic_ini = package_root / "alembic.ini"
         if not alembic_ini.exists():
-            _logger.debug(
-                "alembic.ini not found at %s; skipping auto-migration", alembic_ini
-            )
+            _logger.debug("alembic.ini not found at %s; skipping auto-migration", alembic_ini)
             return
 
         alembic_cfg = AlembicConfig(str(alembic_ini))
@@ -303,9 +297,28 @@ _data_access: MCPDataAccess | None = None
 # Two Claude Code conversations on different projects therefore never collide.
 from a_sdlc.server.session_context import SessionProjectStore  # noqa: E402
 
+
+def _env_num(name: str, default, cast):
+    """Parse a numeric env var, falling back to *default* on empty/invalid input.
+
+    A declared-but-blank env var (which Railway allows) makes ``os.environ.get``
+    return "" -- ``int("")``/``float("")`` would raise and, at module scope,
+    crash-loop every process that imports this module (server AND ``a-sdlc
+    doctor``). Parse defensively so misconfiguration degrades to the default.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return cast(raw)
+    except ValueError:
+        _logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
 _session_projects: SessionProjectStore = SessionProjectStore(
-    max_entries=int(os.environ.get("A_SDLC_MAX_SESSIONS", "1024")),
-    ttl_seconds=float(os.environ.get("A_SDLC_SESSION_TTL", "86400")),
+    max_entries=_env_num("A_SDLC_MAX_SESSIONS", 1024, int),
+    ttl_seconds=_env_num("A_SDLC_SESSION_TTL", 86400.0, float),
 )
 
 # Fallback active project for requests with NO session id: direct tool calls in
@@ -347,8 +360,9 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record as a single JSON line."""
         entry: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc)
-            .isoformat(timespec="milliseconds"),
+            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(
+                timespec="milliseconds"
+            ),
             "level": record.levelname,
             "event": record.getMessage(),
         }
@@ -551,15 +565,22 @@ mcp: FastMCP = FastMCP(
 def _current_session_id() -> str | None:
     """Return the ``mcp-session-id`` of the in-flight HTTP request, else ``None``.
 
-    ``None`` means "no MCP request context": direct tool calls in tests, and
-    stateless-HTTP mode (where the transport never issues a session id). In
-    stateful mode the transport validates the header (400 missing / 404 unknown)
-    before any tool code runs, so a header seen here is always server-minted.
+    ``None`` means "resolve via the process global": direct tool calls in tests,
+    and stateless-HTTP mode (the escape hatch). In stateful mode the transport
+    validates the header (400 missing / 404 unknown) before any tool code runs,
+    so a header seen here is always a server-minted, live session id.
+
+    In stateless mode the SDK does NOT strip an incoming ``mcp-session-id``
+    header, so a client could send an arbitrary one; we return ``None`` there
+    unconditionally so the escape hatch behaves as documented (single shared
+    process-global context) and never trusts a client-controlled id.
 
     ``mcp.get_context()`` swallows the ``LookupError`` raised outside a request
     and returns a Context whose ``.request_context`` then raises ``ValueError``
     — that ValueError is the clean "no request" signal for direct/test calls.
     """
+    if _STATELESS:
+        return None
     try:
         request = mcp.get_context().request_context.request
     except ValueError:
