@@ -70,7 +70,14 @@ def build_alembic_config(database_url: str | None = None) -> Config:
 
     cfg = Config()  # no ini file -- env.py handles the None config_file_name
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
-    cfg.set_main_option("sqlalchemy.url", database_url)
+    # Alembic's Config stores values in a ConfigParser with BasicInterpolation,
+    # which treats "%" as an interpolation sigil. Managed Postgres providers
+    # (Railway, etc.) hand out URLs with percent-encoded password characters
+    # (e.g. p%40ss). Escape "%" -> "%%" so ConfigParser stores it literally;
+    # env.py reads it back via get_main_option(), which un-escapes it, yielding
+    # the original URL for SQLAlchemy to decode. Without this, a "%" in the URL
+    # raises ValueError here and crash-loops startup (auto-migration is fatal).
+    cfg.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return cfg
 
 
@@ -125,8 +132,10 @@ def get_revision_info(database_url: str) -> dict[str, Any]:
 
     pending = 0
     if head is not None and current != head:
+        # walk_revisions(base, head): base (older) first, head (newer) second.
+        # current is the older bound (DB behind head) -> (current or "base", head).
         pending = sum(
-            1 for r in script.walk_revisions(head, current or "base") if r.revision != current
+            1 for r in script.walk_revisions(current or "base", head) if r.revision != current
         )
     return {"current": current, "head": head, "pending": pending}
 

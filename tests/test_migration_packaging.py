@@ -162,3 +162,40 @@ class TestRunUpgradeHead:
 
         assert "stamping baseline 0003" in caplog.text.lower()
         assert get_revision_info(url)["current"] == "0003"
+
+
+# ---------------------------------------------------------------------------
+# Regression: percent-encoded URLs and pending-count arithmetic
+# ---------------------------------------------------------------------------
+
+
+class TestConfigRobustness:
+    def test_percent_encoded_url_does_not_crash(self):
+        """Managed Postgres URLs often have percent-encoded passwords (p%40ss).
+
+        Alembic's Config uses ConfigParser interpolation, which treats "%" as a
+        sigil; without escaping, build_alembic_config would raise ValueError and
+        crash-loop startup. The URL must round-trip unchanged for env.py.
+        """
+        url = "postgresql://user:p%40ss%2Fword@host:5432/db"
+        cfg = build_alembic_config(url)
+        assert cfg.get_main_option("sqlalchemy.url") == url
+
+    def test_get_revision_info_counts_pending_below_head(self, tmp_path):
+        """get_revision_info must report the correct pending count when the DB
+        is behind head (the reversed walk_revisions range raised CommandError)."""
+        url = f"sqlite:///{tmp_path / 'behind.db'}"
+        cfg = build_alembic_config(url)
+        command.upgrade(cfg, "0001")
+        info = get_revision_info(url)
+        assert info == {"current": "0001", "head": "0003", "pending": 2}
+
+        command.upgrade(cfg, "0002")
+        assert get_revision_info(url)["pending"] == 1
+
+    def test_get_revision_info_pending_from_unstamped(self, tmp_path):
+        """An unstamped DB (current is None) counts all revisions as pending."""
+        url = f"sqlite:///{tmp_path / 'unstamped.db'}"
+        info = get_revision_info(url)
+        assert info["current"] is None
+        assert info["pending"] == 3
