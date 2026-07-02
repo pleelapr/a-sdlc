@@ -95,6 +95,8 @@ alembic/
 
 `--force` refreshes templates/personas but preserves a previously configured MCP `url` and `Authorization` header unless `--url`/`--auth-token` are explicitly passed again.
 
+Every successful MCP configuration is also recorded in `{data_dir}/mcp-registration.json` (a-sdlc's own record, independent of the client's settings file). If the client loses the `asdlc` entry — e.g., Claude Code rewriting `~/.claude.json` from stale in-memory state while an install ran — `a-sdlc install` restores the recorded URL/auth automatically and `a-sdlc doctor` flags the loss.
+
 ### Plugin System
 
 Entry points defined in `pyproject.toml`:

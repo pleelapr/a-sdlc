@@ -83,6 +83,21 @@ def _set_test_database_url(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_mcp_registration(tmp_path, monkeypatch):
+    """Keep MCP registration records out of the real user data directory.
+
+    ``installer._registration_path()`` derives from ``get_data_dir()``, which
+    points at the developer's real profile when ``A_SDLC_DATA_DIR`` is unset.
+    Tests must never read or write the actual registration record.
+    """
+    monkeypatch.setattr(
+        "a_sdlc.installer._registration_path",
+        lambda: tmp_path / "mcp-registration.json",
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_storage_singletons():
     """Reset all global singletons after each test to prevent cross-test pollution.
 
