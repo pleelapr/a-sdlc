@@ -95,7 +95,7 @@ All commands use the a-sdlc MCP server tools:
 - `mcp__asdlc__get_context()` - Get current project summary
 - `mcp__asdlc__init_project(name?)` - Initialize project
 - `mcp__asdlc__list_projects()` - List all projects
-- `mcp__asdlc__switch_project(project_id)` - Change project
+- `mcp__asdlc__switch_project(project_id)` - Bind a project to THIS conversation's session only (re-run after a server restart)
 
 ### PRD Operations
 - `mcp__asdlc__list_prds()` - List PRDs

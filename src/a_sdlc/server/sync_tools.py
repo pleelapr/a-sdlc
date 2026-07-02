@@ -83,7 +83,7 @@ def manage_integration(
             db = _server.get_db()
             project_id = _server._get_current_project_id()
             if not project_id:
-                return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+                return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
             db.set_external_config(project_id, "github", {"token": token})
             return {
@@ -99,7 +99,7 @@ def manage_integration(
         project_id = _server._get_current_project_id()
 
         if not project_id:
-            return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+            return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
         # Normalize base_url if present
         stored_config = dict(config)
@@ -119,7 +119,7 @@ def manage_integration(
         project_id = _server._get_current_project_id()
 
         if not project_id:
-            return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+            return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
         configs = db.list_external_configs(project_id)
 
@@ -150,7 +150,7 @@ def manage_integration(
         project_id = _server._get_current_project_id()
 
         if not project_id:
-            return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+            return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
         if system not in ["linear", "jira", "confluence", "github"]:
             return {"status": "error", "message": f"Unknown system: {system}. Use 'linear', 'jira', 'confluence', or 'github'."}
@@ -195,7 +195,7 @@ def import_from_linear(
     project_id = _server._get_current_project_id()
 
     if not project_id:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     # Check Linear is configured
     config = db.get_external_config(project_id, "linear")
@@ -321,7 +321,7 @@ def import_from_jira(
     project_id = _server._get_current_project_id()
 
     if not project_id:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     config = db.get_external_config(project_id, "jira")
     if not config:
@@ -462,7 +462,7 @@ def manage_sync_mapping(
 
     project_id = _server._get_current_project_id()
     if not project_id:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     if action == "link":
         if not system:
@@ -539,7 +539,7 @@ def sync_sprint(
     project_id = _server._get_current_project_id()
 
     if not project_id:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     if direction == "bidirectional":
         if strategy not in ["local-wins", "external-wins"]:
@@ -644,7 +644,7 @@ def sync_prd(
     project_id = _server._get_current_project_id()
 
     if not project_id:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     if direction == "bidirectional":
         if strategy not in ["local-wins", "external-wins"]:

@@ -570,7 +570,7 @@ def list_worktrees(
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     worktrees = db.list_worktrees(pid, status=status, sprint_id=sprint_id)
     return {
