@@ -89,7 +89,7 @@ class TestDoctorSchemaVersion:
     """Tests for database schema version check in doctor command."""
 
     def test_doctor_schema_version_pass(self, runner: CliRunner) -> None:
-        """Test doctor reports PASS when Alembic revision is found."""
+        """Test doctor reports PASS when the schema is at head (up to date)."""
         from unittest.mock import MagicMock
 
         mock_storage = MagicMock()
@@ -98,28 +98,22 @@ class TestDoctorSchemaVersion:
         mock_cfg = MagicMock()
         mock_cfg.database_url = "postgresql://user:pass@localhost/db"
 
-        mock_context = MagicMock()
-        mock_context.get_current_revision.return_value = "0001"
-
         with (
             patch("a_sdlc.storage.init_storage", return_value=mock_storage),
             patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
-            patch("sqlalchemy.create_engine") as mock_engine_fn,
-            patch("alembic.runtime.migration.MigrationContext.configure", return_value=mock_context),
+            patch(
+                "a_sdlc.core.alembic_config.get_revision_info",
+                return_value={"current": "0003", "head": "0003", "pending": 0},
+            ),
         ):
-            mock_engine = MagicMock()
-            mock_engine_fn.return_value = mock_engine
-            mock_conn = MagicMock()
-            mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-            mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
-
             result = runner.invoke(main, ["doctor"])
 
         assert "Database schema version" in result.output
-        assert "Alembic revision: 0001" in result.output
+        assert "Alembic revision: 0003" in result.output
+        assert "up to date" in result.output
 
     def test_doctor_schema_version_warn(self, runner: CliRunner) -> None:
-        """Test doctor reports WARN when no Alembic revision found."""
+        """Test doctor reports WARN when migrations are pending."""
         from unittest.mock import MagicMock
 
         mock_storage = MagicMock()
@@ -128,26 +122,44 @@ class TestDoctorSchemaVersion:
         mock_cfg = MagicMock()
         mock_cfg.database_url = "postgresql://user:pass@localhost/db"
 
-        mock_context = MagicMock()
-        mock_context.get_current_revision.return_value = None
+        with (
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
+            patch(
+                "a_sdlc.core.alembic_config.get_revision_info",
+                return_value={"current": "0001", "head": "0003", "pending": 2},
+            ),
+        ):
+            result = runner.invoke(main, ["doctor"])
+
+        assert "Database schema version" in result.output
+        assert "pending" in result.output
+        assert "a-sdlc db migrate" in result.output
+
+    def test_doctor_schema_version_fail_unstamped(self, runner: CliRunner) -> None:
+        """Test doctor reports FAIL when the schema exists but is unstamped."""
+        from unittest.mock import MagicMock
+
+        mock_storage = MagicMock()
+        mock_storage.list_projects.return_value = []
+
+        mock_cfg = MagicMock()
+        mock_cfg.database_url = "postgresql://user:pass@localhost/db"
 
         with (
             patch("a_sdlc.storage.init_storage", return_value=mock_storage),
             patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
-            patch("sqlalchemy.create_engine") as mock_engine_fn,
-            patch("alembic.runtime.migration.MigrationContext.configure", return_value=mock_context),
+            patch(
+                "a_sdlc.core.alembic_config.get_revision_info",
+                return_value={"current": None, "head": "0003", "pending": 0},
+            ),
         ):
-            mock_engine = MagicMock()
-            mock_engine_fn.return_value = mock_engine
-            mock_conn = MagicMock()
-            mock_engine.connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-            mock_engine.connect.return_value.__exit__ = MagicMock(return_value=False)
-
             result = runner.invoke(main, ["doctor"])
 
         assert "Database schema version" in result.output
-        assert "No Alembic revision found" in result.output
-        assert "a-sdlc db migrate" in result.output
+        assert "not stamped" in result.output
+        # "a-sdlc db stamp" wraps across table lines; assert the contiguous tail.
+        assert "stamp -r" in result.output
 
     def test_doctor_schema_version_fail_on_error(self, runner: CliRunner) -> None:
         """Test doctor reports FAIL when database cannot be connected."""
