@@ -162,9 +162,8 @@ def run_upgrade_head(database_url: str, *, logger: Any) -> None:
     Raises on any failure so callers (server startup) can refuse to serve
     traffic against an unmigrated or half-migrated schema.
     """
-    from alembic.runtime.migration import MigrationContext
-
     from alembic import command as alembic_command
+    from alembic.runtime.migration import MigrationContext
 
     cfg = build_alembic_config(database_url)
     engine = _create_engine(database_url)

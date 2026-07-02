@@ -16,12 +16,12 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from alembic import command
 from alembic.config import Config
 from sqlmodel import SQLModel
 
 import a_sdlc.core.models  # noqa: F401  -- populate SQLModel.metadata
 from a_sdlc.core.alembic_config import build_alembic_config
-from alembic import command
 
 # ---------------------------------------------------------------------------
 # Fixtures

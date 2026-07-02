@@ -111,6 +111,10 @@ packages = ["src/a_sdlc"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# Explicit src layout so ruff's isort first-party detection (a_sdlc) is
+# deterministic across environments (local vs CI); without this, auto-detection
+# can classify a_sdlc differently and disagree on import ordering.
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]

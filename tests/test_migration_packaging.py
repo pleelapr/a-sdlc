@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.resources
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, inspect
 from sqlmodel import SQLModel
 
@@ -24,7 +25,6 @@ from a_sdlc.core.alembic_config import (
     get_revision_info,
     run_upgrade_head,
 )
-from alembic import command
 
 # ---------------------------------------------------------------------------
 # Packaging: migration files must be present as package resources
