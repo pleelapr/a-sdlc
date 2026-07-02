@@ -1,6 +1,7 @@
 """Tests for CLI commands."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +12,17 @@ from a_sdlc import __version__
 from a_sdlc.cli import main
 from a_sdlc.cli_targets import CLAUDE_TARGET, GEMINI_TARGET, CLITarget
 from a_sdlc.installer import Installer
+
+
+def _norm(output: str) -> str:
+    """Collapse rich-table borders and wrapping whitespace to single spaces.
+
+    The doctor table wraps long cell text at a console-width that differs across
+    platforms (Windows vs macOS/Linux CI), so a phrase like "a-sdlc db stamp -r"
+    can be split across wrapped lines by borders/padding. Normalizing makes
+    multi-word assertions stable regardless of where the wrap falls.
+    """
+    return re.sub(r"[\s│┃]+", " ", output)
 
 
 @pytest.fixture
@@ -108,9 +120,9 @@ class TestDoctorSchemaVersion:
         ):
             result = runner.invoke(main, ["doctor"])
 
-        assert "Database schema version" in result.output
-        assert "Alembic revision: 0003" in result.output
-        assert "up to date" in result.output
+        norm = _norm(result.output)
+        assert "Database schema version" in norm
+        assert "Alembic revision: 0003 (up to date)" in norm
 
     def test_doctor_schema_version_warn(self, runner: CliRunner) -> None:
         """Test doctor reports WARN when migrations are pending."""
@@ -132,9 +144,10 @@ class TestDoctorSchemaVersion:
         ):
             result = runner.invoke(main, ["doctor"])
 
-        assert "Database schema version" in result.output
-        assert "pending" in result.output
-        assert "a-sdlc db migrate" in result.output
+        norm = _norm(result.output)
+        assert "Database schema version" in norm
+        assert "migration(s) pending" in norm
+        assert "a-sdlc db migrate" in norm
 
     def test_doctor_schema_version_fail_unstamped(self, runner: CliRunner) -> None:
         """Test doctor reports FAIL when the schema exists but is unstamped."""
@@ -156,10 +169,10 @@ class TestDoctorSchemaVersion:
         ):
             result = runner.invoke(main, ["doctor"])
 
-        assert "Database schema version" in result.output
-        assert "not stamped" in result.output
-        # "a-sdlc db stamp" wraps across table lines; assert the contiguous tail.
-        assert "stamp -r" in result.output
+        norm = _norm(result.output)
+        assert "Database schema version" in norm
+        assert "not stamped" in norm
+        assert "a-sdlc db stamp -r" in norm
 
     def test_doctor_schema_version_fail_on_error(self, runner: CliRunner) -> None:
         """Test doctor reports FAIL when database cannot be connected."""
@@ -666,7 +679,9 @@ class TestDoctorDatabaseAccessible:
             patch("a_sdlc.storage.init_storage", return_value=mock_storage),
             patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_cfg),
             patch("sqlalchemy.create_engine") as mock_engine_fn,
-            patch("alembic.runtime.migration.MigrationContext.configure", return_value=mock_context),
+            patch(
+                "alembic.runtime.migration.MigrationContext.configure", return_value=mock_context
+            ),
         ):
             mock_engine = MagicMock()
             mock_engine_fn.return_value = mock_engine
@@ -1730,30 +1745,20 @@ class TestDoctorMcpRegistration:
         target = self._make_target(tmp_path)
         (tmp_path / "claude.json").write_text(json.dumps({"mcpServers": {}}))
 
-        result = self._invoke_doctor(
-            runner, target, {"type": "http", "url": "https://x/mcp"}
-        )
+        result = self._invoke_doctor(runner, target, {"type": "http", "url": "https://x/mcp"})
 
         assert "overwritten" in result.output
 
-    def test_drifted_entry_reports_difference(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_drifted_entry_reports_difference(self, runner: CliRunner, tmp_path: Path) -> None:
         """Entry differs from the registration record -> drift warning."""
         target = self._make_target(tmp_path)
         (tmp_path / "claude.json").write_text(
             json.dumps(
-                {
-                    "mcpServers": {
-                        "asdlc": {"type": "http", "url": "http://localhost:8765/mcp"}
-                    }
-                }
+                {"mcpServers": {"asdlc": {"type": "http", "url": "http://localhost:8765/mcp"}}}
             )
         )
 
-        result = self._invoke_doctor(
-            runner, target, {"type": "http", "url": "https://x/mcp"}
-        )
+        result = self._invoke_doctor(runner, target, {"type": "http", "url": "https://x/mcp"})
 
         assert "differs" in result.output
 
