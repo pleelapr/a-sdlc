@@ -47,6 +47,7 @@ def _setup_project_mocks(mock_db, project_path: str):
     project = _make_project()
     write_marker(project_path, "test-project", shortname="TEST", name="Test Project")
     mock_db.get_project.return_value = project
+    mock_db.touch_project.return_value = project  # resolution uses touch_project
     mock_db.update_project_accessed.return_value = None
     return project
 
@@ -90,9 +91,7 @@ class TestParseGitRemote:
     def test_ssh_protocol_format(self):
         from a_sdlc.server.github import parse_git_remote
 
-        owner, repo = parse_git_remote(
-            "ssh://git@github.com/octocat/hello-world.git"
-        )
+        owner, repo = parse_git_remote("ssh://git@github.com/octocat/hello-world.git")
         assert owner == "octocat"
         assert repo == "hello-world"
 
@@ -247,8 +246,10 @@ class TestGlobalGitHubConfig:
         config_dir = tmp_config_dir / "subdir"
         config_path = config_dir / "config.yaml"
 
-        with patch("a_sdlc.server.github.GLOBAL_CONFIG_DIR", config_dir), \
-             patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path):
+        with (
+            patch("a_sdlc.server.github.GLOBAL_CONFIG_DIR", config_dir),
+            patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path),
+        ):
             save_global_github_config({"token": "ghp_new"})
 
         assert config_path.exists()
@@ -261,8 +262,10 @@ class TestGlobalGitHubConfig:
         config_path = tmp_config_dir / "config.yaml"
         config_path.write_text(yaml.dump({"sonarqube": {"host": "http://localhost"}}))
 
-        with patch("a_sdlc.server.github.GLOBAL_CONFIG_DIR", tmp_config_dir), \
-             patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path):
+        with (
+            patch("a_sdlc.server.github.GLOBAL_CONFIG_DIR", tmp_config_dir),
+            patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path),
+        ):
             save_global_github_config({"token": "ghp_merged"})
 
         data = yaml.safe_load(config_path.read_text())
@@ -273,10 +276,14 @@ class TestGlobalGitHubConfig:
         from a_sdlc.server.github import delete_global_github_config
 
         config_path = tmp_config_dir / "config.yaml"
-        config_path.write_text(yaml.dump({
-            "github": {"token": "ghp_old"},
-            "sonarqube": {"host": "http://localhost"},
-        }))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "github": {"token": "ghp_old"},
+                    "sonarqube": {"host": "http://localhost"},
+                }
+            )
+        )
 
         with patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path):
             result = delete_global_github_config()
@@ -374,7 +381,9 @@ class TestConfigureGitHub:
         mock_instance.validate_token.return_value = {"login": "octocat", "name": "Octo"}
         mock_gh_client.return_value = mock_instance
 
-        result = manage_integration("configure", system="github", config={"token": "ghp_global", "scope": "global"})
+        result = manage_integration(
+            "configure", system="github", config={"token": "ghp_global", "scope": "global"}
+        )
         assert result["status"] == "configured"
         assert result["scope"] == "global"
         assert result["user"] == "octocat"
@@ -391,7 +400,9 @@ class TestConfigureGitHub:
         mock_gh_client.return_value = mock_instance
 
         # No project mocks — should not error
-        result = manage_integration("configure", system="github", config={"token": "ghp_global", "scope": "global"})
+        result = manage_integration(
+            "configure", system="github", config={"token": "ghp_global", "scope": "global"}
+        )
         assert result["status"] == "configured"
         assert result["scope"] == "global"
 
@@ -426,7 +437,9 @@ class TestGetPrFeedback:
     @patch("a_sdlc.server.os.environ", {"GITHUB_TOKEN": "ghp_env"})
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_env_var_fallback(self, mock_getcwd, mock_get_db, mock_detect, mock_load_global, mock_project_dir):
+    def test_env_var_fallback(
+        self, mock_getcwd, mock_get_db, mock_detect, mock_load_global, mock_project_dir
+    ):
         """Token from GITHUB_TOKEN env var is used when no project or global config."""
         from a_sdlc.server import get_pr_feedback
 
@@ -479,7 +492,9 @@ class TestGetPrFeedback:
     @patch("a_sdlc.server.github.detect_git_info")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_no_open_pr(self, mock_getcwd, mock_get_db, mock_detect, mock_gh_client, mock_project_dir):
+    def test_no_open_pr(
+        self, mock_getcwd, mock_get_db, mock_detect, mock_gh_client, mock_project_dir
+    ):
         from a_sdlc.server import get_pr_feedback
 
         mock_getcwd.return_value = str(mock_project_dir)
@@ -912,8 +927,10 @@ class TestConnectGitHubCLI:
         config_path = tmp_config_dir / "config.yaml"
 
         runner = CliRunner()
-        with patch("a_sdlc.server.github.GLOBAL_CONFIG_DIR", tmp_config_dir), \
-             patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path):
+        with (
+            patch("a_sdlc.server.github.GLOBAL_CONFIG_DIR", tmp_config_dir),
+            patch("a_sdlc.server.github.GLOBAL_CONFIG_PATH", config_path),
+        ):
             result = runner.invoke(main, ["connect", "github", "--token", "ghp_test", "--global"])
 
         assert result.exit_code == 0
@@ -935,8 +952,10 @@ class TestConnectGitHubCLI:
         mock_storage.resolve_project_by_cwd.return_value = _make_project()
 
         runner = CliRunner()
-        with patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
-             patch("a_sdlc.storage.init_storage", return_value=mock_storage):
+        with (
+            patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+        ):
             result = runner.invoke(main, ["connect", "github", "--token", "ghp_test"])
 
         assert result.exit_code == 0
@@ -977,9 +996,11 @@ class TestConnectGitHubCLI:
         mock_storage.resolve_project_by_cwd.return_value = None
 
         runner = CliRunner()
-        with patch("a_sdlc.server.github.GitHubClient", mock_gh_client_cls), \
-             patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
-             patch("a_sdlc.storage.init_storage", return_value=mock_storage):
+        with (
+            patch("a_sdlc.server.github.GitHubClient", mock_gh_client_cls),
+            patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+        ):
             result = runner.invoke(main, ["connect", "github", "--token", "ghp_test"])
 
         assert result.exit_code == 1
@@ -1000,8 +1021,10 @@ class TestDisconnectGitHubCLI:
         mock_storage.get_external_config.return_value = {"config": {"token": "ghp_old"}}
 
         runner = CliRunner()
-        with patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir), \
-             patch("a_sdlc.storage.init_storage", return_value=mock_storage):
+        with (
+            patch("a_sdlc.cli.Path.cwd", return_value=mock_project_dir),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+        ):
             result = runner.invoke(main, ["disconnect", "github", "-y"])
 
         assert result.exit_code == 0

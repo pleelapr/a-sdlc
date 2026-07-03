@@ -140,6 +140,8 @@ The `a-sdlc install` command writes MCP configuration to `~/.claude.json`:
 
 The server must be running before Claude Code can connect. Start it with `a-sdlc serve` (foreground) or via Docker Compose.
 
+**Per-session project context.** The streamable-http endpoint runs in stateful mode: each Claude Code conversation gets its own server-minted `mcp-session-id`, and project context (`switch_project`/`init_project`/`create_project`) is bound to that session id — not a process global. This is what lets multiple concurrent sessions work on different projects against one shared server without colliding. Resolution is fail-closed: a session request never inherits another session's binding. A server restart invalidates all session ids (spec-compliant clients re-initialize automatically and re-bind via `.sdlc/project.json`); set `A_SDLC_STATELESS_HTTP=1` to revert to the legacy process-global behavior. `/health` reports `session_mode` and `active_sessions`.
+
 ## Storage Architecture
 
 ### Hybrid Storage Model
@@ -217,6 +219,10 @@ There are no built-in defaults for `database_url`. The `A_SDLC_DATABASE_URL` env
 | `A_SDLC_S3_SECRET_KEY` | S3 secret access key | -- |
 | `A_SDLC_DATA_DIR` | Override base data directory | `~/.a-sdlc` |
 | `A_SDLC_AUTO_MIGRATE` | Run Alembic `upgrade head` at server startup (`0`/`false` to skip) | `1` |
+| `A_SDLC_STATELESS_HTTP` | Revert streamable-http to stateless/process-global context (escape hatch) | unset (stateful) |
+| `A_SDLC_SESSION_IDLE_TIMEOUT` | Seconds before the SDK reaps an idle session server-side | `1800` |
+| `A_SDLC_SESSION_TTL` | Seconds of idle before an app-side session→project binding expires | `86400` |
+| `A_SDLC_MAX_SESSIONS` | LRU cap on live session→project bindings | `1024` |
 
 ### Key Storage Rules
 
@@ -301,7 +307,7 @@ Content editing pattern: `create_*()` returns `file_path` -> agent writes conten
 - `list_projects()` -- All projects
 - `init_project(name?, shortname?)` -- Initialize project for the server's current directory (local deployments); writes the `.sdlc/project.json` marker. Re-links (no new row) when a project with the derived id already exists.
 - `create_project(name, shortname?)` -- Create a project independent of the server's cwd (remote/centralized deployments). Writes no files on the server; returns `init_files` specs (path, scope, content) -- including `.sdlc/project.json` -- for the client to create locally. Sets the new project as the active context.
-- `switch_project(project_id)` -- Switch project context
+- `switch_project(project_id)` -- Bind a project to the calling MCP session only (other concurrent sessions are unaffected; re-run after a server restart). Returns `context_scope`: `"session"` (bound to this session) or `"process"` (no session id — direct/test calls or stateless mode).
 
 ### PRD Tools
 - `create_prd(title, content?)` -- Creates PRD; when `content` provided, writes through backend

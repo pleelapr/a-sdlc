@@ -35,7 +35,7 @@ def create_design(prd_id: str, content: str | None = None) -> dict[str, Any]:
     pid = _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     # Validate PRD exists
     prd = storage.get_prd(prd_id)
@@ -152,7 +152,7 @@ def list_designs(project_id: str | None = None) -> dict[str, Any]:
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     designs = storage.list_designs(pid)
     return {

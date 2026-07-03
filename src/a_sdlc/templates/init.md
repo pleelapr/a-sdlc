@@ -245,7 +245,7 @@ After initialization, the following MCP tools are available:
 ### Context & Navigation
 - `mcp__asdlc__get_context()` - Get current project summary
 - `mcp__asdlc__list_projects()` - List all known projects
-- `mcp__asdlc__switch_project(project_id)` - Change active project
+- `mcp__asdlc__switch_project(project_id)` - Bind a project to THIS conversation's session only (re-run after a server restart)
 
 ### PRD Management
 - `mcp__asdlc__list_prds()` - List PRDs

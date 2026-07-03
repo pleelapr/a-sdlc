@@ -297,11 +297,50 @@ def _run_auto_migration(config) -> None:
 
 _data_access: MCPDataAccess | None = None
 
-# In-memory active project set by switch_project().
-# Checked first by _get_current_project_id() so that Docker/cloud
-# environments (where cwd doesn't match any project path) can resolve
-# project context after a switch_project() call.
+# Project context is per MCP session, keyed on the transport-minted
+# ``mcp-session-id`` header (see session_context.py and _current_session_id()).
+# Two Claude Code conversations on different projects therefore never collide.
+from a_sdlc.server.session_context import SessionProjectStore  # noqa: E402
+
+
+def _env_num(name: str, default, cast):
+    """Parse a numeric env var, falling back to *default* on empty/invalid input.
+
+    A declared-but-blank env var (which Railway allows) makes ``os.environ.get``
+    return "" -- ``int("")``/``float("")`` would raise and, at module scope,
+    crash-loop every process that imports this module (server AND ``a-sdlc
+    doctor``). Parse defensively so misconfiguration degrades to the default.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return cast(raw)
+    except ValueError:
+        _logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
+_session_projects: SessionProjectStore = SessionProjectStore(
+    max_entries=_env_num("A_SDLC_MAX_SESSIONS", 1024, int),
+    ttl_seconds=_env_num("A_SDLC_SESSION_TTL", 86400.0, float),
+)
+
+# Fallback active project for requests with NO session id: direct tool calls in
+# tests, and the stateless-HTTP escape hatch (A_SDLC_STATELESS_HTTP=1). In
+# stateful HTTP mode (the default) session requests never consult this global —
+# see the fail-closed rule in _get_current_project_id().
 _active_project_id: str | None = None
+
+# Shown when a tool has no project context. Keeps the "No project context"
+# prefix that existing tests assert on, while guiding the client to re-bind.
+NO_PROJECT_MESSAGE = (
+    "No project context in this session. Read .sdlc/project.json at your "
+    "repository root and call switch_project(project_id=<its 'id' value>). "
+    "If that file does not exist, run /sdlc:init (server on this machine) or "
+    "call create_project(name=...) (remote server) and write the returned "
+    "init_files."
+)
 
 
 # =============================================================================
@@ -333,7 +372,15 @@ class JsonFormatter(logging.Formatter):
             "event": record.getMessage(),
         }
         # Merge structured fields from extra (set via logger.info(..., extra={...}))
-        for key in ("tool", "duration_ms", "status", "error_type", "error_message"):
+        for key in (
+            "tool",
+            "duration_ms",
+            "status",
+            "error_type",
+            "error_message",
+            "session",
+            "project",
+        ):
             val = getattr(record, key, None)
             if val is not None:
                 entry[key] = val
@@ -488,15 +535,29 @@ def _build_transport_security() -> TransportSecuritySettings:
     )
 
 
-# Initialize FastMCP server
-# stateless_http=True avoids in-memory session tracking, which prevents
-# "Session not found" 404s after container/process restarts.
+# Stateful streamable-http: each client conversation gets a server-minted,
+# transport-validated mcp-session-id (uuid4().hex) which keys per-session
+# project context (see session_context.py + _current_session_id()). This is
+# what lets concurrent sessions on different projects stay isolated.
+#
+# After a server restart all prior session ids 404 ("Session not found");
+# spec-compliant clients re-initialize and the fresh session re-binds its
+# project via the no-project guidance. A_SDLC_STATELESS_HTTP=1 restores the
+# old stateless single-context behavior as an escape hatch for clients that
+# fail to re-initialize on 404.
+#
 # transport_security is set explicitly so we control Host-header validation
 # instead of FastMCP's localhost-only default (which 421s behind a proxy).
+_STATELESS = os.environ.get("A_SDLC_STATELESS_HTTP", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 mcp: FastMCP = FastMCP(
     name="asdlc",
     instructions="SDLC management tools for PRDs, tasks, and sprints",
-    stateless_http=True,
+    stateless_http=_STATELESS,
     transport_security=_build_transport_security(),
 )
 
@@ -506,40 +567,97 @@ mcp: FastMCP = FastMCP(
 # =============================================================================
 
 
+def _current_session_id() -> str | None:
+    """Return the ``mcp-session-id`` of the in-flight HTTP request, else ``None``.
+
+    ``None`` means "resolve via the process global": direct tool calls in tests,
+    and stateless-HTTP mode (the escape hatch). In stateful mode the transport
+    validates the header (400 missing / 404 unknown) before any tool code runs,
+    so a header seen here is always a server-minted, live session id.
+
+    In stateless mode the SDK does NOT strip an incoming ``mcp-session-id``
+    header, so a client could send an arbitrary one; we return ``None`` there
+    unconditionally so the escape hatch behaves as documented (single shared
+    process-global context) and never trusts a client-controlled id.
+
+    ``mcp.get_context()`` swallows the ``LookupError`` raised outside a request
+    and returns a Context whose ``.request_context`` then raises ``ValueError``
+    — that ValueError is the clean "no request" signal for direct/test calls.
+    """
+    if _STATELESS:
+        return None
+    try:
+        request = mcp.get_context().request_context.request
+    except ValueError:
+        return None
+    if request is None:
+        return None
+    return request.headers.get("mcp-session-id")
+
+
+def set_active_project(project_id: str) -> str:
+    """Bind *project_id* to the calling MCP session's context.
+
+    Returns the binding scope: ``"session"`` when bound to this session only
+    (stateful HTTP request with a session id), or ``"process"`` when there is
+    no session id (direct calls in tests, or the stateless escape hatch) and
+    the legacy process-global is used instead.
+    """
+    sid = _current_session_id()
+    if sid:
+        _session_projects.set(sid, project_id)
+        _logger.info(
+            "session_project_bound",
+            extra={"session": sid[:8], "project": project_id, "status": "ok"},
+        )
+        return "session"
+    global _active_project_id
+    _active_project_id = project_id
+    return "process"
+
+
 def _get_current_project_id() -> str | None:
-    """Resolve the current project context.
+    """Resolve project context for the calling MCP session.
 
     Resolution order:
-    1. In-memory active project (set by ``switch_project()``/``create_project()``)
-    2. Auto-detect from the local ``.sdlc/project.json`` marker, walked up from
-       the working directory (``os.getcwd()``)
+    1. Requests carrying an ``mcp-session-id`` (stateful HTTP): the per-session
+       store, then the ``.sdlc/project.json`` marker walk. FAIL-CLOSED — these
+       requests NEVER consult the process-global ``_active_project_id``, so one
+       session can never inherit another session's (or a test's) binding.
+    2. No session id (direct calls in tests, stateless escape hatch): the
+       process-global, then the marker walk. Legacy path, unchanged behavior.
 
-    Docker/cloud deployments (cwd is ``/`` and the repo is not mounted) resolve
-    via step 1; local deployments running inside a repo resolve via step 2. The
-    database stores no filesystem path, so there is no path-based lookup.
+    The database stores no filesystem path, so there is no path-based lookup.
     """
     global _active_project_id
 
-    # 1. Explicit switch takes priority
-    if _active_project_id is not None:
-        db = get_db()
-        project = db.get_project(_active_project_id)
-        if project:
-            db.update_project_accessed(_active_project_id)
-            return _active_project_id
-        # Stale reference — clear it
-        _active_project_id = None
+    # touch_project() returns the project (refreshing last_accessed) if it
+    # exists, else None -- a single data-access call for the get-then-touch
+    # resolution pattern.
+    sid = _current_session_id()
+    if sid:
+        pid = _session_projects.get(sid)
+        if pid is not None:
+            if get_db().touch_project(pid):
+                return pid
+            # Bound project was deleted — drop the stale binding and fall
+            # through to the marker walk (a local server run inside a repo).
+            _session_projects.clear(sid)
+    else:
+        # No session id: consult the process-global (fail-closed above ensures
+        # session requests skip this branch entirely).
+        if _active_project_id is not None:
+            if get_db().touch_project(_active_project_id):
+                return _active_project_id
+            # Stale reference — clear it
+            _active_project_id = None
 
-    # 2. Auto-detect from the local project marker
+    # Auto-detect from the local project marker (local deployments in a repo).
     from a_sdlc.core.project_marker import find_marker
 
     marker = find_marker(os.getcwd())
-    if marker:
-        db = get_db()
-        project = db.get_project(marker["id"])
-        if project:
-            db.update_project_accessed(project["id"])
-            return project["id"]
+    if marker and get_db().touch_project(marker["id"]):
+        return marker["id"]
     return None
 
 
@@ -577,6 +695,9 @@ async def _health_endpoint(request):
     include_events = request.query_params.get("events", "").lower() == "true"
     health = ServerHealth()
     payload = health.get_health(include_events=include_events)
+    # Per-session project-context observability (see session_context.py).
+    payload["session_mode"] = "stateless" if _STATELESS else "stateful"
+    payload["active_sessions"] = _session_projects.count()
     return JSONResponse(payload)
 
 
@@ -916,7 +1037,29 @@ def run_server(
     # Get the MCP ASGI app directly instead of calling mcp.run() which
     # starts its own event loop via anyio.run(). This lets us run both
     # servers as coroutines in a single asyncio event loop.
+    # streamable_http_app() also lazily constructs the session manager, so it
+    # must run before we touch mcp.session_manager below.
     mcp_asgi_app: Any = mcp.streamable_http_app()
+
+    if not _STATELESS:
+        # Reap idle SDK sessions server-side. FastMCP does not plumb this kwarg
+        # through streamable_http_app(), but the manager reads the attribute
+        # dynamically per request/session, so post-construction assignment is
+        # the supported path. Mitigates the SDK quirk where DELETE-terminated
+        # transports linger in its internal map until shutdown.
+        try:
+            _idle = float(os.environ.get("A_SDLC_SESSION_IDLE_TIMEOUT", "1800"))
+        except ValueError:
+            _idle = 1800.0
+        mcp.session_manager.session_idle_timeout = _idle if _idle > 0 else None
+        _logger.info(
+            "mcp_sessions_stateful (idle_timeout=%ss)",
+            mcp.session_manager.session_idle_timeout,
+        )
+    else:
+        _logger.warning(
+            "mcp_sessions_stateless (A_SDLC_STATELESS_HTTP set); project context is process-global"
+        )
 
     # Conditionally wrap with bearer token auth when A_SDLC_AUTH_TOKEN is set
     auth_token = os.environ.get("A_SDLC_AUTH_TOKEN")

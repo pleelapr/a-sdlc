@@ -143,6 +143,22 @@ class TestProjects:
         projects = db.list_projects()
         assert len(projects) == 2
 
+    def test_list_projects_limit(self, db: SessionDatabase):
+        db.create_project("p1", "P1", shortname="AAAA")
+        db.create_project("p2", "P2", shortname="BBBB")
+        db.create_project("p3", "P3", shortname="CCCC")
+        assert len(db.list_projects(limit=2)) == 2
+        assert len(db.list_projects()) == 3  # default: all rows
+
+    def test_touch_project_returns_and_touches(self, db: SessionDatabase):
+        db.create_project("p1", "P1", shortname="AAAA")
+        result = db.touch_project("p1")
+        assert result is not None
+        assert result["id"] == "p1"
+
+    def test_touch_project_missing_returns_none(self, db: SessionDatabase):
+        assert db.touch_project("nope") is None
+
     def test_delete_project(self, db_with_project: SessionDatabase):
         assert db_with_project.delete_project("proj-1") is True
         assert db_with_project.get_project("proj-1") is None
@@ -181,9 +197,7 @@ class TestPRDs:
     """Tests for PRD CRUD operations."""
 
     def test_create_prd(self, db_with_project: SessionDatabase):
-        prd = db_with_project.create_prd(
-            "MYPR-P0001", "proj-1", "My PRD", file_path="/tmp/prd.md"
-        )
+        prd = db_with_project.create_prd("MYPR-P0001", "proj-1", "My PRD", file_path="/tmp/prd.md")
         assert prd is not None
         assert prd["id"] == "MYPR-P0001"
         assert prd["status"] == "draft"
@@ -248,9 +262,7 @@ class TestTasks:
     """Tests for task CRUD operations."""
 
     def test_create_task(self, db_with_project: SessionDatabase):
-        task = db_with_project.create_task(
-            "MYPR-T00001", "proj-1", "My Task", priority="high"
-        )
+        task = db_with_project.create_task("MYPR-T00001", "proj-1", "My Task", priority="high")
         assert task is not None
         assert task["id"] == "MYPR-T00001"
         assert task["priority"] == "high"
@@ -312,9 +324,7 @@ class TestSprints:
     """Tests for sprint CRUD operations."""
 
     def test_create_sprint(self, db_with_project: SessionDatabase):
-        sprint = db_with_project.create_sprint(
-            "MYPR-S0001", "proj-1", "Sprint 1", goal="Do stuff"
-        )
+        sprint = db_with_project.create_sprint("MYPR-S0001", "proj-1", "Sprint 1", goal="Do stuff")
         assert sprint is not None
         assert sprint["id"] == "MYPR-S0001"
         assert sprint["status"] == "planned"
@@ -383,8 +393,7 @@ class TestDesigns:
 
     def test_create_design(self, db_full: SessionDatabase):
         design = db_full.create_design(
-            "MYPR-D0001", "MYPR-P0001", "proj-1",
-            file_path="/tmp/designs/d1.md"
+            "MYPR-D0001", "MYPR-P0001", "proj-1", file_path="/tmp/designs/d1.md"
         )
         assert design is not None
         assert design["id"] == "MYPR-D0001"
@@ -426,9 +435,7 @@ class TestSyncMappings:
     """Tests for sync mapping operations."""
 
     def test_create_sync_mapping(self, db_full: SessionDatabase):
-        m = db_full.create_sync_mapping(
-            "sprint", "MYPR-S0001", "linear", "ext-123"
-        )
+        m = db_full.create_sync_mapping("sprint", "MYPR-S0001", "linear", "ext-123")
         assert m["entity_type"] == "sprint"
         assert m["external_id"] == "ext-123"
 
@@ -458,9 +465,7 @@ class TestSyncMappings:
 
     def test_update_sync_mapping(self, db_full: SessionDatabase):
         db_full.create_sync_mapping("sprint", "MYPR-S0001", "linear", "ext-123")
-        m = db_full.update_sync_mapping(
-            "sprint", "MYPR-S0001", "linear", sync_status="synced"
-        )
+        m = db_full.update_sync_mapping("sprint", "MYPR-S0001", "linear", sync_status="synced")
         assert m is not None
         assert m["sync_status"] == "synced"
 
@@ -525,15 +530,11 @@ class TestReviews:
 
     def test_create_review_invalid_type(self, db_full: SessionDatabase):
         with pytest.raises(ValueError, match="Invalid reviewer_type"):
-            db_full.create_review(
-                "MYPR-T00001", "proj-1", 1, "invalid", "pass"
-            )
+            db_full.create_review("MYPR-T00001", "proj-1", 1, "invalid", "pass")
 
     def test_create_review_invalid_verdict(self, db_full: SessionDatabase):
         with pytest.raises(ValueError, match="Invalid verdict"):
-            db_full.create_review(
-                "MYPR-T00001", "proj-1", 1, "self", "invalid"
-            )
+            db_full.create_review("MYPR-T00001", "proj-1", 1, "self", "invalid")
 
     def test_get_reviews_for_task(self, db_full: SessionDatabase):
         db_full.create_review("MYPR-T00001", "proj-1", 1, "self", "fail")
@@ -604,7 +605,9 @@ class TestWorktrees:
 
     def test_create_worktree(self, db_full: SessionDatabase):
         wt = db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001",
+            "MYPR-W0001",
+            "proj-1",
+            "MYPR-P0001",
             branch_name="feat/prd-1",
             path="/tmp/worktrees/prd-1",
         )
@@ -613,46 +616,34 @@ class TestWorktrees:
         assert wt["status"] == "active"
 
     def test_get_worktree(self, db_full: SessionDatabase):
-        db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt"
-        )
+        db_full.create_worktree("MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt")
         wt = db_full.get_worktree("MYPR-W0001")
         assert wt is not None
 
     def test_get_worktree_by_prd(self, db_full: SessionDatabase):
-        db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt"
-        )
+        db_full.create_worktree("MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt")
         wt = db_full.get_worktree_by_prd("MYPR-P0001")
         assert wt is not None
 
     def test_list_worktrees(self, db_full: SessionDatabase):
-        db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt1"
-        )
+        db_full.create_worktree("MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt1")
         wts = db_full.list_worktrees("proj-1")
         assert len(wts) == 1
 
     def test_update_worktree(self, db_full: SessionDatabase):
-        db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt"
-        )
+        db_full.create_worktree("MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt")
         result = db_full.update_worktree("MYPR-W0001", status="completed")
         assert result is not None
         assert result["status"] == "completed"
         assert result["cleaned_at"] is not None
 
     def test_update_worktree_invalid_field(self, db_full: SessionDatabase):
-        db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt"
-        )
+        db_full.create_worktree("MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt")
         with pytest.raises(ValueError, match="Invalid worktree fields"):
             db_full.update_worktree("MYPR-W0001", invalid_field="x")
 
     def test_delete_worktree(self, db_full: SessionDatabase):
-        db_full.create_worktree(
-            "MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt"
-        )
+        db_full.create_worktree("MYPR-W0001", "proj-1", "MYPR-P0001", "feat/prd-1", "/tmp/wt")
         assert db_full.delete_worktree("MYPR-W0001") is True
         assert db_full.get_worktree("MYPR-W0001") is None
 

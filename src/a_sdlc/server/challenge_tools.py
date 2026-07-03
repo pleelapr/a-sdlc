@@ -78,7 +78,7 @@ def challenge_artifact(
         elif artifact_type == "split":
             project_id = _server._get_current_project_id()
             if not project_id:
-                return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+                return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
             tasks = db.list_tasks(project_id, prd_id=artifact_id)
             task_lines = []
             for t in tasks:

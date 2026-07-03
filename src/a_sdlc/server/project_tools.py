@@ -31,8 +31,17 @@ def get_context() -> dict[str, Any]:
     if not project_id:
         return {
             "status": "no_project",
-            "message": "No project found for current directory. Run /sdlc:init first.",
-            "cwd": os.getcwd(),
+            "message": _server.NO_PROJECT_MESSAGE,
+            "next_steps": [
+                "1. Read .sdlc/project.json at the root of the repository you are working in.",
+                "2. If it exists, call switch_project(project_id=<the 'id' field>), then get_context() again.",
+                "3. If it does not exist, run /sdlc:init (local server) or call "
+                "create_project(name=...) and write the returned init_files (remote server).",
+            ],
+            "known_projects": [
+                {"id": p["id"], "shortname": p["shortname"], "name": p["name"]}
+                for p in db.list_projects(limit=20)
+            ],
         }
 
     project = db.get_project(project_id)
@@ -42,9 +51,7 @@ def get_context() -> dict[str, Any]:
     from a_sdlc.core.project_marker import find_marker
 
     marker = find_marker(os.getcwd())
-    project_root = (
-        Path(marker["root"]) if marker and marker.get("id") == project_id else None
-    )
+    project_root = Path(marker["root"]) if marker and marker.get("id") == project_id else None
 
     # Ensure .sdlc/config.yaml exists (auto-create with defaults if missing),
     # but only when the repository is present on this host. get_context() is
@@ -79,9 +86,7 @@ def get_context() -> dict[str, Any]:
         "key-workflows",
     ]
     available_artifacts = []
-    artifacts_dir = (
-        project_root / ".sdlc" / "artifacts" if project_root is not None else None
-    )
+    artifacts_dir = project_root / ".sdlc" / "artifacts" if project_root is not None else None
     if artifacts_dir is not None and artifacts_dir.is_dir():
         for name in artifact_names:
             # Dual-extension transition (DD-7): .html is canonical, but
@@ -116,7 +121,9 @@ def get_context() -> dict[str, Any]:
         "active_sprint": {
             "id": active_sprint["id"],
             "title": active_sprint["title"],
-        } if active_sprint else None,
+        }
+        if active_sprint
+        else None,
         "artifacts": {
             "available": available_artifacts,
             "scan_status": scan_status,
@@ -180,11 +187,12 @@ def init_project(
     if marker:
         existing = db.get_project(marker["id"])
         if existing:
-            _server._active_project_id = existing["id"]
+            scope = _server.set_active_project(existing["id"])
             return {
                 "status": "exists",
                 "message": f"Project already initialized: {existing['name']}",
                 "project": existing,
+                "context_scope": scope,
                 "init_files": _init_files_status(Path(marker["root"])),
             }
 
@@ -246,13 +254,14 @@ def init_project(
         shortname=shortname,
     )
 
-    # Make this the active project for subsequent tool calls.
-    _server._active_project_id = project_id
+    # Make this the active project for subsequent tool calls (this session).
+    scope = _server.set_active_project(project_id)
 
     return {
         "status": "created",
         "message": f"Project '{project_name}' initialized with shortname '{shortname}'.",
         "project": project,
+        "context_scope": scope,
         "id_format_examples": {
             "task": f"{shortname}-T00001",
             "sprint": f"{shortname}-S0001",
@@ -338,7 +347,7 @@ def create_project(
 
     # Make this the active project so subsequent tool calls resolve context
     # without requiring a separate switch_project() (cwd won't match remotely).
-    _server._active_project_id = project_id
+    scope = _server.set_active_project(project_id)
 
     from a_sdlc.core.init_files import render_init_files
 
@@ -348,6 +357,7 @@ def create_project(
         "status": "created",
         "message": f"Project '{name}' created with shortname '{shortname}'.",
         "project": project,
+        "context_scope": scope,
         "id_format_examples": {
             "task": f"{shortname}-T00001",
             "sprint": f"{shortname}-S0001",
@@ -366,7 +376,12 @@ def create_project(
 
 @_server.mcp.tool()
 def switch_project(project_id: str) -> dict[str, Any]:
-    """Switch to a different project context.
+    """Switch project context for THIS conversation's MCP session only.
+
+    Binds the project to the calling session; other concurrent sessions are
+    unaffected. Bindings do not survive a server restart or session idle
+    timeout -- if a later call returns "No project context", re-establish it by
+    reading .sdlc/project.json and calling switch_project again.
 
     Args:
         project_id: ID of the project to switch to.
@@ -385,12 +400,13 @@ def switch_project(project_id: str) -> dict[str, Any]:
 
     db.update_project_accessed(project_id)
 
-    # Set in-memory active project so subsequent tool calls resolve context
-    # even when cwd doesn't match the project path (e.g. Docker, cloud).
-    _server._active_project_id = project_id
+    # Bind to the calling session (or the process global for direct/stateless
+    # calls). Other sessions never see this binding -- see set_active_project.
+    scope = _server.set_active_project(project_id)
 
     return {
         "status": "ok",
         "message": f"Switched to project: {project['name']}",
         "project": project,
+        "context_scope": scope,
     }

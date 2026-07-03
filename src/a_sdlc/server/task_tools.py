@@ -39,7 +39,7 @@ def list_tasks(
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     tasks = db.list_tasks(pid, status=status, prd_id=prd_id, sprint_id=sprint_id)
 
@@ -163,7 +163,7 @@ def create_task(
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     task_id = db.get_next_task_id(pid)
 

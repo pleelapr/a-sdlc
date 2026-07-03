@@ -30,7 +30,7 @@ def list_sprints(project_id: str | None = None) -> dict[str, Any]:
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     sprints = db.list_sprints(pid)
 
@@ -118,7 +118,7 @@ def create_sprint(
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     sprint_id = db.get_next_sprint_id(pid)
     sprint = db.create_sprint(sprint_id, pid, title, goal)

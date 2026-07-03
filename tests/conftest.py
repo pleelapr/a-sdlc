@@ -118,6 +118,10 @@ def _reset_storage_singletons():
 
     _server_mod._data_access = None
     _server_mod._active_project_id = None
+    # Per-session project bindings (keyed on mcp-session-id); direct-call tests
+    # have no session id so they use the global above, but reset the store too
+    # so any test that exercises the session path cannot leak into the next.
+    _server_mod._session_projects.reset()
 
     # Core database singleton
     import a_sdlc.core.database as _db_mod

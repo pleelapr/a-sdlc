@@ -38,6 +38,7 @@ def _setup_mocks(mock_db, project_path: str):
     """Configure common mock returns for get_context()."""
     project = _make_project()
     mock_db.get_project.return_value = project
+    mock_db.touch_project.return_value = project  # resolution uses touch_project
     mock_db.list_tasks.return_value = []
     mock_db.list_sprints.return_value = []
     mock_db.list_prds.return_value = []
@@ -302,9 +303,30 @@ class TestGetSprintTasksGroupByPrd:
 
     def _make_tasks(self):
         return [
-            {"id": "TEST-T00001", "title": "Task 1", "status": "pending", "priority": "high", "prd_id": "TEST-P0001", "updated_at": "2026-01-01"},
-            {"id": "TEST-T00002", "title": "Task 2", "status": "pending", "priority": "medium", "prd_id": "TEST-P0001", "updated_at": "2026-01-01"},
-            {"id": "TEST-T00003", "title": "Task 3", "status": "pending", "priority": "high", "prd_id": "TEST-P0002", "updated_at": "2026-01-01"},
+            {
+                "id": "TEST-T00001",
+                "title": "Task 1",
+                "status": "pending",
+                "priority": "high",
+                "prd_id": "TEST-P0001",
+                "updated_at": "2026-01-01",
+            },
+            {
+                "id": "TEST-T00002",
+                "title": "Task 2",
+                "status": "pending",
+                "priority": "medium",
+                "prd_id": "TEST-P0001",
+                "updated_at": "2026-01-01",
+            },
+            {
+                "id": "TEST-T00003",
+                "title": "Task 3",
+                "status": "pending",
+                "priority": "high",
+                "prd_id": "TEST-P0002",
+                "updated_at": "2026-01-01",
+            },
         ]
 
     def _make_prds(self):
@@ -516,6 +538,7 @@ class TestSetupPrdWorktree:
     def _enabled_git_config(self):
         """Return a GitSafetyConfig with worktree_enabled=True."""
         from a_sdlc.core.git_config import GitSafetyConfig
+
         return GitSafetyConfig(worktree_enabled=True)
 
     def _make_worktree_record(self, tmp_path, prd_id="TEST-P0001"):
@@ -740,15 +763,13 @@ class TestCleanupPrdWorktree:
 
         # Verify git worktree remove was called
         remove_calls = [
-            c for c in mock_run.call_args_list
-            if c[0][0][:3] == ["git", "worktree", "remove"]
+            c for c in mock_run.call_args_list if c[0][0][:3] == ["git", "worktree", "remove"]
         ]
         assert len(remove_calls) == 1
 
         # Verify git worktree prune was called
         prune_calls = [
-            c for c in mock_run.call_args_list
-            if c[0][0] == ["git", "worktree", "prune"]
+            c for c in mock_run.call_args_list if c[0][0] == ["git", "worktree", "prune"]
         ]
         assert len(prune_calls) == 1
 
@@ -786,7 +807,9 @@ class TestCleanupPrdWorktree:
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_cleanup_with_branch_removal_confirmed(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
+    def test_cleanup_with_branch_removal_confirmed(
+        self, mock_getcwd, mock_get_db, mock_run, tmp_path
+    ):
         """Branch deletion proceeds when confirm_branch_delete=True."""
         from a_sdlc.server import cleanup_prd_worktree
 
@@ -890,9 +913,7 @@ class TestCleanupPrdWorktree:
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_cleanup_orphan_fallback_to_rmtree(
-        self, mock_getcwd, mock_get_db, mock_run, tmp_path
-    ):
+    def test_cleanup_orphan_fallback_to_rmtree(self, mock_getcwd, mock_get_db, mock_run, tmp_path):
         """Orphan cleanup falls back to shutil.rmtree when git worktree remove fails."""
         from a_sdlc.server import cleanup_prd_worktree
 
@@ -944,8 +965,7 @@ class TestCleanupPrdWorktree:
 
         # git worktree remove should NOT be called (directory doesn't exist)
         remove_calls = [
-            c for c in mock_run.call_args_list
-            if len(c[0]) > 0 and "remove" in str(c[0][0])
+            c for c in mock_run.call_args_list if len(c[0]) > 0 and "remove" in str(c[0][0])
         ]
         assert len(remove_calls) == 0
 
@@ -994,6 +1014,7 @@ class TestCreatePrdPr:
     def _enabled_git_config(self):
         """Return a GitSafetyConfig with auto_pr=True."""
         from a_sdlc.core.git_config import GitSafetyConfig
+
         return GitSafetyConfig(auto_pr=True)
 
     def _make_worktree_record(self, tmp_path, prd_id="TEST-P0001"):
@@ -1014,7 +1035,9 @@ class TestCreatePrdPr:
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_creates_pr_successfully(self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path):
+    def test_creates_pr_successfully(
+        self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path
+    ):
         from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1027,7 +1050,9 @@ class TestCreatePrdPr:
         # git push succeeds, gh pr create returns URL
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="", stderr=""),  # git push
-            MagicMock(returncode=0, stdout="https://github.com/org/repo/pull/42\n", stderr=""),  # gh pr create
+            MagicMock(
+                returncode=0, stdout="https://github.com/org/repo/pull/42\n", stderr=""
+            ),  # gh pr create
         ]
 
         result = create_prd_pr(
@@ -1088,7 +1113,9 @@ class TestCreatePrdPr:
     @patch("a_sdlc.server.subprocess.run")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_pr_custom_title_and_body(self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path):
+    def test_pr_custom_title_and_body(
+        self, mock_getcwd, mock_get_db, mock_run, mock_git_config, tmp_path
+    ):
         from a_sdlc.server import create_prd_pr
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1260,7 +1287,9 @@ class TestListWorktrees:
         assert result["status"] == "ok"
         assert result["filters"]["status"] == "active"
         mock_db.list_worktrees.assert_called_once_with(
-            "test-project", status="active", sprint_id=None,
+            "test-project",
+            status="active",
+            sprint_id=None,
         )
 
     @patch("a_sdlc.server._get_current_project_id")
@@ -1277,7 +1306,9 @@ class TestListWorktrees:
 
         assert result["filters"]["sprint_id"] == "TEST-S0002"
         mock_db.list_worktrees.assert_called_once_with(
-            "test-project", status=None, sprint_id="TEST-S0002",
+            "test-project",
+            status=None,
+            sprint_id="TEST-S0002",
         )
 
     @patch("a_sdlc.server._get_current_project_id")
@@ -1308,7 +1339,9 @@ class TestListWorktrees:
 
         assert result["project_id"] == "explicit-project"
         mock_db.list_worktrees.assert_called_once_with(
-            "explicit-project", status=None, sprint_id=None,
+            "explicit-project",
+            status=None,
+            sprint_id=None,
         )
 
     @patch("a_sdlc.server._get_current_project_id")
@@ -1325,7 +1358,16 @@ class TestListWorktrees:
         result = list_worktrees()
 
         w = result["worktrees"][0]
-        expected_keys = {"id", "prd_id", "sprint_id", "branch_name", "path", "status", "created_at", "cleaned_at"}
+        expected_keys = {
+            "id",
+            "prd_id",
+            "sprint_id",
+            "branch_name",
+            "path",
+            "status",
+            "created_at",
+            "cleaned_at",
+        }
         assert set(w.keys()) == expected_keys
 
 
@@ -1354,6 +1396,7 @@ class TestCompletePrdWorktree:
     def _enabled_git_config(self, auto_pr=False, auto_merge=False):
         """Return a GitSafetyConfig with specified settings."""
         from a_sdlc.core.git_config import GitSafetyConfig
+
         return GitSafetyConfig(auto_pr=auto_pr, auto_merge=auto_merge, worktree_enabled=True)
 
     def test_invalid_action_returns_error(self):
@@ -1402,7 +1445,9 @@ class TestCompletePrdWorktree:
     @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_discard_requires_confirmation(self, mock_getcwd, mock_get_db, mock_git_config, tmp_path):
+    def test_discard_requires_confirmation(
+        self, mock_getcwd, mock_get_db, mock_git_config, tmp_path
+    ):
         from a_sdlc.server import complete_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1421,7 +1466,9 @@ class TestCompletePrdWorktree:
     @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_discard_confirmed_calls_cleanup(self, mock_getcwd, mock_get_db, mock_git_config, mock_cleanup, tmp_path):
+    def test_discard_confirmed_calls_cleanup(
+        self, mock_getcwd, mock_get_db, mock_git_config, mock_cleanup, tmp_path
+    ):
         from a_sdlc.server import complete_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1463,7 +1510,9 @@ class TestCompletePrdWorktree:
     @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_pr_delegates_to_create_prd_pr(self, mock_getcwd, mock_get_db, mock_git_config, mock_create_pr, tmp_path):
+    def test_pr_delegates_to_create_prd_pr(
+        self, mock_getcwd, mock_get_db, mock_git_config, mock_create_pr, tmp_path
+    ):
         from a_sdlc.server import complete_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1495,7 +1544,9 @@ class TestCompletePrdWorktree:
     @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_pr_passes_custom_title_and_body(self, mock_getcwd, mock_get_db, mock_git_config, mock_create_pr, tmp_path):
+    def test_pr_passes_custom_title_and_body(
+        self, mock_getcwd, mock_get_db, mock_git_config, mock_create_pr, tmp_path
+    ):
         from a_sdlc.server import complete_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1544,7 +1595,9 @@ class TestCompletePrdWorktree:
     @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_merge_success(self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path):
+    def test_merge_success(
+        self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path
+    ):
         from a_sdlc.server import complete_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
@@ -1578,7 +1631,9 @@ class TestCompletePrdWorktree:
     @patch("a_sdlc.server.load_git_safety_config")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server.os.getcwd")
-    def test_merge_with_explicit_base_branch(self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path):
+    def test_merge_with_explicit_base_branch(
+        self, mock_getcwd, mock_get_db, mock_git_config, mock_run, mock_cleanup, tmp_path
+    ):
         from a_sdlc.server import complete_prd_worktree
 
         mock_getcwd.return_value = str(tmp_path)
@@ -2432,7 +2487,10 @@ class TestSubmitReviewSelf:
         # First call: no existing reviews
         mock_db.get_reviews_for_task.return_value = []
         mock_db.create_review.return_value = {
-            "id": 1, "round": 1, "reviewer_type": "self", "verdict": "fail",
+            "id": 1,
+            "round": 1,
+            "reviewer_type": "self",
+            "verdict": "fail",
         }
 
         result1 = submit_review("TEST-T00001", "self", "fail")
@@ -2443,7 +2501,10 @@ class TestSubmitReviewSelf:
             {"id": 1, "round": 1, "reviewer_type": "self", "verdict": "fail"},
         ]
         mock_db.create_review.return_value = {
-            "id": 2, "round": 2, "reviewer_type": "self", "verdict": "pass",
+            "id": 2,
+            "round": 2,
+            "reviewer_type": "self",
+            "verdict": "pass",
         }
 
         result2 = submit_review("TEST-T00001", "self", "pass")
@@ -2656,24 +2717,40 @@ class TestGetReviewEvidence:
         mock_db.get_task.return_value = self._make_task()
         mock_db.get_reviews_for_task.return_value = [
             {
-                "id": 1, "task_id": "TEST-T00001", "round": 1,
-                "reviewer_type": "self", "verdict": "fail",
-                "findings": None, "test_output": "FAILED",
+                "id": 1,
+                "task_id": "TEST-T00001",
+                "round": 1,
+                "reviewer_type": "self",
+                "verdict": "fail",
+                "findings": None,
+                "test_output": "FAILED",
             },
             {
-                "id": 2, "task_id": "TEST-T00001", "round": 1,
-                "reviewer_type": "subagent", "verdict": "request_changes",
-                "findings": '[{"description": "Missing tests"}]', "test_output": None,
+                "id": 2,
+                "task_id": "TEST-T00001",
+                "round": 1,
+                "reviewer_type": "subagent",
+                "verdict": "request_changes",
+                "findings": '[{"description": "Missing tests"}]',
+                "test_output": None,
             },
             {
-                "id": 3, "task_id": "TEST-T00001", "round": 2,
-                "reviewer_type": "self", "verdict": "pass",
-                "findings": None, "test_output": "ALL PASSED",
+                "id": 3,
+                "task_id": "TEST-T00001",
+                "round": 2,
+                "reviewer_type": "self",
+                "verdict": "pass",
+                "findings": None,
+                "test_output": "ALL PASSED",
             },
             {
-                "id": 4, "task_id": "TEST-T00001", "round": 2,
-                "reviewer_type": "subagent", "verdict": "approve",
-                "findings": None, "test_output": None,
+                "id": 4,
+                "task_id": "TEST-T00001",
+                "round": 2,
+                "reviewer_type": "subagent",
+                "verdict": "approve",
+                "findings": None,
+                "test_output": None,
             },
         ]
 
@@ -2730,9 +2807,13 @@ class TestGetReviewEvidence:
         mock_db.get_task.return_value = self._make_task()
         mock_db.get_reviews_for_task.return_value = [
             {
-                "id": 1, "task_id": "TEST-T00001", "round": 1,
-                "reviewer_type": "self", "verdict": "pass",
-                "findings": None, "test_output": None,
+                "id": 1,
+                "task_id": "TEST-T00001",
+                "round": 1,
+                "reviewer_type": "self",
+                "verdict": "pass",
+                "findings": None,
+                "test_output": None,
             },
         ]
 
@@ -2753,14 +2834,22 @@ class TestGetReviewEvidence:
         mock_db.get_task.return_value = self._make_task()
         mock_db.get_reviews_for_task.return_value = [
             {
-                "id": 1, "task_id": "TEST-T00001", "round": 1,
-                "reviewer_type": "self", "verdict": "fail",
-                "findings": None, "test_output": None,
+                "id": 1,
+                "task_id": "TEST-T00001",
+                "round": 1,
+                "reviewer_type": "self",
+                "verdict": "fail",
+                "findings": None,
+                "test_output": None,
             },
             {
-                "id": 2, "task_id": "TEST-T00001", "round": 1,
-                "reviewer_type": "subagent", "verdict": "request_changes",
-                "findings": None, "test_output": None,
+                "id": 2,
+                "task_id": "TEST-T00001",
+                "round": 1,
+                "reviewer_type": "subagent",
+                "verdict": "request_changes",
+                "findings": None,
+                "test_output": None,
             },
         ]
 
@@ -2895,9 +2984,7 @@ class TestUpdateTaskReviewGate:
 
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
-    def test_in_progress_not_affected_by_review_gate(
-        self, mock_get_db, mock_load_review_config
-    ):
+    def test_in_progress_not_affected_by_review_gate(self, mock_get_db, mock_load_review_config):
         """update_task(status='in_progress') is NOT affected by the review gate."""
         from a_sdlc.server import update_task
 
@@ -2917,9 +3004,7 @@ class TestUpdateTaskReviewGate:
 
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
-    def test_blocked_status_not_affected_by_review_gate(
-        self, mock_get_db, mock_load_review_config
-    ):
+    def test_blocked_status_not_affected_by_review_gate(self, mock_get_db, mock_load_review_config):
         """update_task(status='blocked') is NOT affected by the review gate."""
         from a_sdlc.server import update_task
 
@@ -2936,9 +3021,7 @@ class TestUpdateTaskReviewGate:
 
     @patch("a_sdlc.server.load_review_config")
     @patch("a_sdlc.server.get_db")
-    def test_error_message_mentions_submit_review(
-        self, mock_get_db, mock_load_review_config
-    ):
+    def test_error_message_mentions_submit_review(self, mock_get_db, mock_load_review_config):
         """Error message references submit_review()."""
         from a_sdlc.core.review_config import ReviewConfig
         from a_sdlc.server import update_task
@@ -3096,6 +3179,7 @@ class TestRunCombinedServer:
         mock_acquire.assert_called_once()
         # _mcp_remove_pid should be registered with atexit
         from a_sdlc.server import _mcp_remove_pid
+
         mock_atexit.assert_any_call(_mcp_remove_pid)
 
     def test_signal_handler_cleans_up_pid_in_combined_mode(self):
@@ -3318,7 +3402,6 @@ class TestGetTaskIncludeContent:
             "updated_at": "2025-01-01",
         }
 
-
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
         mock_cm.read_content.return_value = "# Task\n\nSome description"
@@ -3357,7 +3440,6 @@ class TestGetTaskIncludeContent:
             "updated_at": "2025-01-01",
         }
 
-
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
         mock_storage = MagicMock()
@@ -3378,7 +3460,9 @@ class TestGetTaskIncludeContent:
     @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
-    def test_include_content_false_still_derives_sprint(self, mock_get_db, mock_get_cm, mock_get_storage):
+    def test_include_content_false_still_derives_sprint(
+        self, mock_get_db, mock_get_cm, mock_get_storage
+    ):
         """Even with include_content=False, sprint_id is still derived from PRD."""
         from a_sdlc.server import get_task
 
@@ -3400,7 +3484,6 @@ class TestGetTaskIncludeContent:
             "sprint_id": "TEST-S0001",
         }
 
-
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
         mock_storage = MagicMock()
@@ -3419,7 +3502,6 @@ class TestGetTaskIncludeContent:
 # =============================================================================
 
 
-
 class TestContentParameter:
     """Test content parameter on create/update MCP tools."""
 
@@ -3427,7 +3509,9 @@ class TestContentParameter:
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server._get_current_project_id")
-    def test_create_prd_with_content(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+    def test_create_prd_with_content(
+        self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage
+    ):
         """create_prd with content writes through ContentManager."""
         from a_sdlc.server import create_prd
 
@@ -3436,7 +3520,9 @@ class TestContentParameter:
         mock_get_db.return_value = mock_db
         mock_db.get_next_prd_id.return_value = "TEST-P0001"
         mock_db.create_prd.return_value = {
-            "id": "TEST-P0001", "title": "Auth PRD", "status": "draft",
+            "id": "TEST-P0001",
+            "title": "Auth PRD",
+            "status": "draft",
             "project_id": "test-project",
         }
         mock_cm = MagicMock()
@@ -3455,14 +3541,19 @@ class TestContentParameter:
         # Second call should have the actual content
         second_call_args = mock_cm.write_prd.call_args_list[1]
         assert second_call_args[0] == (
-            "test-project", "TEST-P0001", "Auth PRD", "# Auth PRD\n\nFull content here"
+            "test-project",
+            "TEST-P0001",
+            "Auth PRD",
+            "# Auth PRD\n\nFull content here",
         )
 
     @patch("a_sdlc.server.get_storage")
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server._get_current_project_id")
-    def test_create_prd_without_content_backward_compat(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+    def test_create_prd_without_content_backward_compat(
+        self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage
+    ):
         """create_prd without content creates skeleton only (backward compat)."""
         from a_sdlc.server import create_prd
 
@@ -3471,7 +3562,9 @@ class TestContentParameter:
         mock_get_db.return_value = mock_db
         mock_db.get_next_prd_id.return_value = "TEST-P0001"
         mock_db.create_prd.return_value = {
-            "id": "TEST-P0001", "title": "Auth PRD", "status": "draft",
+            "id": "TEST-P0001",
+            "title": "Auth PRD",
+            "status": "draft",
             "project_id": "test-project",
         }
         mock_cm = MagicMock()
@@ -3498,7 +3591,9 @@ class TestContentParameter:
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_prd.return_value = {
-            "id": "TEST-P0001", "title": "Auth PRD", "project_id": "test-project",
+            "id": "TEST-P0001",
+            "title": "Auth PRD",
+            "project_id": "test-project",
         }
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
@@ -3524,7 +3619,9 @@ class TestContentParameter:
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_prd.return_value = {
-            "id": "TEST-P0001", "title": "Auth PRD", "project_id": "test-project",
+            "id": "TEST-P0001",
+            "title": "Auth PRD",
+            "project_id": "test-project",
         }
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
@@ -3543,7 +3640,9 @@ class TestContentParameter:
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server._get_current_project_id")
-    def test_create_task_with_content(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+    def test_create_task_with_content(
+        self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage
+    ):
         """create_task with content writes through ContentManager."""
         from a_sdlc.server import create_task
 
@@ -3552,8 +3651,12 @@ class TestContentParameter:
         mock_get_db.return_value = mock_db
         mock_db.get_next_task_id.return_value = "TEST-T00001"
         mock_db.create_task.return_value = {
-            "id": "TEST-T00001", "title": "Implement auth", "status": "pending",
-            "priority": "high", "component": None, "project_id": "test-project",
+            "id": "TEST-T00001",
+            "title": "Implement auth",
+            "status": "pending",
+            "priority": "high",
+            "component": None,
+            "project_id": "test-project",
         }
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
@@ -3563,14 +3666,16 @@ class TestContentParameter:
         mock_storage.content_mgr = mock_cm
 
         result = create_task(
-            title="Implement auth", priority="high",
+            title="Implement auth",
+            priority="high",
             content="# TEST-T00001: Implement auth\n\n## Description\n\nFull task content",
         )
 
         assert result["status"] == "created"
         assert result["content_written"] is True
         mock_cm.write_task_content.assert_called_once_with(
-            "test-project", "TEST-T00001",
+            "test-project",
+            "TEST-T00001",
             "# TEST-T00001: Implement auth\n\n## Description\n\nFull task content",
         )
 
@@ -3584,7 +3689,9 @@ class TestContentParameter:
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_task.return_value = {
-            "id": "TEST-T00001", "title": "Implement auth", "status": "pending",
+            "id": "TEST-T00001",
+            "title": "Implement auth",
+            "status": "pending",
             "project_id": "test-project",
         }
         mock_cm = MagicMock()
@@ -3598,7 +3705,9 @@ class TestContentParameter:
         assert result["status"] == "updated"
         assert result["content_written"] is True
         mock_cm.write_task_content.assert_called_once_with(
-            "test-project", "TEST-T00001", "# Updated task content",
+            "test-project",
+            "TEST-T00001",
+            "# Updated task content",
         )
 
     @patch("a_sdlc.server.get_content_manager")
@@ -3614,8 +3723,10 @@ class TestContentParameter:
         mock_storage.get_prd.return_value = {"id": "TEST-P0001", "title": "Test PRD"}
         mock_storage.get_design_by_prd.return_value = None
         mock_storage.create_design.return_value = {
-            "id": "TEST-P0001", "prd_id": "TEST-P0001",
-            "project_id": "test-project", "file_path": "/tmp/design.md",
+            "id": "TEST-P0001",
+            "prd_id": "TEST-P0001",
+            "project_id": "test-project",
+            "file_path": "/tmp/design.md",
         }
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
@@ -3626,7 +3737,9 @@ class TestContentParameter:
         assert result["status"] == "created"
         assert result["content_written"] is True
         mock_cm.write_design.assert_called_once_with(
-            "test-project", "TEST-P0001", "# Design\n\nArchitecture decisions",
+            "test-project",
+            "TEST-P0001",
+            "# Design\n\nArchitecture decisions",
         )
 
     @patch("a_sdlc.server.get_content_manager")
@@ -3638,8 +3751,10 @@ class TestContentParameter:
         mock_storage = MagicMock()
         mock_get_storage.return_value = mock_storage
         mock_storage.get_design_by_prd.return_value = {
-            "id": "TEST-P0001", "prd_id": "TEST-P0001",
-            "project_id": "test-project", "file_path": "/tmp/design.md",
+            "id": "TEST-P0001",
+            "prd_id": "TEST-P0001",
+            "project_id": "test-project",
+            "file_path": "/tmp/design.md",
         }
         mock_cm = MagicMock()
         mock_get_cm.return_value = mock_cm
@@ -3650,7 +3765,9 @@ class TestContentParameter:
         assert result["status"] == "updated"
         assert result["content_written"] is True
         mock_cm.write_design.assert_called_once_with(
-            "test-project", "TEST-P0001", "# Updated design",
+            "test-project",
+            "TEST-P0001",
+            "# Updated design",
         )
 
     @patch("a_sdlc.server.get_content_manager")
@@ -3671,7 +3788,9 @@ class TestContentParameter:
     @patch("a_sdlc.server.get_content_manager")
     @patch("a_sdlc.server.get_db")
     @patch("a_sdlc.server._get_current_project_id")
-    def test_split_prd_with_task_content(self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage):
+    def test_split_prd_with_task_content(
+        self, mock_get_pid, mock_get_db, mock_get_cm, mock_get_storage
+    ):
         """split_prd with content in task_specs writes through ContentManager."""
         from a_sdlc.server import split_prd
 
@@ -3679,7 +3798,9 @@ class TestContentParameter:
         mock_db = MagicMock()
         mock_get_db.return_value = mock_db
         mock_db.get_prd.return_value = {
-            "id": "TEST-P0001", "title": "Test PRD", "project_id": "test-project",
+            "id": "TEST-P0001",
+            "title": "Test PRD",
+            "project_id": "test-project",
         }
         mock_db.get_project.return_value = {"shortname": "TEST"}
         mock_db.get_next_task_id.side_effect = ["TEST-T00001", "TEST-T00002"]
@@ -3707,5 +3828,7 @@ class TestContentParameter:
         assert result["tasks_created"] == 2
         # Only task 1 should have content written
         mock_cm.write_task_content.assert_called_once_with(
-            "test-project", "TEST-T00001", "# Task 1 content",
+            "test-project",
+            "TEST-T00001",
+            "# Task 1 content",
         )

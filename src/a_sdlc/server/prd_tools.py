@@ -29,7 +29,7 @@ def list_prds(
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     prds = db.list_prds(pid, sprint_id=sprint_id, status=status)
     return {
@@ -127,7 +127,7 @@ def create_prd(
     pid = project_id or _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     # Generate PRD ID using shortname format
     prd_id = db.get_next_prd_id(pid)
@@ -321,7 +321,7 @@ def split_prd(
     pid = _server._get_current_project_id()
 
     if not pid:
-        return {"status": "error", "message": "No project context. Run /sdlc:init first."}
+        return {"status": "error", "message": _server.NO_PROJECT_MESSAGE}
 
     # Verify PRD exists
     prd = db.get_prd(prd_id)
