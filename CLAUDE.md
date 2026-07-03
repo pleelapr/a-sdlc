@@ -43,6 +43,7 @@ a-sdlc db migrate -r <revision>                # Migrate to a specific revision
 a-sdlc db rollback                             # Revert one migration step
 a-sdlc db rollback -r -2                       # Revert two steps
 a-sdlc db rollback -r base                     # Revert all migrations
+a-sdlc db stamp -r 0003                        # Record a revision without running migrations (recovery)
 
 # Server management
 a-sdlc serve                                    # Start combined MCP + UI server (foreground)
@@ -78,13 +79,17 @@ src/a_sdlc/
 ├── plugins/                   # Sync plugins: linear.py, jira.py (entry points in pyproject.toml)
 ├── artifacts/                 # Artifact generation: scan → .sdlc/artifacts/
 ├── templates/                 # Skill templates (~35 .md files, deployed to ~/.claude/commands/sdlc/)
-└── artifact_templates/        # Mustache content templates (prd.template.md, task.template.md)
+├── artifact_templates/        # Mustache content templates (prd.template.md, task.template.md)
+├── core/alembic_config.py     # Programmatic Alembic Config (shared by server startup + `db` CLI)
+└── migrations/                # Packaged Alembic migrations (ship inside the wheel + Docker image)
+    ├── env.py                 # Alembic environment — resolves DB URL via StorageConfig
+    ├── script.py.mako         # Migration script template
+    └── versions/
+        ├── 0001_baseline_v15.py         # Baseline — creates all 15 tables from scratch
+        ├── 0002_projects_path_nullable.py
+        └── 0003_drop_projects_path.py
 
-alembic/
-├── env.py                     # Alembic environment — resolves DB URL via StorageConfig
-├── script.py.mako             # Migration script template
-└── versions/
-    └── 0001_baseline_v15.py   # Baseline migration — creates all 15 tables from scratch
+alembic.ini                    # Dev-only (autogenerate); runtime uses core/alembic_config.py
 ```
 
 ### Installer Flow
@@ -184,9 +189,11 @@ The data layer has two implementations that share the same API surface:
 
 ### Schema Management (Alembic)
 
-Schema migrations are managed by Alembic, with migration scripts in `alembic/versions/`. The current baseline is revision `0001` which creates all 15 tables of the v15 schema.
+Schema migrations are managed by Alembic, with migration scripts packaged **inside the installed package** at `src/a_sdlc/migrations/versions/` (so they ship in the wheel and Docker image). The current baseline is revision `0001` which creates all 15 tables of the v15 schema; `0002`/`0003` make `projects.path` nullable then drop it.
 
-- `alembic/env.py` resolves the database URL at runtime via `StorageConfig`, so environment variables and config files are respected.
+- **Runtime configuration is programmatic**, not ini-file based. `core/alembic_config.py` builds the Alembic `Config` (via `build_alembic_config()`) pointing at the packaged migrations, and is the single source of truth shared by the server's startup auto-migration and the `a-sdlc db` CLI. This resolves identically from a source checkout, an editable install, a built wheel, and inside Docker. The repo-root `alembic.ini` is kept only for local dev `alembic revision --autogenerate`.
+- **Auto-migration runs at server startup**, before storage init, so Alembic (not the ORM's `create_all`) owns the schema. It is **fatal on failure** — the server refuses to start against an unmigrated/half-migrated schema rather than silently serving stale schema. Set `A_SDLC_AUTO_MIGRATE=0` to skip (emergency ops only; then run `a-sdlc db migrate` manually).
+- **Pre-Alembic schemas are auto-stamped.** A database whose tables were created by an older build's `create_all` (no `alembic_version` row) is detected via the `projects.path` column shape and stamped to the matching baseline (`0001`/`0002`/`0003`) before upgrading, so only genuinely-missing migrations apply. `a-sdlc db stamp -r <revision>` is the manual escape hatch.
 - `render_as_batch=True` is set for SQLite ALTER TABLE support.
 - Migrations support both offline (SQL script generation) and online (live connection) modes.
 
@@ -211,6 +218,7 @@ There are no built-in defaults for `database_url`. The `A_SDLC_DATABASE_URL` env
 | `A_SDLC_S3_ACCESS_KEY` | S3 access key ID | -- |
 | `A_SDLC_S3_SECRET_KEY` | S3 secret access key | -- |
 | `A_SDLC_DATA_DIR` | Override base data directory | `~/.a-sdlc` |
+| `A_SDLC_AUTO_MIGRATE` | Run Alembic `upgrade head` at server startup (`0`/`false` to skip) | `1` |
 | `A_SDLC_STATELESS_HTTP` | Revert streamable-http to stateless/process-global context (escape hatch) | unset (stateful) |
 | `A_SDLC_SESSION_IDLE_TIMEOUT` | Seconds before the SDK reaps an idle session server-side | `1800` |
 | `A_SDLC_SESSION_TTL` | Seconds of idle before an app-side session→project binding expires | `86400` |
@@ -650,6 +658,8 @@ When MCP tools are not working or behaving unexpectedly, follow this diagnostic 
 | Port already in use | `a-sdlc serve` | Another process on port 8765/3847. Use `--mcp-port`/`--ui-port` or `lsof -ti :8765` to find the blocker |
 | Claude Code can't connect | Verify `~/.claude.json` | MCP config URL may be wrong. Run `a-sdlc install --force` |
 | Docker container won't start | `docker compose logs a-sdlc` | Check for missing environment variables or database connection errors |
+| Container crash-loops on startup | `docker compose logs a-sdlc` (look for "Database migration failed" / "refusing to start") | A migration failed and startup is fatal by design. Fix the schema (`a-sdlc db status`/`db stamp`), or set `A_SDLC_AUTO_MIGRATE=0` to boot and migrate manually |
+| New project creation fails (`path` NOT NULL, or schema errors) | `a-sdlc db status` | DB schema behind the code. Auto-migration now applies on deploy; run `a-sdlc db migrate` to apply immediately |
 
 ## Common Mistakes to Avoid
 
@@ -672,9 +682,19 @@ When MCP tools are not working or behaving unexpectedly, follow this diagnostic 
 This project uses a-sdlc for SDLC management.
 
 **Before starting work, read these files:**
-- `.sdlc/lesson-learn.md` -- Project-specific lessons and rules
-- `~/.a-sdlc/lesson-learn.md` -- Global cross-project lessons
-- `.sdlc/artifacts/` -- Generated codebase documentation (if available)
+- `.sdlc/lesson-learn.md` — Project-specific lessons and rules
+- `~/.a-sdlc/lesson-learn.md` — Global cross-project lessons
+- `.sdlc/artifacts/` — Generated codebase documentation (if available)
+
+<!-- grounding-read-snippet:start -->
+**Reading scan artifacts:** scan artifacts live in `.sdlc/artifacts/` and are transitioning from Markdown to HTML. For each artifact name (`architecture`, `codebase-summary`, `data-model`, `directory-structure`, `key-workflows`):
+
+1. Prefer `.sdlc/artifacts/{name}.html` when it exists — the documentation content is inside the `<main>` element; ignore the surrounding chrome (`<head>`, `<style>`, `<nav>`, footer).
+2. Fall back to `.sdlc/artifacts/{name}.md` when no `.html` file exists (pre-migration repository).
+3. If neither file exists, the artifact has not been generated — proceed without it (optionally suggest running `/sdlc:scan`).
+
+`code-quality.md` and `requirements.md` are always Markdown — read them directly with no extension fallback.
+<!-- grounding-read-snippet:end -->
 
 **During work:**
 - Log corrections to `.sdlc/corrections.log` when fixing mistakes
