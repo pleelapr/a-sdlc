@@ -7,7 +7,6 @@ runs auto-migration for PostgreSQL configurations.
 
 import contextlib
 import logging
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -76,8 +75,10 @@ class TestInitStorageBackend:
         mock_config = MagicMock(spec=StorageConfig)
         mock_config.is_postgresql = False
         mock_config.database_url = "sqlite:///test/data.db"
-        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
-             pytest.raises(StorageConfigError, match="PostgreSQL is required"):
+        with (
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config),
+            pytest.raises(StorageConfigError, match="PostgreSQL is required"),
+        ):
             _init_storage_backend()
 
     def test_postgresql_backend_triggers_migration(self):
@@ -91,11 +92,13 @@ class TestInitStorageBackend:
         mock_config.s3_bucket = "test-bucket"
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         mock_storage = MagicMock()
-        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
-             patch("a_sdlc.server._wait_for_database"), \
-             patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init, \
-             patch("a_sdlc.server._run_auto_migration") as mock_migrate, \
-             patch("a_sdlc.server._migrate_local_content_to_s3"):
+        with (
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config),
+            patch("a_sdlc.server._wait_for_database"),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init,
+            patch("a_sdlc.server._run_auto_migration") as mock_migrate,
+            patch("a_sdlc.server._migrate_local_content_to_s3"),
+        ):
             _init_storage_backend()
             mock_init.assert_called_once_with(config=mock_config)
             mock_migrate.assert_called_once_with(mock_config)
@@ -111,11 +114,13 @@ class TestInitStorageBackend:
         mock_config.s3_bucket = "my-bucket"
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         mock_storage = MagicMock()
-        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
-             patch("a_sdlc.server._wait_for_database"), \
-             patch("a_sdlc.storage.init_storage", return_value=mock_storage), \
-             patch("a_sdlc.server._run_auto_migration"), \
-             patch("a_sdlc.server._migrate_local_content_to_s3") as mock_s3_migrate:
+        with (
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config),
+            patch("a_sdlc.server._wait_for_database"),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage),
+            patch("a_sdlc.server._run_auto_migration"),
+            patch("a_sdlc.server._migrate_local_content_to_s3") as mock_s3_migrate,
+        ):
             with caplog.at_level(logging.INFO):
                 _init_storage_backend()
             mock_s3_migrate.assert_called_once_with(mock_storage)
@@ -126,9 +131,7 @@ class TestInitStorageBackend:
         "a_sdlc.core.storage_config.get_storage_config",
         side_effect=Exception("config load error"),
     )
-    def test_config_load_failure_raises(
-        self, mock_get_config, mock_migration
-    ):
+    def test_config_load_failure_raises(self, mock_get_config, mock_migration):
         """When StorageConfig fails to load, the error propagates."""
         from a_sdlc.server import _init_storage_backend
 
@@ -148,11 +151,13 @@ class TestInitStorageBackend:
         mock_config.s3_bucket = "test-bucket"
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         existing_storage = MagicMock()
-        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
-             patch("a_sdlc.server._wait_for_database"), \
-             patch("a_sdlc.storage.init_storage", return_value=existing_storage), \
-             patch("a_sdlc.server._run_auto_migration"), \
-             patch("a_sdlc.server._migrate_local_content_to_s3"):
+        with (
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config),
+            patch("a_sdlc.server._wait_for_database"),
+            patch("a_sdlc.storage.init_storage", return_value=existing_storage),
+            patch("a_sdlc.server._run_auto_migration"),
+            patch("a_sdlc.server._migrate_local_content_to_s3"),
+        ):
             _init_storage_backend()
             # init_storage is idempotent -- returns existing if already set
 
@@ -167,13 +172,44 @@ class TestInitStorageBackend:
         mock_config.s3_bucket = "test-bucket"
         mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
         mock_storage = MagicMock()
-        with patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config), \
-             patch("a_sdlc.server._wait_for_database"), \
-             patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init, \
-             patch("a_sdlc.server._run_auto_migration"), \
-             patch("a_sdlc.server._migrate_local_content_to_s3"):
+        with (
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config),
+            patch("a_sdlc.server._wait_for_database"),
+            patch("a_sdlc.storage.init_storage", return_value=mock_storage) as mock_init,
+            patch("a_sdlc.server._run_auto_migration"),
+            patch("a_sdlc.server._migrate_local_content_to_s3"),
+        ):
             _init_storage_backend()
             mock_init.assert_called_once_with(config=mock_config)
+
+    def test_migration_runs_before_storage_init(self):
+        """Alembic migration must run BEFORE init_storage (Alembic owns schema).
+
+        If init_storage ran first, its create_all could build the schema ahead
+        of Alembic and defeat migration ordering. A parent mock records call
+        order across both.
+        """
+        from a_sdlc.core.storage_config import StorageConfig
+        from a_sdlc.server import _init_storage_backend
+
+        mock_config = MagicMock(spec=StorageConfig)
+        mock_config.is_postgresql = True
+        mock_config.is_s3 = True
+        mock_config.s3_bucket = "test-bucket"
+        mock_config.database_url = "postgresql://user:***@localhost:5432/asdlc"
+
+        parent = MagicMock()
+        with (
+            patch("a_sdlc.core.storage_config.get_storage_config", return_value=mock_config),
+            patch("a_sdlc.server._wait_for_database"),
+            patch("a_sdlc.server._run_auto_migration", parent.migrate),
+            patch("a_sdlc.storage.init_storage", parent.init_storage),
+            patch("a_sdlc.server._migrate_local_content_to_s3"),
+        ):
+            _init_storage_backend()
+
+        order = [c[0] for c in parent.mock_calls]
+        assert order.index("migrate") < order.index("init_storage"), order
 
 
 # ---------------------------------------------------------------------------
@@ -184,66 +220,55 @@ class TestInitStorageBackend:
 class TestRunAutoMigration:
     """Tests for _run_auto_migration() Alembic auto-migration at startup."""
 
-    @patch("alembic.command.upgrade")
-    @patch("alembic.config.Config")
-    def test_successful_migration(self, mock_alembic_config, mock_upgrade, caplog):
-        """When alembic.ini exists and migration succeeds, logs success."""
-        from a_sdlc.server import _run_auto_migration
+    @patch("a_sdlc.core.alembic_config.run_upgrade_head")
+    def test_successful_migration(self, mock_run_upgrade, monkeypatch):
+        """Delegates to run_upgrade_head with the config's database URL."""
+        from a_sdlc.server import _logger, _run_auto_migration
 
-        mock_cfg_instance = MagicMock()
-        mock_alembic_config.return_value = mock_cfg_instance
-
+        monkeypatch.delenv("A_SDLC_AUTO_MIGRATE", raising=False)
         config = MagicMock()
         config.database_url = "postgresql://user:pass@localhost/db"
 
-        with (
-            patch.object(Path, "exists", return_value=True),
-            caplog.at_level(logging.INFO),
-        ):
-            _run_auto_migration(config)
+        _run_auto_migration(config)
 
-        mock_upgrade.assert_called_once_with(mock_cfg_instance, "head")
-        assert "Auto-migration completed successfully" in caplog.text
-
-    @patch("alembic.command.upgrade", side_effect=Exception("migration error"))
-    @patch("alembic.config.Config")
-    def test_migration_failure_logged_not_fatal(
-        self, mock_alembic_config, mock_upgrade, caplog
-    ):
-        """When migration fails, logs error but does not raise."""
-        from a_sdlc.server import _run_auto_migration
-
-        mock_alembic_config.return_value = MagicMock()
-
-        config = MagicMock()
-        config.database_url = "postgresql://user:pass@localhost/db"
-
-        with (
-            patch.object(Path, "exists", return_value=True),
-            caplog.at_level(logging.ERROR, logger="a-sdlc-server"),
-        ):
-            _run_auto_migration(config)
-
-        assert "Auto-migration failed" in caplog.text
-
-    @patch("alembic.command.upgrade")
-    @patch("alembic.config.Config")
-    def test_migration_sets_database_url(self, mock_alembic_config, mock_upgrade):
-        """Auto-migration sets the database URL on the Alembic config."""
-        from a_sdlc.server import _run_auto_migration
-
-        mock_cfg_instance = MagicMock()
-        mock_alembic_config.return_value = mock_cfg_instance
-
-        config = MagicMock()
-        config.database_url = "postgresql://user:pass@localhost/db"
-
-        with patch.object(Path, "exists", return_value=True):
-            _run_auto_migration(config)
-
-        mock_cfg_instance.set_main_option.assert_called_once_with(
-            "sqlalchemy.url", "postgresql://user:pass@localhost/db"
+        mock_run_upgrade.assert_called_once_with(
+            "postgresql://user:pass@localhost/db", logger=_logger
         )
+
+    @patch(
+        "a_sdlc.core.alembic_config.run_upgrade_head",
+        side_effect=Exception("migration error"),
+    )
+    def test_migration_failure_is_fatal(self, mock_run_upgrade, monkeypatch, caplog):
+        """When migration fails, the error propagates (server must not start)."""
+        from a_sdlc.server import _run_auto_migration
+
+        monkeypatch.delenv("A_SDLC_AUTO_MIGRATE", raising=False)
+        config = MagicMock()
+        config.database_url = "postgresql://user:pass@localhost/db"
+
+        with (
+            caplog.at_level(logging.ERROR, logger="a-sdlc-server"),
+            pytest.raises(Exception, match="migration error"),
+        ):
+            _run_auto_migration(config)
+
+        assert "refusing to start" in caplog.text
+
+    @patch("a_sdlc.core.alembic_config.run_upgrade_head")
+    def test_skipped_when_disabled(self, mock_run_upgrade, monkeypatch, caplog):
+        """A_SDLC_AUTO_MIGRATE=0 skips migration with a WARNING."""
+        from a_sdlc.server import _run_auto_migration
+
+        monkeypatch.setenv("A_SDLC_AUTO_MIGRATE", "0")
+        config = MagicMock()
+        config.database_url = "postgresql://user:pass@localhost/db"
+
+        with caplog.at_level(logging.WARNING, logger="a-sdlc-server"):
+            _run_auto_migration(config)
+
+        mock_run_upgrade.assert_not_called()
+        assert "auto_migration_skipped" in caplog.text
 
 
 # ---------------------------------------------------------------------------

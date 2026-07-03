@@ -2031,31 +2031,45 @@ def doctor(check_consistency: bool, repair: bool, live: bool) -> None:
 
     # Database schema version check (via Alembic)
     try:
+        from a_sdlc.core.alembic_config import MigrationSetupError, get_revision_info
         from a_sdlc.core.storage_config import get_storage_config
 
         cfg = get_storage_config()
         db_url = cfg.database_url
-        if db_url:
-            from alembic.runtime.migration import MigrationContext
-            from sqlalchemy import create_engine
-
-            engine = create_engine(db_url)
-            with engine.connect() as conn:
-                context = MigrationContext.configure(conn)
-                current_rev = context.get_current_revision()
-            engine.dispose()
-            if current_rev:
-                schema_status, schema_detail = "pass", f"Alembic revision: {current_rev}"
-            else:
-                schema_status, schema_detail = (
-                    "warn",
-                    "No Alembic revision found. Fix: run a-sdlc db migrate",
-                )
-        else:
+        if not db_url:
             schema_status, schema_detail = (
                 "warn",
                 "No database URL configured. Fix: set A_SDLC_DATABASE_URL",
             )
+        else:
+            try:
+                info = get_revision_info(db_url)
+            except MigrationSetupError as e:
+                schema_status, schema_detail = (
+                    "fail",
+                    f"{e} Fix: reinstall a-sdlc",
+                )
+            else:
+                current, head, pending = info["current"], info["head"], info["pending"]
+                if current is None:
+                    schema_status, schema_detail = (
+                        "fail",
+                        "Database is not stamped with an Alembic revision "
+                        "(fresh/unmigrated, or a schema created outside Alembic). "
+                        "Fix: run a-sdlc db migrate (auto-stamps an existing "
+                        "schema), or a-sdlc db stamp -r <revision>",
+                    )
+                elif current == head:
+                    schema_status, schema_detail = (
+                        "pass",
+                        f"Alembic revision: {current} (up to date)",
+                    )
+                else:
+                    schema_status, schema_detail = (
+                        "warn",
+                        f"Revision {current} -- {pending} migration(s) pending "
+                        f"(head {head}). Fix: run a-sdlc db migrate",
+                    )
     except Exception as e:
         schema_status, schema_detail = (
             "fail",
@@ -5909,49 +5923,22 @@ def logs_cmd(follow: bool, level_filter: str | None, num_lines: int) -> None:
 
 
 def _get_alembic_config() -> "AlembicConfig":
-    """Build an Alembic Config pointing at the package's alembic directory.
+    """Build an Alembic Config pointing at the packaged migrations.
 
-    The alembic.ini lives at the project/package root. We resolve it
-    relative to *this* file so it works regardless of the user's cwd.
-    The database URL is injected from ``StorageConfig`` so that
-    environment variables, project config, and global config are
-    respected.
+    Delegates to ``a_sdlc.core.alembic_config.build_alembic_config`` -- the
+    single source of truth shared with the server's startup auto-migration.
+    Migrations ship inside the package at ``a_sdlc/migrations``, so this
+    resolves identically from a source checkout, an editable install, a built
+    wheel, and inside the Docker image. The database URL is injected from
+    ``StorageConfig`` (environment variables + project/global config).
+
+    Raises:
+        MigrationSetupError: if the packaged migrations or DB URL are missing;
+            surfaced by the ``db`` commands as a red error with exit code 1.
     """
-    import alembic.config
+    from a_sdlc.core.alembic_config import build_alembic_config
 
-    from a_sdlc.core.storage_config import load_storage_config
-
-    # alembic.ini is at the repo root (two levels up from src/a_sdlc/)
-    package_dir = Path(__file__).resolve().parent  # src/a_sdlc/
-    repo_root = package_dir.parent.parent  # repo root
-    ini_path = repo_root / "alembic.ini"
-
-    if not ini_path.exists():
-        # Fallback: check if installed as a package (alembic dir might be
-        # located relative to site-packages or via importlib)
-        import importlib.resources
-
-        try:
-            ref = importlib.resources.files("a_sdlc").joinpath("../../alembic.ini")
-            ini_path = Path(str(ref))
-        except (TypeError, FileNotFoundError):
-            pass
-
-    cfg = alembic.config.Config(str(ini_path))
-
-    # Override the script_location to an absolute path so Alembic finds
-    # the migrations regardless of the user's cwd.
-    script_dir = ini_path.parent / "alembic"
-    cfg.set_main_option("script_location", str(script_dir))
-
-    # Inject database URL from StorageConfig
-    try:
-        storage_config = load_storage_config(validate=False)
-        cfg.set_main_option("sqlalchemy.url", storage_config.database_url)
-    except Exception:
-        pass  # Fall through to alembic.ini default
-
-    return cfg
+    return build_alembic_config()
 
 
 def _check_server_running() -> bool:
@@ -6005,6 +5992,7 @@ def db() -> None:
       a-sdlc db status     Show current migration state
       a-sdlc db migrate    Apply pending migrations
       a-sdlc db rollback   Revert migrations
+      a-sdlc db stamp      Record a revision without running migrations
       a-sdlc db import     Import data from legacy SQLite
     """
     pass
@@ -6199,6 +6187,72 @@ def db_rollback(revision: str, yes: bool) -> None:
         console.print(f"[green]Successfully rolled back to {revision}.[/green]")
     except Exception as exc:
         console.print(f"[red]Rollback failed: {exc}[/red]")
+        sys.exit(1)
+
+
+@db.command("stamp")
+@click.option(
+    "--revision",
+    "-r",
+    required=True,
+    help="Revision to stamp the database as (e.g. 0003, head, base)",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+def db_stamp(revision: str, yes: bool) -> None:
+    """Set the recorded migration revision without running migrations.
+
+    Writes the ``alembic_version`` table to the given revision without
+    applying or reverting any schema changes. Use this to recover a database
+    whose schema was created outside Alembic (e.g. by an older build's
+    ``create_all``) and therefore has no ``alembic_version`` row. The server's
+    startup auto-migration stamps such schemas automatically; this command is
+    the manual escape hatch when the auto-detection needs correcting.
+
+    Examples:
+
+    \b
+        a-sdlc db stamp -r 0003        # Mark DB as at revision 0003
+        a-sdlc db stamp -r head -y     # Mark DB as fully migrated, no prompt
+    """
+    import alembic.command
+
+    if _check_server_running():
+        console.print(
+            "[yellow]Warning: MCP server appears to be running. "
+            "Consider stopping it before stamping the database.[/yellow]"
+        )
+        if not click.confirm("Continue anyway?", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    if not yes:
+        console.print(
+            f"[yellow]This will record the database as revision '{revision}' "
+            "WITHOUT running migrations. Only do this if the schema already "
+            "matches that revision.[/yellow]"
+        )
+        if not click.confirm("Are you sure?", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    try:
+        cfg = _get_alembic_config()
+    except Exception as exc:
+        console.print(f"[red]Failed to load Alembic configuration: {exc}[/red]")
+        sys.exit(1)
+
+    console.print(f"[bold]Stamping database as revision: {revision}[/bold]")
+
+    try:
+        alembic.command.stamp(cfg, revision)
+        console.print(f"[green]Successfully stamped database as {revision}.[/green]")
+    except Exception as exc:
+        console.print(f"[red]Stamp failed: {exc}[/red]")
         sys.exit(1)
 
 

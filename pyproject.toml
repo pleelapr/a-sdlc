@@ -111,6 +111,10 @@ packages = ["src/a_sdlc"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# Explicit src layout so ruff's isort first-party detection (a_sdlc) is
+# deterministic across environments (local vs CI); without this, auto-detection
+# can classify a_sdlc differently and disagree on import ordering.
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
@@ -123,6 +127,10 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+# Alembic migration scripts are generated op-DSL; their correctness is verified
+# by running them (tests/test_alembic_migrations.py), not by static typing.
+# Single regex string (not a list) for unambiguous support across mypy versions.
+exclude = '(^|/)migrations/versions/'
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

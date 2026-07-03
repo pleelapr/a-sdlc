@@ -89,6 +89,7 @@ class TestDbGroup:
         assert "status" in result.output
         assert "migrate" in result.output
         assert "rollback" in result.output
+        assert "stamp" in result.output
 
     def test_db_no_subcommand(self, runner: CliRunner) -> None:
         """db without subcommand shows usage error."""
@@ -480,6 +481,58 @@ class TestDbRollback:
 
 
 # ---------------------------------------------------------------------------
+# db stamp tests
+# ---------------------------------------------------------------------------
+
+
+class TestDbStamp:
+    """Tests for the db stamp subcommand."""
+
+    def test_stamp_success(self, runner: CliRunner) -> None:
+        """db stamp -y records the given revision via alembic stamp."""
+        mock_cfg = MagicMock()
+        with (
+            patch("a_sdlc.cli._check_server_running", return_value=False),
+            patch("a_sdlc.cli._get_alembic_config", return_value=mock_cfg),
+            patch("alembic.command.stamp") as mock_stamp,
+        ):
+            result = runner.invoke(main, ["db", "stamp", "-r", "0003", "-y"])
+
+        assert result.exit_code == 0
+        assert "Successfully stamped" in result.output
+        mock_stamp.assert_called_once_with(mock_cfg, "0003")
+
+    def test_stamp_requires_revision(self, runner: CliRunner) -> None:
+        """db stamp without -r is a usage error."""
+        result = runner.invoke(main, ["db", "stamp", "-y"])
+        assert result.exit_code != 0
+
+    def test_stamp_confirmation_abort(self, runner: CliRunner) -> None:
+        """db stamp aborts when the user declines confirmation."""
+        with (
+            patch("a_sdlc.cli._check_server_running", return_value=False),
+            patch("alembic.command.stamp") as mock_stamp,
+        ):
+            result = runner.invoke(main, ["db", "stamp", "-r", "0003"], input="n\n")
+
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+        mock_stamp.assert_not_called()
+
+    def test_stamp_failure(self, runner: CliRunner) -> None:
+        """db stamp exits with error when alembic stamp fails."""
+        with (
+            patch("a_sdlc.cli._check_server_running", return_value=False),
+            patch("a_sdlc.cli._get_alembic_config", return_value=MagicMock()),
+            patch("alembic.command.stamp", side_effect=Exception("bad revision")),
+        ):
+            result = runner.invoke(main, ["db", "stamp", "-r", "nope", "-y"])
+
+        assert result.exit_code != 0
+        assert "Stamp failed" in result.output
+
+
+# ---------------------------------------------------------------------------
 # _check_server_running tests
 # ---------------------------------------------------------------------------
 
@@ -550,20 +603,26 @@ class TestGetAlembicConfig:
         url = cfg.get_main_option("sqlalchemy.url")
         assert url == "sqlite:///custom.db"
 
-    def test_config_handles_storage_config_failure(self) -> None:
-        """Config falls back to alembic.ini when StorageConfig fails."""
+    def test_config_propagates_storage_config_failure(self) -> None:
+        """When StorageConfig fails and no URL is available, error propagates.
+
+        There is no longer an alembic.ini URL fallback: a broken config means
+        there is genuinely no database to target, so failing loudly is correct.
+        The db commands catch this and print a red error with exit code 1.
+        """
         from a_sdlc.cli import _get_alembic_config
 
-        with patch(
-            "a_sdlc.core.storage_config.load_storage_config",
-            side_effect=Exception("config error"),
+        with (
+            patch(
+                "a_sdlc.core.storage_config.load_storage_config",
+                side_effect=Exception("config error"),
+            ),
+            pytest.raises(Exception, match="config error"),
         ):
-            # Should not raise; falls back gracefully
-            cfg = _get_alembic_config()
-            assert cfg is not None
+            _get_alembic_config()
 
     def test_config_sets_script_location(self) -> None:
-        """Config sets script_location to absolute path."""
+        """Config sets script_location to the packaged migrations directory."""
         from a_sdlc.cli import _get_alembic_config
 
         mock_config = MagicMock()
@@ -577,7 +636,7 @@ class TestGetAlembicConfig:
 
         script_loc = cfg.get_main_option("script_location")
         assert script_loc is not None
-        assert "alembic" in script_loc
+        assert script_loc.replace("\\", "/").endswith("a_sdlc/migrations")
 
 
 # ---------------------------------------------------------------------------
